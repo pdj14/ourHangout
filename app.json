@@ -2,6 +2,7 @@
   "expo": {
     "name": "Our Hangout",
     "slug": "our-hangout",
+    "scheme": "ourhangout",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -15,6 +16,7 @@
       "supportsTablet": true
     },
     "android": {
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -22,13 +24,21 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.sparkchatkids"
+      "package": "com.ourhangout"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-font"
-    ]
+      "expo-font",
+      "expo-web-browser"
+    ],
+    "extra": {
+      "googleAuth": {
+        "androidClientId": "",
+        "iosClientId": "",
+        "webClientId": ""
+      }
+    }
   }
 }

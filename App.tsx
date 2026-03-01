@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated,
-  Easing,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -12,706 +11,1397 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
+import * as AuthSession from 'expo-auth-session';
+import * as Google from 'expo-auth-session/providers/google';
+import * as WebBrowser from 'expo-web-browser';
+import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 
-type MessageKind = 'text' | 'image' | 'video';
+WebBrowser.maybeCompleteAuthSession();
+
+type Stage = 'login' | 'setup_name' | 'setup_intro' | 'app';
+type Tab = 'chats' | 'friends' | 'profile';
+type MsgKind = 'text' | 'image' | 'video' | 'system';
+type Delivery = 'sending' | 'sent' | 'read';
 
 type Message = {
   id: string;
-  kind: MessageKind;
+  roomId: string;
+  senderId: string;
+  senderName: string;
   mine: boolean;
+  kind: MsgKind;
   text?: string;
   uri?: string;
-  timestamp: string;
+  at: number;
+  delivery?: Delivery;
 };
 
-type DraftMedia = {
-  kind: 'image' | 'video';
-  uri: string;
+type Friend = { id: string; name: string; status: string; trusted: boolean };
+type Room = {
+  id: string;
+  title: string;
+  members: string[];
+  isGroup: boolean;
+  favorite: boolean;
+  muted: boolean;
+  unread: number;
+  preview: string;
+  updatedAt: number;
 };
+type Profile = { name: string; status: string; email: string; avatarUri: string };
+type DraftMedia = { kind: 'image' | 'video'; uri: string };
 
-const LOCALE_STRINGS = {
+const MY_ID = 'me';
+const LINK = /https?:\/\/\S+/gi;
+
+const TEXT = {
   en: {
-    appTitle: 'Our Hangout',
-    safeModeEnabled: 'Safe mode enabled',
-    seedMessageOther: 'How are you today? You can send photos too.',
-    seedMessageMine: 'Great! I will show the drawing I made today.',
-    autoReply: 'Looks great. Send the next one too.',
-    videoMessage: 'Video message',
-    videoPreviewHint: 'preview disabled in Expo Go',
-    imageReady: 'Image ready',
-    videoReady: 'Video ready',
-    tapSendHint: 'Tap send to share.',
-    inputPlaceholder: 'Type a message',
-    linksBlocked: 'Links are blocked in this app.',
-    linkBlockedInline: 'link blocked',
+    app: 'Our Hangout',
+    login: 'Sign in',
+    loginBody: 'Use Google sign-in, then set your profile.',
+    google: 'Continue with Google',
+    loginSkip: 'Continue without sign-in',
+    loginHint: 'Set app.json extra.googleAuth to enable Google login.',
+    loginFailed: 'Google sign-in failed.',
+    setup1: 'Set your display name',
+    setup2: 'Core flow: friends -> room list -> chat',
+    displayName: 'Display name',
+    editName: 'Edit name',
+    next: 'Next',
+    start: 'Enter app',
+    defaultStatus: 'Chatting safely',
+    tabsChats: 'Chats',
+    tabsFriends: 'Friends',
+    tabsProfile: 'Profile',
+    searchChats: 'Search rooms',
+    searchFriends: 'Search friends',
+    noRooms: 'No rooms yet',
+    noRoomsBody: 'Create a group room or start 1:1 chat from friends.',
+    noSearchRooms: 'No rooms match your search.',
+    noFriends: 'Add a friend first.',
+    noSearchFriends: 'No friends match your search.',
+    goFriends: 'Go to Friends',
+    newGroup: 'New Group',
+    addFriend: 'Add friend',
+    friendName: 'Friend name',
+    friendStatus: 'Status message',
+    save: 'Save',
+    cancel: 'Cancel',
+    remove: 'Remove',
+    startChat: 'Start chat',
+    profileEdit: 'Edit profile',
+    myStatus: 'My status message',
+    profilePhoto: 'Profile photo',
+    photoPick: 'Choose photo',
+    photoRemove: 'Remove photo',
+    statsFriends: 'Friends',
+    statsRooms: 'Rooms',
+    statsFavs: 'Favorites',
+    roomSetting: 'Room settings',
+    favoriteOn: 'Add favorite',
+    favoriteOff: 'Remove favorite',
+    muteOn: 'Mute room',
+    muteOff: 'Unmute room',
+    leaveRoom: 'Leave room',
+    deleteRoom: 'Delete room',
+    report: 'Report',
+    reported: 'Report added to guardian queue.',
+    safe: 'Browser links are blocked',
+    msgInput: 'Write a message',
+    mediaHint: 'Press send to share.',
+    imageSelected: 'Image selected',
+    videoSelected: 'Video selected',
+    imageLabel: 'Image',
+    videoLabel: 'Video',
+    firstMsg: 'Send hello',
+    noMsg: 'No messages yet',
+    hello: 'Hi! Welcome to our room.',
+    sending: 'Sending',
+    sent: 'Sent',
+    read: 'Read',
+    groupTitle: 'Create group room',
+    groupName: 'Group name',
+    groupHint: 'Select at least 2 friends',
+    createRoom: 'Create room',
+    directRoomFallback: 'Chat',
+    me: 'Me',
   },
   ko: {
-    appTitle: '우리들의아지트',
-    safeModeEnabled: '안전 모드 활성화',
-    seedMessageOther: '오늘 기분 어때? 사진도 보내도 돼.',
-    seedMessageMine: '좋아! 오늘 만든 그림 보여줄게.',
-    autoReply: '잘 받았어. 다음 것도 보내줘.',
-    videoMessage: '동영상 메시지',
-    videoPreviewHint: 'Expo Go에서는 미리보기가 비활성화됩니다',
-    imageReady: '이미지 준비 완료',
-    videoReady: '동영상 준비 완료',
-    tapSendHint: '전송 버튼을 눌러 공유하세요.',
-    inputPlaceholder: '메시지를 입력하세요',
-    linksBlocked: '이 앱에서는 링크가 차단됩니다.',
-    linkBlockedInline: '링크 차단됨',
+    app: '우리들의아지트',
+    login: '로그인',
+    loginBody: '구글 로그인 후 프로필을 설정해요.',
+    google: '구글로 계속하기',
+    loginSkip: '로그인 없이 계속',
+    loginHint: 'Google 로그인은 app.json extra.googleAuth 설정이 필요해요.',
+    loginFailed: 'Google 로그인에 실패했어요.',
+    setup1: '표시 이름을 설정해요',
+    setup2: '핵심 흐름: 친구 -> 대화방 -> 채팅',
+    displayName: '표시 이름',
+    editName: '이름 수정',
+    next: '다음',
+    start: '앱 시작',
+    defaultStatus: '안전하게 대화 중',
+    tabsChats: '대화',
+    tabsFriends: '친구',
+    tabsProfile: '프로필',
+    searchChats: '대화방 검색',
+    searchFriends: '친구 검색',
+    noRooms: '대화방이 없어요',
+    noRoomsBody: '친구에서 1:1 대화를 시작하거나 그룹방을 만들어 보세요.',
+    noSearchRooms: '검색 결과가 없어요.',
+    noFriends: '먼저 친구를 추가해 주세요.',
+    noSearchFriends: '검색 결과가 없어요.',
+    goFriends: '친구로 이동',
+    newGroup: '그룹 만들기',
+    addFriend: '친구 추가',
+    friendName: '친구 이름',
+    friendStatus: '상태 메시지',
+    save: '저장',
+    cancel: '취소',
+    remove: '삭제',
+    startChat: '대화 시작',
+    profileEdit: '프로필 수정',
+    myStatus: '상태 메시지',
+    profilePhoto: '프로필 사진',
+    photoPick: '사진 선택',
+    photoRemove: '사진 제거',
+    statsFriends: '친구 수',
+    statsRooms: '방 수',
+    statsFavs: '즐겨찾기',
+    roomSetting: '방 설정',
+    favoriteOn: '즐겨찾기 추가',
+    favoriteOff: '즐겨찾기 해제',
+    muteOn: '알림 끄기',
+    muteOff: '알림 켜기',
+    leaveRoom: '방 나가기',
+    deleteRoom: '방 삭제',
+    report: '신고',
+    reported: '보호자 검토 대기열에 신고가 접수됐어요.',
+    safe: '브라우저 링크는 차단돼요',
+    msgInput: '메시지 입력',
+    mediaHint: '전송 버튼을 눌러 공유해요.',
+    imageSelected: '이미지 선택됨',
+    videoSelected: '동영상 선택됨',
+    imageLabel: '이미지',
+    videoLabel: '동영상',
+    firstMsg: '첫 메시지 보내기',
+    noMsg: '메시지가 없어요',
+    hello: '안녕! 우리 방에 온 걸 환영해.',
+    sending: '전송 중',
+    sent: '보냄',
+    read: '읽음',
+    groupTitle: '그룹방 만들기',
+    groupName: '그룹방 이름',
+    groupHint: '친구를 2명 이상 선택해요',
+    createRoom: '방 만들기',
+    directRoomFallback: '대화',
+    me: '나',
   },
 } as const;
 
-type LocaleKey = keyof typeof LOCALE_STRINGS;
-type LocaleStrings = (typeof LOCALE_STRINGS)[LocaleKey];
+type Locale = keyof typeof TEXT;
 
-const LINK_REGEX = /https?:\/\/\S+/gi;
+const localeKey = (): Locale =>
+  Intl.DateTimeFormat().resolvedOptions().locale.toLowerCase().startsWith('ko')
+    ? 'ko'
+    : 'en';
+const uid = () => `${Date.now()}-${Math.round(Math.random() * 99999)}`;
+const tLabel = (ms: number) =>
+  new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const safeText = (value: string, blocked: string) => value.replace(LINK, `[${blocked}]`);
 
-const resolveLocaleKey = (): LocaleKey => {
-  const locale = Intl.DateTimeFormat().resolvedOptions().locale?.toLowerCase() ?? 'en';
-  return locale.startsWith('ko') ? 'ko' : 'en';
+const randomReply = (isKo: boolean) => {
+  const arr = isKo
+    ? ['Sounds good!', 'Okay, I will reply soon.', 'Great idea.']
+    : ['Looks good!', 'Got it!', 'Great idea.'];
+  return arr[Math.floor(Math.random() * arr.length)] ?? arr[0];
 };
 
-const seedMessages = (strings: LocaleStrings): Message[] => [
-  {
-    id: 'm1',
-    kind: 'text',
-    mine: false,
-    text: strings.seedMessageOther,
-    timestamp: '09:12',
-  },
-  {
-    id: 'm2',
-    kind: 'text',
-    mine: true,
-    text: strings.seedMessageMine,
-    timestamp: '09:13',
-  },
-  {
-    id: 'm3',
-    kind: 'image',
-    mine: true,
-    uri: 'https://images.unsplash.com/photo-1456926631375-92c8ce872def?auto=format&fit=crop&w=800&q=80',
-    timestamp: '09:14',
-  },
-];
+function App() {
+  const locale = useMemo(localeKey, []);
+  const s = TEXT[locale];
+  const isKo = locale === 'ko';
+  const insets = useSafeAreaInsets();
 
-const safeText = (value: string, blockedLabel: string) => value.replace(LINK_REGEX, `[${blockedLabel}]`);
+  const g =
+    ((Constants.expoConfig?.extra as {
+      googleAuth?: { androidClientId?: string; iosClientId?: string; webClientId?: string };
+    } | undefined)?.googleAuth ?? {});
 
-const getStamp = () =>
-  new Date().toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
+  const hasGoogle = !!Platform.select({
+    android: g.androidClientId,
+    ios: g.iosClientId,
+    default: g.webClientId,
   });
 
-const makeId = () => `${Date.now()}-${Math.round(Math.random() * 100000)}`;
+  const [googleReq, googleRes, googlePrompt] = Google.useAuthRequest({
+    androidClientId: g.androidClientId,
+    iosClientId: g.iosClientId,
+    webClientId: g.webClientId,
+    redirectUri: AuthSession.makeRedirectUri({ scheme: 'ourhangout' }),
+    scopes: ['openid', 'profile', 'email'],
+  });
 
-type BubbleProps = {
-  message: Message;
-  index: number;
-  strings: LocaleStrings;
-};
+  const [stage, setStage] = useState<Stage>('login');
+  const [tab, setTab] = useState<Tab>('chats');
+  const [profile, setProfile] = useState<Profile>({ name: '', status: '', email: '', avatarUri: '' });
+  const [nameDraft, setNameDraft] = useState('');
+  const [statusDraft, setStatusDraft] = useState('');
+  const [profilePhotoDraft, setProfilePhotoDraft] = useState('');
+  const [loginErr, setLoginErr] = useState('');
 
-function MessageBubble({ message, index, strings }: BubbleProps) {
-  const fade = useRef(new Animated.Value(0)).current;
-  const rise = useRef(new Animated.Value(16)).current;
+  const [friends, setFriends] = useState<Friend[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [messages, setMessages] = useState<Record<string, Message[]>>({});
+  const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
+  const activeRoomRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fade, {
-        toValue: 1,
-        duration: 320,
-        delay: index * 45,
-        useNativeDriver: true,
-      }),
-      Animated.timing(rise, {
-        toValue: 0,
-        duration: 420,
-        delay: index * 45,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [fade, rise, index]);
-
-  const body = (
-    <>
-      {message.kind === 'text' && <Text style={[styles.messageText, message.mine && styles.messageTextMine]}>{message.text}</Text>}
-      {message.kind === 'image' && (
-        <Image source={{ uri: message.uri }} style={styles.messageMedia} resizeMode="cover" />
-      )}
-      {message.kind === 'video' && (
-        <View style={[styles.messageMedia, styles.videoCard]}>
-          <Ionicons name="play-circle" size={40} color="#E7F4FF" />
-          <Text style={styles.videoCardTitle}>{strings.videoMessage}</Text>
-          <Text style={styles.videoCardHint}>{strings.videoPreviewHint}</Text>
-        </View>
-      )}
-      <Text style={[styles.timestamp, message.mine && styles.timestampMine]}>{message.timestamp}</Text>
-    </>
-  );
-
-  return (
-    <Animated.View
-      style={[
-        styles.messageRow,
-        message.mine ? styles.mineRow : styles.otherRow,
-        {
-          opacity: fade,
-          transform: [{ translateY: rise }],
-        },
-      ]}
-    >
-      {!message.mine && (
-        <View style={styles.avatarMini}>
-          <Text style={styles.avatarMiniText}>A</Text>
-        </View>
-      )}
-      {message.mine ? (
-        <LinearGradient colors={['#4DCEFF', '#2D8FFF']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.myBubble}>
-          {body}
-        </LinearGradient>
-      ) : (
-        <View style={styles.otherBubble}>{body}</View>
-      )}
-    </Animated.View>
-  );
-}
-
-export default function App() {
-  const [localeKey] = useState<LocaleKey>(resolveLocaleKey());
-  const strings = LOCALE_STRINGS[localeKey];
-
-  const [messages, setMessages] = useState<Message[]>(() => seedMessages(strings));
+  const [chatQuery, setChatQuery] = useState('');
+  const [friendQuery, setFriendQuery] = useState('');
   const [input, setInput] = useState('');
   const [draftMedia, setDraftMedia] = useState<DraftMedia | null>(null);
 
+  const [showFriendModal, setShowFriendModal] = useState(false);
+  const [friendNameDraft, setFriendNameDraft] = useState('');
+  const [friendStatusDraft, setFriendStatusDraft] = useState('');
+  const [showGroupModal, setShowGroupModal] = useState(false);
+  const [groupNameDraft, setGroupNameDraft] = useState('');
+  const [groupPick, setGroupPick] = useState<string[]>([]);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [roomMenuId, setRoomMenuId] = useState<string | null>(null);
+
   const scrollRef = useRef<ScrollView>(null);
-  const headerIn = useRef(new Animated.Value(0)).current;
-  const chatIn = useRef(new Animated.Value(0)).current;
-  const composerIn = useRef(new Animated.Value(0)).current;
+
+  const getFriend = (fid: string) => friends.find((f) => f.id === fid);
+  const roomTitle = (room: Room) =>
+    room.isGroup
+      ? room.title
+      : getFriend(room.members.find((m) => m !== MY_ID) ?? '')?.name ?? room.title;
+  const roomMembers = (room: Room) =>
+    room.members
+      .filter((m) => m !== MY_ID)
+      .map((m) => getFriend(m)?.name ?? '')
+      .filter(Boolean)
+      .join(', ');
+
+  const sortedRooms = useMemo(
+    () =>
+      [...rooms].sort((a, b) =>
+        a.favorite === b.favorite ? b.updatedAt - a.updatedAt : a.favorite ? -1 : 1
+      ),
+    [rooms]
+  );
+
+  const filteredRooms = useMemo(() => {
+    const q = chatQuery.trim().toLowerCase();
+    if (!q) return sortedRooms;
+    return sortedRooms.filter((room) => {
+      const title = roomTitle(room).toLowerCase();
+      const members = roomMembers(room).toLowerCase();
+      const preview = room.preview.toLowerCase();
+      return title.includes(q) || members.includes(q) || preview.includes(q);
+    });
+  }, [chatQuery, sortedRooms]);
+
+  const filteredFriends = useMemo(() => {
+    const q = friendQuery.trim().toLowerCase();
+    if (!q) return friends;
+    return friends.filter((f) => `${f.name} ${f.status}`.toLowerCase().includes(q));
+  }, [friendQuery, friends]);
+
+  const activeRoom = useMemo(
+    () => rooms.find((r) => r.id === activeRoomId) ?? null,
+    [rooms, activeRoomId]
+  );
+  const activeMsgs = useMemo(
+    () => (activeRoomId ? messages[activeRoomId] ?? [] : []),
+    [messages, activeRoomId]
+  );
+
+  const stats = useMemo(
+    () => ({
+      friends: friends.length,
+      rooms: rooms.length,
+      favs: rooms.filter((r) => r.favorite).length,
+    }),
+    [friends.length, rooms]
+  );
+
+  const roomMap = useMemo(() => new Map(rooms.map((r) => [r.id, r])), [rooms]);
 
   useEffect(() => {
-    Animated.sequence([
-      Animated.timing(headerIn, {
-        toValue: 1,
-        duration: 360,
-        easing: Easing.out(Easing.exp),
-        useNativeDriver: true,
-      }),
-      Animated.parallel([
-        Animated.timing(chatIn, {
-          toValue: 1,
-          duration: 420,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        Animated.timing(composerIn, {
-          toValue: 1,
-          duration: 420,
-          delay: 90,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-      ]),
-    ]).start();
-  }, [headerIn, chatIn, composerIn]);
+    activeRoomRef.current = activeRoomId;
+  }, [activeRoomId]);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      scrollRef.current?.scrollToEnd({ animated: true });
-    }, 90);
-    return () => clearTimeout(timer);
-  }, [messages, draftMedia]);
+    if (!activeRoomId) return;
+    const t = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
+    return () => clearTimeout(t);
+  }, [activeRoomId, activeMsgs.length]);
 
-  const sendMessage = () => {
-    const sanitized = safeText(input.trim(), strings.linkBlockedInline);
-    if (!sanitized && !draftMedia) {
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (!googleRes || googleRes.type !== 'success') return;
+      const token = googleRes.authentication?.accessToken;
+      if (!token) return;
+      try {
+        const me = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!me.ok) throw new Error('failed');
+        const info = (await me.json()) as { name?: string; email?: string; picture?: string };
+        if (cancelled) return;
+        setProfile((p) => ({
+          ...p,
+          name: info.name?.trim() || p.name,
+          email: info.email?.trim() || p.email,
+          avatarUri: p.avatarUri || info.picture?.trim() || '',
+        }));
+        setNameDraft(info.name?.trim() || '');
+        setStage('setup_name');
+      } catch {
+        if (!cancelled) setLoginErr(s.loginFailed);
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [googleRes, s.loginFailed]);
+
+  const setRoomMsgs = (rid: string, updater: (prev: Message[]) => Message[]) =>
+    setMessages((p) => ({ ...p, [rid]: updater(p[rid] ?? []) }));
+
+  const touchRoom = (rid: string, preview: string, incoming = false) =>
+    setRooms((p) =>
+      p.map((r) =>
+        r.id === rid
+          ? {
+              ...r,
+              preview,
+              updatedAt: Date.now(),
+              unread: incoming && activeRoomRef.current !== rid ? r.unread + 1 : r.unread,
+            }
+          : r
+      )
+    );
+
+  const appendSystem = (rid: string, text: string) => {
+    const m: Message = {
+      id: uid(),
+      roomId: rid,
+      senderId: 'system',
+      senderName: 'system',
+      mine: false,
+      kind: 'system',
+      text,
+      at: Date.now(),
+    };
+    setRoomMsgs(rid, (prev) => [...prev, m]);
+    touchRoom(rid, text, false);
+  };
+
+  const ensureDirectRoom = (fid: string) => {
+    const old = rooms.find(
+      (r) =>
+        !r.isGroup &&
+        r.members.length === 2 &&
+        r.members.includes(MY_ID) &&
+        r.members.includes(fid)
+    );
+    if (old) return old.id;
+
+    const rid = uid();
+    const room: Room = {
+      id: rid,
+      title: getFriend(fid)?.name ?? s.directRoomFallback,
+      members: [MY_ID, fid],
+      isGroup: false,
+      favorite: false,
+      muted: false,
+      unread: 0,
+      preview: '',
+      updatedAt: Date.now(),
+    };
+    setRooms((p) => [room, ...p]);
+    setMessages((p) => ({ ...p, [rid]: [] }));
+    appendSystem(rid, s.safe);
+    return rid;
+  };
+
+  const openRoom = (rid: string) => {
+    setActiveRoomId(rid);
+    setTab('chats');
+    setInput('');
+    setDraftMedia(null);
+    setRooms((p) => p.map((r) => (r.id === rid ? { ...r, unread: 0 } : r)));
+  };
+
+  const addFriend = () => {
+    const name = friendNameDraft.trim();
+    if (!name) return;
+    if (friends.some((f) => f.name.toLowerCase() === name.toLowerCase())) {
+      setShowFriendModal(false);
       return;
     }
+    setFriends((p) => [
+      ...p,
+      { id: uid(), name, status: friendStatusDraft.trim(), trusted: false },
+    ]);
+    setFriendNameDraft('');
+    setFriendStatusDraft('');
+    setShowFriendModal(false);
+  };
 
-    const now = getStamp();
+  const createGroup = () => {
+    if (groupPick.length < 2) return;
+    const rid = uid();
+    const title =
+      groupNameDraft.trim() ||
+      groupPick
+        .map((idv) => getFriend(idv)?.name ?? '')
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(', ');
 
-    if (sanitized) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: makeId(),
-          kind: 'text',
-          mine: true,
-          text: sanitized,
-          timestamp: now,
-        },
-      ]);
+    const room: Room = {
+      id: rid,
+      title,
+      members: [MY_ID, ...groupPick],
+      isGroup: true,
+      favorite: false,
+      muted: false,
+      unread: 0,
+      preview: '',
+      updatedAt: Date.now(),
+    };
+    setRooms((p) => [room, ...p]);
+    setMessages((p) => ({ ...p, [rid]: [] }));
+    appendSystem(rid, roomMembers(room));
+    setGroupNameDraft('');
+    setGroupPick([]);
+    setShowGroupModal(false);
+    openRoom(rid);
+  };
+
+  const updateDelivery = (rid: string, mid: string, d: Delivery) =>
+    setRoomMsgs(rid, (p) => p.map((m) => (m.id === mid ? { ...m, delivery: d } : m)));
+
+  const send = () => {
+    if (!activeRoom) return;
+    const text = safeText(input.trim(), isKo ? '留곹겕李⑤떒' : 'blocked-link');
+    if (!text && !draftMedia) return;
+
+    const out: Message[] = [];
+    if (text) {
+      out.push({
+        id: uid(),
+        roomId: activeRoom.id,
+        senderId: MY_ID,
+        senderName: profile.name || s.me,
+        mine: true,
+        kind: 'text',
+        text,
+        at: Date.now(),
+        delivery: 'sending',
+      });
     }
 
     if (draftMedia) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: makeId(),
-          kind: draftMedia.kind,
-          mine: true,
-          uri: draftMedia.uri,
-          timestamp: now,
-        },
-      ]);
-      setDraftMedia(null);
+      out.push({
+        id: uid(),
+        roomId: activeRoom.id,
+        senderId: MY_ID,
+        senderName: profile.name || s.me,
+        mine: true,
+        kind: draftMedia.kind,
+        uri: draftMedia.uri,
+        at: Date.now(),
+        delivery: 'sending',
+      });
     }
 
-    setInput('');
+    setRoomMsgs(activeRoom.id, (p) => [...p, ...out]);
+    const last = out[out.length - 1];
+    touchRoom(
+      activeRoom.id,
+      last?.kind === 'text' ? last.text || '' : last?.kind === 'image' ? s.imageLabel : s.videoLabel,
+      false
+    );
 
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: makeId(),
-          kind: 'text',
+    setInput('');
+    setDraftMedia(null);
+
+    out.forEach((m, i) => {
+      setTimeout(() => updateDelivery(activeRoom.id, m.id, 'sent'), 350 + i * 130);
+      setTimeout(() => updateDelivery(activeRoom.id, m.id, 'read'), 760 + i * 180);
+    });
+
+    const others = activeRoom.members.filter((m) => m !== MY_ID);
+    const replier = getFriend(others[Math.floor(Math.random() * others.length)] ?? '');
+    if (replier) {
+      setTimeout(() => {
+        const r: Message = {
+          id: uid(),
+          roomId: activeRoom.id,
+          senderId: replier.id,
+          senderName: replier.name,
           mine: false,
-          text: strings.autoReply,
-          timestamp: getStamp(),
-        },
-      ]);
-    }, 850);
+          kind: 'text',
+          text: randomReply(isKo),
+          at: Date.now(),
+        };
+        setRoomMsgs(activeRoom.id, (p) => [...p, r]);
+        touchRoom(activeRoom.id, r.text || '', true);
+      }, 1200);
+    }
   };
 
   const pickMedia = async (kind: 'image' | 'video') => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
+    if (!activeRoomId) return;
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) return;
+    const r = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: [kind === 'image' ? 'images' : 'videos'],
-      allowsEditing: kind === 'image',
+      allowsEditing: false,
       quality: 0.9,
       videoMaxDuration: 120,
     });
-
-    if (result.canceled || !result.assets.length) {
-      return;
-    }
-
-    const asset = result.assets[0];
-    const pickedKind: DraftMedia['kind'] = asset.type === 'video' ? 'video' : 'image';
-
-    setDraftMedia({
-      kind: pickedKind,
-      uri: asset.uri,
-    });
+    if (r.canceled || !r.assets.length) return;
+    setDraftMedia({ kind: r.assets[0].type === 'video' ? 'video' : 'image', uri: r.assets[0].uri });
   };
 
-  const canSend = input.trim().length > 0 || !!draftMedia;
+  const pickProfilePhoto = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) return;
+    const r = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.9,
+    });
+    if (r.canceled || !r.assets.length) return;
+    setProfilePhotoDraft(r.assets[0].uri);
+  };
+
+  const startGoogle = async () => {
+    setLoginErr('');
+    if (!hasGoogle || !googleReq) {
+      setLoginErr(s.loginHint);
+      return;
+    }
+    const res = await googlePrompt();
+    if (res.type !== 'success' && res.type !== 'dismiss' && res.type !== 'cancel') {
+      setLoginErr(s.loginFailed);
+    }
+  };
+
+  const saveProfile = () => {
+    const n = nameDraft.trim();
+    if (!n) return;
+    setProfile((p) => ({
+      ...p,
+      name: n,
+      status: statusDraft.trim(),
+      avatarUri: profilePhotoDraft.trim(),
+    }));
+    setShowProfileModal(false);
+  };
+
+  const toggleFavorite = (rid: string) =>
+    setRooms((p) => p.map((r) => (r.id === rid ? { ...r, favorite: !r.favorite } : r)));
+  const toggleMute = (rid: string) =>
+    setRooms((p) => p.map((r) => (r.id === rid ? { ...r, muted: !r.muted } : r)));
+  const toggleTrusted = (fid: string) =>
+    setFriends((p) => p.map((f) => (f.id === fid ? { ...f, trusted: !f.trusted } : f)));
+  const toggleGroupPick = (fid: string) =>
+    setGroupPick((p) => (p.includes(fid) ? p.filter((x) => x !== fid) : [...p, fid]));
+
+  const deleteRoom = (rid: string) => {
+    setRooms((p) => p.filter((r) => r.id !== rid));
+    setMessages((p) => {
+      const next = { ...p };
+      delete next[rid];
+      return next;
+    });
+    if (activeRoomRef.current === rid) setActiveRoomId(null);
+    setRoomMenuId(null);
+  };
+
+  const reportRoom = (rid: string) => {
+    appendSystem(rid, s.reported);
+    setRoomMenuId(null);
+  };
+
+  const kbBehavior = Platform.OS === 'ios' ? 'padding' : 'height';
+  const sheetBottomInset = Math.max(insets.bottom, 12);
+
+  if (stage === 'login') {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar style="light" />
+        <LinearGradient colors={['#0A132F', '#1A3A7A']} style={styles.fill}>
+          <View style={styles.centerCard}>
+            <Text style={styles.brand}>{s.app}</Text>
+            <Text style={styles.h1}>{s.login}</Text>
+            <Text style={styles.sub}>{s.loginBody}</Text>
+            <Pressable style={styles.btn} onPress={startGoogle}>
+              <Text style={styles.btnText}>{s.google}</Text>
+            </Pressable>
+            <Pressable style={styles.linkBtn} onPress={() => setStage('setup_name')}>
+              <Text style={styles.link}>{s.loginSkip}</Text>
+            </Pressable>
+            <Text style={styles.sub}>{loginErr || s.loginHint}</Text>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
+
+  if (stage === 'setup_name' || stage === 'setup_intro') {
+    const isName = stage === 'setup_name';
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar style="light" />
+        <LinearGradient colors={['#0A132F', '#1A3A7A']} style={styles.fill}>
+          <KeyboardAvoidingView style={styles.fill} behavior={kbBehavior}>
+            <View style={styles.centerCard}>
+              <Text style={styles.h1}>{isName ? s.setup1 : s.setup2}</Text>
+              {isName ? (
+                <TextInput
+                  value={nameDraft}
+                  onChangeText={setNameDraft}
+                  placeholder={s.displayName}
+                  style={styles.field}
+                  placeholderTextColor="#7385A8"
+                />
+              ) : null}
+              {!isName ? (
+                <Pressable style={styles.linkBtn} onPress={() => setStage('setup_name')}>
+                  <Text style={styles.link}>{s.editName}</Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                style={[styles.btn, isName && !nameDraft.trim() && styles.off]}
+                onPress={() => {
+                  if (isName) {
+                    setProfile((p) => ({ ...p, name: nameDraft.trim() }));
+                    setStage('setup_intro');
+                    return;
+                  }
+                  if (!profile.status) {
+                    setProfile((p) => ({ ...p, status: s.defaultStatus }));
+                  }
+                  setStage('app');
+                }}
+                disabled={isName && !nameDraft.trim()}
+              >
+                <Text style={styles.btnText}>{isName ? s.next : s.start}</Text>
+              </Pressable>
+            </View>
+          </KeyboardAvoidingView>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safe}>
       <StatusBar style="light" />
-      <LinearGradient colors={['#060C21', '#123070', '#1C5DA5']} style={styles.gradient}>
-        <View style={[styles.glow, styles.glowTop]} />
-        <View style={[styles.glow, styles.glowBottom]} />
-
-        <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <Animated.View
-            style={[
-              styles.header,
-              {
-                opacity: headerIn,
-                transform: [
-                  {
-                    translateY: headerIn.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [26, 0],
-                    }),
-                  },
-                ],
-              },
-            ]}
-          >
-            <View style={styles.headerLeft}>
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>AK</Text>
-              </View>
-              <View>
-                <Text style={styles.title}>{strings.appTitle}</Text>
-                <Text style={styles.subtitle}>{strings.safeModeEnabled}</Text>
-              </View>
-            </View>
-            <View style={styles.headerBadge}>
-              <Ionicons name="shield-checkmark" size={16} color="#0D3C8F" />
-            </View>
-          </Animated.View>
-
-          <Animated.View
-            style={[
-              styles.chatCard,
-              {
-                opacity: chatIn,
-                transform: [
-                  {
-                    translateY: chatIn.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [40, 0],
-                    }),
-                  },
-                ],
-              },
-            ]}
-          >
-            <ScrollView
-              ref={scrollRef}
-              contentContainerStyle={styles.messagesWrap}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-            >
-              {messages.map((message, index) => (
-                <MessageBubble key={message.id} message={message} index={index} strings={strings} />
-              ))}
-            </ScrollView>
-          </Animated.View>
-
-          <Animated.View
-            style={[
-              styles.composerWrap,
-              {
-                opacity: composerIn,
-                transform: [
-                  {
-                    translateY: composerIn.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [50, 0],
-                    }),
-                  },
-                ],
-              },
-            ]}
-          >
-            {draftMedia && (
-              <View style={styles.draftCard}>
-                {draftMedia.kind === 'image' ? (
-                  <Image source={{ uri: draftMedia.uri }} style={styles.draftMedia} resizeMode="cover" />
-                ) : (
-                  <View style={[styles.draftMedia, styles.videoDraftCard]}>
-                    <Ionicons name="videocam" size={22} color="#E9F5FF" />
-                  </View>
-                )}
-                <View style={styles.draftMeta}>
-                  <Text style={styles.draftTitle}>
-                    {draftMedia.kind === 'image' ? strings.imageReady : strings.videoReady}
-                  </Text>
-                  <Text style={styles.draftHint}>{strings.tapSendHint}</Text>
-                </View>
-                <Pressable style={styles.draftRemove} onPress={() => setDraftMedia(null)}>
-                  <Ionicons name="close" size={18} color="#ffffff" />
+      <LinearGradient colors={['#0A132F', '#1A3A7A']} style={styles.fill}>
+        <KeyboardAvoidingView
+          style={[styles.fill, { paddingBottom: Math.max(8, insets.bottom) }]}
+          behavior={kbBehavior}
+        >
+          {activeRoom ? (
+            <>
+              <View style={styles.header}>
+                <Pressable style={styles.iconDark} onPress={() => setActiveRoomId(null)}>
+                  <Ionicons name="chevron-back" size={16} color="#EFF9FF" />
+                </Pressable>
+                <Text style={styles.title}>{roomTitle(activeRoom)}</Text>
+                <Pressable style={styles.iconDark} onPress={() => setRoomMenuId(activeRoom.id)}>
+                  <Ionicons name="ellipsis-horizontal" size={16} color="#EFF9FF" />
                 </Pressable>
               </View>
-            )}
 
-            <View style={styles.inputRow}>
-              <Pressable style={styles.iconBtn} onPress={() => pickMedia('image')}>
-                <Ionicons name="image" size={20} color="#0D3C8F" />
-              </Pressable>
-              <Pressable style={styles.iconBtn} onPress={() => pickMedia('video')}>
-                <Ionicons name="videocam" size={20} color="#0D3C8F" />
-              </Pressable>
-              <TextInput
-                value={input}
-                onChangeText={setInput}
-                placeholder={strings.inputPlaceholder}
-                placeholderTextColor="#7C8AAC"
-                style={styles.input}
-                multiline
-                maxLength={700}
-                autoCorrect={false}
-                autoComplete="off"
-              />
-              <Pressable onPress={sendMessage} style={[styles.sendBtn, !canSend && styles.sendBtnDisabled]} disabled={!canSend}>
-                <LinearGradient colors={canSend ? ['#52D8FF', '#2D8FFF'] : ['#A7B6D6', '#A7B6D6']} style={styles.sendGradient}>
-                  <Ionicons name="arrow-up" size={18} color="#ffffff" />
-                </LinearGradient>
-              </Pressable>
-            </View>
+              <View style={styles.main}>
+                <ScrollView ref={scrollRef} contentContainerStyle={styles.list}>
+                  {activeMsgs.length === 0 ? (
+                    <View style={styles.empty}>
+                      <Text style={styles.sub}>{s.noMsg}</Text>
+                      <Pressable style={styles.btn} onPress={() => setInput(s.hello)}>
+                        <Text style={styles.btnText}>{s.firstMsg}</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    activeMsgs.map((m) => (
+                      <View key={m.id} style={[styles.bubbleRow, m.mine ? styles.mineRow : styles.otherRow]}>
+                        <View style={[styles.bubble, m.mine ? styles.mineBubble : styles.otherBubble]}>
+                          {m.kind === 'text' ? <Text style={[styles.msg, m.mine && styles.msgMine]}>{m.text}</Text> : null}
+                          {m.kind === 'image' ? <Image source={{ uri: m.uri }} style={styles.media} /> : null}
+                          {m.kind === 'video' ? (
+                            <View style={[styles.media, styles.video]}>
+                              <Ionicons name="play-circle" size={34} color="#E7F4FF" />
+                            </View>
+                          ) : null}
+                          {m.kind === 'system' ? <Text style={styles.system}>{m.text}</Text> : null}
+                          <Text style={[styles.meta, m.mine && styles.metaMine]}>
+                            {tLabel(m.at)}
+                            {m.mine && m.delivery
+                              ? ` · ${m.delivery === 'sending' ? s.sending : m.delivery === 'sent' ? s.sent : s.read}`
+                              : ''}
+                          </Text>
+                        </View>
+                      </View>
+                    ))
+                  )}
+                </ScrollView>
+              </View>
 
-            <Text style={styles.guardText}>{strings.linksBlocked}</Text>
-          </Animated.View>
+              <View style={styles.composer}>
+                {draftMedia ? (
+                  <View style={styles.draft}>
+                    <Text style={styles.sub}>{draftMedia.kind === 'image' ? s.imageSelected : s.videoSelected}</Text>
+                    <Pressable onPress={() => setDraftMedia(null)}>
+                      <Ionicons name="close-circle" size={18} color="#E7F4FF" />
+                    </Pressable>
+                  </View>
+                ) : null}
+                <View style={styles.row}>
+                  <Pressable style={styles.iconLight} onPress={() => pickMedia('image')}>
+                    <Ionicons name="image" size={16} color="#ECF9FF" />
+                  </Pressable>
+                  <Pressable style={styles.iconLight} onPress={() => pickMedia('video')}>
+                    <Ionicons name="videocam" size={16} color="#ECF9FF" />
+                  </Pressable>
+                  <TextInput
+                    style={styles.composerInput}
+                    placeholder={s.msgInput}
+                    placeholderTextColor="#7385A8"
+                    value={input}
+                    onChangeText={setInput}
+                    multiline
+                  />
+                  <Pressable
+                    style={[styles.send, !input.trim() && !draftMedia && styles.off]}
+                    disabled={!input.trim() && !draftMedia}
+                    onPress={send}
+                  >
+                    <Ionicons name="arrow-up" size={16} color="#fff" />
+                  </Pressable>
+                </View>
+                <Text style={styles.sub}>{s.safe}</Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.header}>
+                <Text style={styles.title}>{s.app}</Text>
+                <Pressable
+                  style={styles.iconDark}
+                  onPress={() => {
+                    setNameDraft(profile.name);
+                    setStatusDraft(profile.status);
+                    setProfilePhotoDraft(profile.avatarUri);
+                    setShowProfileModal(true);
+                  }}
+                >
+                  {profile.avatarUri ? (
+                    <Image source={{ uri: profile.avatarUri }} style={styles.headerAvatar} />
+                  ) : (
+                    <Ionicons name="person-circle" size={16} color="#EFF9FF" />
+                  )}
+                </Pressable>
+              </View>
+
+              <View style={styles.main}>
+                {tab === 'chats' ? (
+                  <>
+                    <View style={styles.row}>
+                      <Pressable style={styles.smallBtn} onPress={() => setShowGroupModal(true)}>
+                        <Text style={styles.smallBtnText}>{s.newGroup}</Text>
+                      </Pressable>
+                      <Pressable style={styles.smallBtn} onPress={() => setTab('friends')}>
+                        <Text style={styles.smallBtnText}>{s.goFriends}</Text>
+                      </Pressable>
+                    </View>
+                    <TextInput
+                      style={styles.field}
+                      placeholder={s.searchChats}
+                      placeholderTextColor="#7385A8"
+                      value={chatQuery}
+                      onChangeText={setChatQuery}
+                    />
+                    {sortedRooms.length === 0 ? (
+                      <View style={styles.empty}>
+                        <Text style={styles.h1}>{s.noRooms}</Text>
+                        <Text style={styles.sub}>{s.noRoomsBody}</Text>
+                      </View>
+                    ) : filteredRooms.length === 0 ? (
+                      <View style={styles.empty}>
+                        <Text style={styles.sub}>{s.noSearchRooms}</Text>
+                      </View>
+                    ) : (
+                      <ScrollView contentContainerStyle={styles.list}>
+                        {filteredRooms.map((r) => (
+                          <Pressable key={r.id} style={styles.item} onPress={() => openRoom(r.id)}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.itemTitle}>{roomTitle(r)}</Text>
+                              <Text style={styles.sub} numberOfLines={1}>{r.preview || roomMembers(r)}</Text>
+                            </View>
+                            <View style={styles.itemRight}>
+                              {r.unread > 0 ? (
+                                <View style={styles.badge}>
+                                  <Text style={styles.badgeText}>{r.unread > 99 ? '99+' : r.unread}</Text>
+                                </View>
+                              ) : null}
+                              <Pressable style={styles.iconLight} onPress={() => toggleFavorite(r.id)}>
+                                <Ionicons name={r.favorite ? 'star' : 'star-outline'} size={14} color={r.favorite ? '#FFD56A' : '#ECF9FF'} />
+                              </Pressable>
+                              <Pressable style={styles.iconLight} onPress={() => setRoomMenuId(r.id)}>
+                                <Ionicons name="ellipsis-horizontal" size={14} color="#ECF9FF" />
+                              </Pressable>
+                            </View>
+                          </Pressable>
+                        ))}
+                      </ScrollView>
+                    )}
+                  </>
+                ) : null}
+
+                {tab === 'friends' ? (
+                  <>
+                    <View style={styles.row}>
+                      <Pressable style={styles.smallBtn} onPress={() => setShowFriendModal(true)}>
+                        <Text style={styles.smallBtnText}>{s.addFriend}</Text>
+                      </Pressable>
+                      <Pressable style={styles.smallBtn} onPress={() => setShowGroupModal(true)}>
+                        <Text style={styles.smallBtnText}>{s.newGroup}</Text>
+                      </Pressable>
+                    </View>
+                    <TextInput
+                      style={styles.field}
+                      placeholder={s.searchFriends}
+                      placeholderTextColor="#7385A8"
+                      value={friendQuery}
+                      onChangeText={setFriendQuery}
+                    />
+                    {friends.length === 0 ? (
+                      <View style={styles.empty}><Text style={styles.sub}>{s.noFriends}</Text></View>
+                    ) : filteredFriends.length === 0 ? (
+                      <View style={styles.empty}><Text style={styles.sub}>{s.noSearchFriends}</Text></View>
+                    ) : (
+                      <ScrollView contentContainerStyle={styles.list}>
+                        {filteredFriends.map((f) => (
+                          <View key={f.id} style={styles.item}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.itemTitle}>{f.name}</Text>
+                              <Text style={styles.sub}>{f.status || s.startChat}</Text>
+                            </View>
+                            <Pressable style={styles.iconLight} onPress={() => toggleTrusted(f.id)}>
+                              <Ionicons name={f.trusted ? 'shield-checkmark' : 'shield-outline'} size={14} color="#ECF9FF" />
+                            </Pressable>
+                            <Pressable style={styles.iconLight} onPress={() => openRoom(ensureDirectRoom(f.id))}>
+                              <Ionicons name="chatbubble-ellipses" size={14} color="#ECF9FF" />
+                            </Pressable>
+                          </View>
+                        ))}
+                      </ScrollView>
+                    )}
+                  </>
+                ) : null}
+
+                {tab === 'profile' ? (
+                  <ScrollView contentContainerStyle={styles.list}>
+                    <View style={styles.item}>
+                      <View style={styles.profileHero}>
+                        {profile.avatarUri ? (
+                          <Image source={{ uri: profile.avatarUri }} style={styles.profileAvatar} />
+                        ) : (
+                          <View style={styles.profileAvatarFallback}>
+                            <Text style={styles.profileAvatarText}>
+                              {(profile.name || s.me).slice(0, 1).toUpperCase()}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                      <View style={styles.profileMeta}>
+                        <Text style={styles.h1}>{profile.name || s.app}</Text>
+                        <Text style={styles.profileStatus}>{profile.status || s.myStatus}</Text>
+                        <Text style={styles.sub}>{profile.email || '-'}</Text>
+                      </View>
+                      <Pressable
+                        style={styles.smallBtn}
+                        onPress={() => {
+                          setNameDraft(profile.name);
+                          setStatusDraft(profile.status);
+                          setProfilePhotoDraft(profile.avatarUri);
+                          setShowProfileModal(true);
+                        }}
+                      >
+                        <Text style={styles.smallBtnText}>{s.profileEdit}</Text>
+                      </Pressable>
+                    </View>
+                    <View style={styles.row}>
+                      <View style={styles.stat}><Text style={styles.itemTitle}>{stats.friends}</Text><Text style={styles.sub}>{s.statsFriends}</Text></View>
+                      <View style={styles.stat}><Text style={styles.itemTitle}>{stats.rooms}</Text><Text style={styles.sub}>{s.statsRooms}</Text></View>
+                      <View style={styles.stat}><Text style={styles.itemTitle}>{stats.favs}</Text><Text style={styles.sub}>{s.statsFavs}</Text></View>
+                    </View>
+                  </ScrollView>
+                ) : null}
+              </View>
+
+              <View style={styles.tabs}>
+                <Pressable style={[styles.tab, tab === 'chats' && styles.tabOn]} onPress={() => setTab('chats')}>
+                  <Text style={styles.tabText}>{s.tabsChats}</Text>
+                </Pressable>
+                <Pressable style={[styles.tab, tab === 'friends' && styles.tabOn]} onPress={() => setTab('friends')}>
+                  <Text style={styles.tabText}>{s.tabsFriends}</Text>
+                </Pressable>
+                <Pressable style={[styles.tab, tab === 'profile' && styles.tabOn]} onPress={() => setTab('profile')}>
+                  <Text style={styles.tabText}>{s.tabsProfile}</Text>
+                </Pressable>
+              </View>
+            </>
+          )}
         </KeyboardAvoidingView>
+
+        <Modal
+          visible={showFriendModal}
+          transparent
+          animationType="slide"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={() => setShowFriendModal(false)}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={() => setShowFriendModal(false)} />
+            <KeyboardAvoidingView
+              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
+              behavior={kbBehavior}
+            >
+              <View style={styles.sheet}>
+                <Text style={styles.h1}>{s.addFriend}</Text>
+                <TextInput
+                  style={styles.field}
+                  placeholder={s.friendName}
+                  placeholderTextColor="#7385A8"
+                  value={friendNameDraft}
+                  onChangeText={setFriendNameDraft}
+                />
+                <TextInput
+                  style={styles.field}
+                  placeholder={s.friendStatus}
+                  placeholderTextColor="#7385A8"
+                  value={friendStatusDraft}
+                  onChangeText={setFriendStatusDraft}
+                />
+                <View style={styles.row}>
+                  <Pressable style={styles.smallBtn} onPress={() => setShowFriendModal(false)}>
+                    <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.smallBtn, !friendNameDraft.trim() && styles.off]}
+                    disabled={!friendNameDraft.trim()}
+                    onPress={addFriend}
+                  >
+                    <Text style={styles.smallBtnText}>{s.save}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={showGroupModal}
+          transparent
+          animationType="slide"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={() => setShowGroupModal(false)}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={() => setShowGroupModal(false)} />
+            <KeyboardAvoidingView
+              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
+              behavior={kbBehavior}
+            >
+              <View style={styles.sheet}>
+                <Text style={styles.h1}>{s.groupTitle}</Text>
+                <TextInput
+                  style={styles.field}
+                  placeholder={s.groupName}
+                  placeholderTextColor="#7385A8"
+                  value={groupNameDraft}
+                  onChangeText={setGroupNameDraft}
+                />
+                <Text style={styles.sub}>{s.groupHint}</Text>
+                <ScrollView style={{ maxHeight: 180 }}>
+                  {friends.map((f) => (
+                    <Pressable key={f.id} style={styles.item} onPress={() => toggleGroupPick(f.id)}>
+                      <Text style={styles.itemTitle}>{f.name}</Text>
+                      <Ionicons name={groupPick.includes(f.id) ? 'checkmark-circle' : 'ellipse-outline'} size={16} color="#E7F4FF" />
+                    </Pressable>
+                  ))}
+                </ScrollView>
+                <View style={styles.row}>
+                  <Pressable style={styles.smallBtn} onPress={() => setShowGroupModal(false)}>
+                    <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.smallBtn, groupPick.length < 2 && styles.off]}
+                    disabled={groupPick.length < 2}
+                    onPress={createGroup}
+                  >
+                    <Text style={styles.smallBtnText}>{s.createRoom}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={showProfileModal}
+          transparent
+          animationType="slide"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={() => setShowProfileModal(false)}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={() => setShowProfileModal(false)} />
+            <KeyboardAvoidingView
+              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
+              behavior={kbBehavior}
+            >
+              <View style={styles.sheet}>
+                <Text style={styles.h1}>{s.profileEdit}</Text>
+                <Text style={styles.sub}>{s.profilePhoto}</Text>
+                <View style={styles.profilePhotoRow}>
+                  {profilePhotoDraft ? (
+                    <Image source={{ uri: profilePhotoDraft }} style={styles.profilePhotoPreview} />
+                  ) : (
+                    <View style={styles.profilePhotoPreviewFallback}>
+                      <Ionicons name="person" size={24} color="#EAF7FF" />
+                    </View>
+                  )}
+                  <View style={styles.profilePhotoActions}>
+                    <Pressable style={styles.smallBtn} onPress={pickProfilePhoto}>
+                      <Text style={styles.smallBtnText}>{s.photoPick}</Text>
+                    </Pressable>
+                    {profilePhotoDraft ? (
+                      <Pressable style={styles.smallBtn} onPress={() => setProfilePhotoDraft('')}>
+                        <Text style={styles.smallBtnText}>{s.photoRemove}</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+                <TextInput
+                  style={styles.field}
+                  value={nameDraft}
+                  onChangeText={setNameDraft}
+                  placeholder={s.displayName}
+                  placeholderTextColor="#7385A8"
+                />
+                <TextInput
+                  style={styles.field}
+                  value={statusDraft}
+                  onChangeText={setStatusDraft}
+                  placeholder={s.myStatus}
+                  placeholderTextColor="#7385A8"
+                />
+                <View style={styles.row}>
+                  <Pressable style={styles.smallBtn} onPress={() => setShowProfileModal(false)}>
+                    <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.smallBtn, !nameDraft.trim() && styles.off]}
+                    disabled={!nameDraft.trim()}
+                    onPress={saveProfile}
+                  >
+                    <Text style={styles.smallBtnText}>{s.save}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={!!roomMenuId}
+          transparent
+          animationType="fade"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={() => setRoomMenuId(null)}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={() => setRoomMenuId(null)} />
+            <View style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}>
+              <View style={styles.sheet}>
+                <Text style={styles.h1}>{s.roomSetting}</Text>
+                {roomMenuId ? (
+                  <>
+                    <Pressable style={styles.item} onPress={() => toggleFavorite(roomMenuId)}>
+                      <Text style={styles.itemTitle}>{roomMap.get(roomMenuId)?.favorite ? s.favoriteOff : s.favoriteOn}</Text>
+                    </Pressable>
+                    <Pressable style={styles.item} onPress={() => toggleMute(roomMenuId)}>
+                      <Text style={styles.itemTitle}>{roomMap.get(roomMenuId)?.muted ? s.muteOff : s.muteOn}</Text>
+                    </Pressable>
+                    <Pressable style={styles.item} onPress={() => reportRoom(roomMenuId)}>
+                      <Text style={styles.itemTitle}>{s.report}</Text>
+                    </Pressable>
+                    <Pressable style={styles.item} onPress={() => deleteRoom(roomMenuId)}>
+                      <Text style={[styles.itemTitle, { color: '#FFD4DE' }]}>
+                        {roomMap.get(roomMenuId)?.isGroup ? s.leaveRoom : s.deleteRoom}
+                      </Text>
+                    </Pressable>
+                  </>
+                ) : null}
+              </View>
+            </View>
+          </View>
+        </Modal>
       </LinearGradient>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#060C21',
-  },
-  loading: {
-    flex: 1,
-    backgroundColor: '#060C21',
-  },
-  gradient: {
-    flex: 1,
-  },
-  glow: {
-    position: 'absolute',
-    width: 280,
-    height: 280,
-    borderRadius: 140,
-    backgroundColor: 'rgba(94, 229, 255, 0.18)',
-  },
-  glowTop: {
-    top: -120,
-    right: -90,
-  },
-  glowBottom: {
-    bottom: -120,
-    left: -80,
-  },
-  keyboard: {
-    flex: 1,
-    paddingHorizontal: 14,
-    paddingBottom: 10,
-    gap: 12,
-  },
-  header: {
-    marginTop: 4,
-    borderRadius: 24,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    backgroundColor: 'rgba(255,255,255,0.16)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.22)',
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#DFF7FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: {
-    color: '#0C3586',
-    fontFamily: 'Baloo2_700Bold',
-    fontSize: 16,
-  },
-  title: {
-    color: '#F8FBFF',
-    fontFamily: 'Baloo2_700Bold',
-    fontSize: 26,
-    lineHeight: 28,
-  },
-  subtitle: {
-    color: 'rgba(255,255,255,0.88)',
-    fontFamily: 'Manrope_500Medium',
-    fontSize: 12,
-  },
-  headerBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#D5EEFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  chatCard: {
-    flex: 1,
-    borderRadius: 30,
-    backgroundColor: 'rgba(255,255,255,0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.24)',
-    overflow: 'hidden',
-  },
-  messagesWrap: {
-    paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: 20,
-    gap: 10,
-  },
-  messageRow: {
-    maxWidth: '92%',
-    flexDirection: 'row',
-    gap: 6,
-    alignItems: 'flex-end',
-  },
-  mineRow: {
-    alignSelf: 'flex-end',
-  },
-  otherRow: {
-    alignSelf: 'flex-start',
-  },
-  avatarMini: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(220, 241, 255, 0.78)',
-    marginBottom: 4,
-  },
-  avatarMiniText: {
-    color: '#0C367F',
-    fontFamily: 'Baloo2_700Bold',
-    fontSize: 11,
-  },
-  myBubble: {
-    borderRadius: 22,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    maxWidth: '100%',
-  },
-  otherBubble: {
-    borderRadius: 22,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(255,255,255,0.82)',
-    maxWidth: '100%',
-  },
-  messageText: {
-    color: '#1D2D53',
-    fontFamily: 'Manrope_700Bold',
-    fontSize: 14,
-    lineHeight: 21,
-  },
-  messageTextMine: {
-    color: '#F8FDFF',
-  },
-  messageMedia: {
-    width: 220,
-    height: 160,
-    borderRadius: 14,
-    marginBottom: 6,
-    backgroundColor: '#071633',
-  },
-  videoCard: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    backgroundColor: '#194A87',
-  },
-  videoCardTitle: {
-    color: '#F1FAFF',
-    fontFamily: 'Manrope_700Bold',
-    fontSize: 13,
-  },
-  videoCardHint: {
-    color: 'rgba(232,245,255,0.85)',
-    fontFamily: 'Manrope_500Medium',
-    fontSize: 11,
-  },
-  timestamp: {
-    color: 'rgba(36, 61, 97, 0.6)',
-    fontFamily: 'Manrope_500Medium',
-    fontSize: 10,
-    marginTop: 4,
-  },
-  timestampMine: {
-    color: 'rgba(255,255,255,0.8)',
-  },
-  composerWrap: {
-    borderRadius: 24,
-    padding: 10,
-    backgroundColor: 'rgba(255,255,255,0.16)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.24)',
-    gap: 8,
-  },
-  draftCard: {
-    backgroundColor: 'rgba(7, 20, 50, 0.6)',
-    borderRadius: 18,
+  safe: { flex: 1, backgroundColor: '#0A132F' },
+  fill: { flex: 1 },
+  centerCard: {
+    margin: 16,
+    marginTop: 40,
+    borderRadius: 20,
+    padding: 16,
+    backgroundColor: 'rgba(255,255,255,0.12)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.2)',
-    padding: 8,
+    gap: 10,
+  },
+  brand: { color: '#F7FAFF', fontSize: 28, textAlign: 'center', fontWeight: '700' },
+  h1: { color: '#F7FAFF', fontSize: 18, fontWeight: '700' },
+  title: { color: '#F7FAFF', fontSize: 16, fontWeight: '700', flex: 1 },
+  sub: { color: 'rgba(245,250,255,0.78)', fontSize: 11 },
+  btn: {
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: 'rgba(114,214,255,0.35)',
+    borderWidth: 1,
+    borderColor: 'rgba(170,232,255,0.5)',
+  },
+  btnText: { color: '#F2FAFF', fontSize: 12, fontWeight: '700' },
+  smallBtn: {
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(114,214,255,0.26)',
+    borderWidth: 1,
+    borderColor: 'rgba(170,232,255,0.4)',
+  },
+  smallBtnText: { color: '#F2FAFF', fontSize: 11, fontWeight: '700' },
+  linkBtn: { alignSelf: 'flex-start' },
+  link: { color: '#CFEFFF', fontSize: 12, fontWeight: '700' },
+  off: { opacity: 0.45 },
+  header: {
+    marginHorizontal: 14,
+    marginTop: 8,
+    marginBottom: 8,
+    borderRadius: 16,
+    padding: 10,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  draftMedia: {
-    width: 58,
-    height: 58,
-    borderRadius: 10,
-    backgroundColor: '#0A1836',
-  },
-  videoDraftCard: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#265F9E',
-  },
-  draftMeta: {
-    flex: 1,
-  },
-  draftTitle: {
-    color: '#F3FAFF',
-    fontFamily: 'Manrope_700Bold',
-    fontSize: 13,
-  },
-  draftHint: {
-    color: 'rgba(255,255,255,0.74)',
-    fontFamily: 'Manrope_500Medium',
-    fontSize: 11,
-  },
-  draftRemove: {
+  iconDark: {
     width: 28,
     height: 28,
     borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.2)',
   },
-  inputRow: {
+  headerAvatar: { width: 24, height: 24, borderRadius: 12 },
+  iconLight: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.13)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  main: {
+    flex: 1,
+    marginHorizontal: 14,
+    borderRadius: 16,
+    padding: 10,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    gap: 8,
+  },
+  list: { gap: 8, paddingBottom: 10 },
+  row: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  item: {
+    borderRadius: 12,
+    padding: 10,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  itemTitle: { color: '#F7FAFF', fontSize: 13, fontWeight: '700' },
+  itemRight: { flexDirection: 'row', gap: 6, alignItems: 'center' },
+  profileHero: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileAvatar: { width: '100%', height: '100%' },
+  profileAvatarFallback: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(114,214,255,0.32)',
+  },
+  profileAvatarText: { color: '#F7FAFF', fontSize: 24, fontWeight: '700' },
+  profileMeta: { flex: 1, gap: 2 },
+  profileStatus: { color: '#EAF7FF', fontSize: 12, fontWeight: '600' },
+  stat: {
+    flex: 1,
+    borderRadius: 12,
+    padding: 10,
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  tabs: {
+    marginHorizontal: 14,
+    marginTop: 8,
+    borderRadius: 14,
+    padding: 6,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    flexDirection: 'row',
     gap: 6,
   },
-  iconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#DDF3FF',
+  tab: { flex: 1, borderRadius: 10, paddingVertical: 8, alignItems: 'center' },
+  tabOn: { backgroundColor: 'rgba(114,214,255,0.28)' },
+  tabText: { color: '#F2FAFF', fontSize: 11, fontWeight: '700' },
+  bubbleRow: { width: '100%' },
+  mineRow: { alignItems: 'flex-end' },
+  otherRow: { alignItems: 'flex-start' },
+  bubble: { maxWidth: '90%', borderRadius: 14, padding: 10 },
+  mineBubble: { backgroundColor: '#2E88FF' },
+  otherBubble: { backgroundColor: 'rgba(255,255,255,0.9)' },
+  msg: { color: '#18305D', fontSize: 13, fontWeight: '600' },
+  msgMine: { color: '#F4FBFF' },
+  meta: { marginTop: 4, color: 'rgba(20,50,95,0.64)', fontSize: 10 },
+  metaMine: { color: 'rgba(240,252,255,0.84)' },
+  system: { color: '#604A14', fontSize: 11, fontWeight: '700' },
+  media: { width: 180, height: 130, borderRadius: 10, backgroundColor: '#163A76' },
+  video: { alignItems: 'center', justifyContent: 'center' },
+  composer: {
+    marginHorizontal: 14,
+    marginTop: 8,
+    borderRadius: 14,
+    padding: 8,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    gap: 6,
   },
-  input: {
-    flex: 1,
-    minHeight: 44,
-    maxHeight: 110,
-    borderRadius: 18,
+  draft: {
+    borderRadius: 10,
+    padding: 8,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  field: {
+    width: '100%',
+    minHeight: 42,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
     backgroundColor: '#F4F8FF',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    color: '#172646',
-    fontFamily: 'Manrope_500Medium',
-    fontSize: 14,
+    color: '#172A4E',
+    fontSize: 13,
   },
-  sendBtn: {
-    borderRadius: 20,
-    overflow: 'hidden',
+  composerInput: {
+    flex: 1,
+    minHeight: 40,
+    maxHeight: 100,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: '#F4F8FF',
+    color: '#172A4E',
+    fontSize: 13,
   },
-  sendBtnDisabled: {
-    opacity: 0.86,
+  send: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2E88FF' },
+  badge: { minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F86B8E' },
+  badgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
+  empty: {
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
   },
-  sendGradient: {
-    width: 38,
-    height: 38,
+  overlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end' },
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.42)' },
+  sheetWrap: { width: '100%' },
+  sheet: {
+    margin: 14,
+    borderRadius: 14,
+    padding: 12,
+    backgroundColor: 'rgba(8,20,48,0.96)',
+    borderWidth: 1,
+    borderColor: 'rgba(157,224,255,0.4)',
+    gap: 8,
+  },
+  profilePhotoRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  profilePhotoPreview: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#163A76' },
+  profilePhotoPreviewFallback: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(114,214,255,0.28)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  guardText: {
-    color: 'rgba(255,255,255,0.78)',
-    textAlign: 'center',
-    fontFamily: 'Manrope_500Medium',
-    fontSize: 11,
-  },
+  profilePhotoActions: { gap: 8 },
 });
+
+export default App;
+
