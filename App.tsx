@@ -582,8 +582,7 @@ function App() {
     if (!perm.granted) return;
     const r = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
+      allowsEditing: false,
       quality: 0.9,
     });
     if (r.canceled || !r.assets.length) return;
