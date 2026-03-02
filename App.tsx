@@ -20,7 +20,6 @@ import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import * as AuthSession from 'expo-auth-session';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import Constants from 'expo-constants';
@@ -448,7 +447,6 @@ function App() {
     androidClientId: g.androidClientId,
     iosClientId: g.iosClientId,
     webClientId: g.webClientId,
-    redirectUri: AuthSession.makeRedirectUri({ scheme: 'ourhangout' }),
     scopes: ['openid', 'profile', 'email'],
   });
 
