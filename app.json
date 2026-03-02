@@ -17,6 +17,7 @@
     },
     "android": {
       "softwareKeyboardLayoutMode": "resize",
+      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -35,9 +36,12 @@
     ],
     "extra": {
       "googleAuth": {
-        "androidClientId": "",
+        "androidClientId": "599659668409-311tkiv1ikkk55apu33h9j9pfk2rkvof.apps.googleusercontent.com",
         "iosClientId": "",
-        "webClientId": ""
+        "webClientId": "599659668409-jo6tdh99iht1tle9mf089k8ba3en08ou.apps.googleusercontent.com"
+      },
+      "backend": {
+        "baseUrl": "http://wowjini0228.synology.me:7083"
       }
     }
   }

@@ -76,6 +76,53 @@ type ProfilePhotoCrop = {
   offsetY: number;
 };
 type TouchPoint = { pageX: number; pageY: number };
+type BackendAuthUser = {
+  id?: string;
+  name?: string;
+  email?: string;
+  avatarUri?: string;
+};
+type BackendAuthData = {
+  accessToken?: string;
+  refreshToken?: string;
+  expiresInSec?: number;
+  user?: BackendAuthUser;
+};
+type BackendProfile = {
+  id?: string;
+  name?: string;
+  status?: string;
+  email?: string;
+  avatarUri?: string;
+};
+type BackendFriend = {
+  id?: string;
+  name?: string;
+  status?: string;
+  trusted?: boolean;
+};
+type BackendRoom = {
+  id?: string;
+  title?: string;
+  members?: string[];
+  isGroup?: boolean;
+  favorite?: boolean;
+  muted?: boolean;
+  unread?: number;
+  preview?: string;
+  updatedAt?: string | number;
+};
+type BackendEnvelope<T> = {
+  ok?: boolean;
+  success?: boolean;
+  data?: T;
+  error?: { message?: string; code?: string };
+  message?: string;
+};
+type AppExtra = {
+  googleAuth?: { androidClientId?: string; iosClientId?: string; webClientId?: string };
+  backend?: { baseUrl?: string };
+};
 
 const MY_ID = 'me';
 const URL_REGEX = /https?:\/\/\S+/gi;
@@ -123,7 +170,13 @@ const TEXT = {
     loginBody: 'Use Google sign-in, then set your profile.',
     google: 'Continue with Google',
     loginSkip: 'Continue without sign-in',
-    loginHint: 'Set app.json extra.googleAuth to enable Google login.',
+    loginHintMissing: 'Set app.json extra.googleAuth to enable Google login.',
+    loginHintReady: 'Press Google sign-in to continue.',
+    loginServerChecking: 'Checking backend connection...',
+    loginServerReady: 'Backend connected.',
+    loginServerError: 'Backend connection failed.',
+    loginBackendAuthFailed: 'Backend Google login failed.',
+    loginBackendSyncFailed: 'Logged in, but initial backend sync failed.',
     loginFailed: 'Google sign-in failed.',
     setup1: 'Set your display name',
     setup2: 'Core flow: friends -> room list -> chat',
@@ -209,7 +262,13 @@ const TEXT = {
     loginBody: '구글 로그인 후 프로필을 설정해요.',
     google: '구글로 계속하기',
     loginSkip: '로그인 없이 계속',
-    loginHint: 'Google 로그인은 app.json extra.googleAuth 설정이 필요해요.',
+    loginHintMissing: 'Google 로그인은 app.json extra.googleAuth 설정이 필요해요.',
+    loginHintReady: '구글로 계속하기를 눌러 시작해요.',
+    loginServerChecking: '백엔드 연결을 확인 중이에요...',
+    loginServerReady: '백엔드에 연결됐어요.',
+    loginServerError: '백엔드 연결에 실패했어요.',
+    loginBackendAuthFailed: '백엔드 Google 로그인에 실패했어요.',
+    loginBackendSyncFailed: '로그인은 되었지만 초기 데이터 동기화에 실패했어요.',
     loginFailed: 'Google 로그인에 실패했어요.',
     setup1: '표시 이름을 설정해요',
     setup2: '핵심 흐름: 친구 -> 대화방 -> 채팅',
@@ -358,14 +417,30 @@ function App() {
   const isKo = locale === 'ko';
   const insets = useSafeAreaInsets();
 
-  const g =
-    ((Constants.expoConfig?.extra as {
-      googleAuth?: { androidClientId?: string; iosClientId?: string; webClientId?: string };
-    } | undefined)?.googleAuth ?? {});
+  const extra = useMemo(() => {
+    const constantsAny = Constants as unknown as {
+      expoConfig?: { extra?: AppExtra };
+      manifest2?: { extra?: AppExtra };
+      manifest?: { extra?: AppExtra };
+    };
+    return (
+      constantsAny.expoConfig?.extra ??
+      constantsAny.manifest2?.extra ??
+      constantsAny.manifest?.extra ??
+      {}
+    ) as AppExtra;
+  }, []);
+  const g = {
+    androidClientId: (extra.googleAuth?.androidClientId || '').trim(),
+    iosClientId: (extra.googleAuth?.iosClientId || '').trim(),
+    webClientId: (extra.googleAuth?.webClientId || '').trim(),
+  };
+  const backendBaseUrl = (extra.backend?.baseUrl?.trim() || 'http://wowjini0228.synology.me:7083')
+    .replace(/\/+$/, '');
 
   const hasGoogle = !!Platform.select({
-    android: g.androidClientId,
-    ios: g.iosClientId,
+    android: g.androidClientId || g.webClientId,
+    ios: g.iosClientId || g.webClientId,
     default: g.webClientId,
   });
 
@@ -384,6 +459,11 @@ function App() {
   const [statusDraft, setStatusDraft] = useState('');
   const [profilePhotoDraft, setProfilePhotoDraft] = useState('');
   const [loginErr, setLoginErr] = useState('');
+  const [backendState, setBackendState] = useState<'checking' | 'ready' | 'error'>('checking');
+  const [backendStateMsg, setBackendStateMsg] = useState('');
+  const [accessToken, setAccessToken] = useState('');
+  const [refreshToken, setRefreshToken] = useState('');
+  const [currentUserId, setCurrentUserId] = useState(MY_ID);
 
   const [friends, setFriends] = useState<Friend[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -490,36 +570,184 @@ function App() {
     return () => clearTimeout(t);
   }, [activeRoomId, activeMsgs.length]);
 
+  const unwrapEnvelope = <T,>(raw: unknown): T => {
+    if (!raw || typeof raw !== 'object') return {} as T;
+    const body = raw as BackendEnvelope<T>;
+    if (body.ok === false || body.success === false) {
+      throw new Error(body.error?.message || body.message || 'Request failed');
+    }
+    if (body.data !== undefined) return body.data;
+    return raw as T;
+  };
+
+  const backendRequest = async <T,>(
+    path: string,
+    init?: RequestInit,
+    token?: string
+  ): Promise<T> => {
+    const headers: Record<string, string> = {
+      ...(init?.headers as Record<string, string> | undefined),
+    };
+    if (!headers['Content-Type'] && init?.body) headers['Content-Type'] = 'application/json';
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${backendBaseUrl}${path}`, { ...(init || {}), headers });
+    const txt = await res.text();
+    let json: unknown = null;
+    if (txt) {
+      try {
+        json = JSON.parse(txt);
+      } catch {
+        json = {};
+      }
+    }
+    if (!res.ok) {
+      const body = (json || {}) as BackendEnvelope<unknown>;
+      throw new Error(body.error?.message || body.message || `HTTP ${res.status}`);
+    }
+    return unwrapEnvelope<T>(json || {});
+  };
+
+  const parseTimestamp = (value: string | number | undefined) => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const ms = value ? Date.parse(String(value)) : NaN;
+    return Number.isFinite(ms) ? ms : Date.now();
+  };
+
+  const syncInitialFromBackend = async (token: string, fallbackUser?: BackendAuthUser) => {
+    const me = await backendRequest<BackendProfile>('/v1/me', { method: 'GET' }, token).catch(
+      () => null
+    );
+    const nextUserId = (me?.id || fallbackUser?.id || MY_ID).trim();
+    setCurrentUserId(nextUserId || MY_ID);
+    setProfile((prev) => ({
+      ...prev,
+      name: (me?.name || fallbackUser?.name || prev.name || '').trim(),
+      status: (me?.status || prev.status || '').trim(),
+      email: (me?.email || fallbackUser?.email || prev.email || '').trim(),
+      avatarUri: (me?.avatarUri || fallbackUser?.avatarUri || prev.avatarUri || '').trim(),
+    }));
+    setNameDraft((me?.name || fallbackUser?.name || '').trim());
+
+    const backFriends = await backendRequest<BackendFriend[]>(
+      '/v1/friends',
+      { method: 'GET' },
+      token
+    ).catch(() => []);
+    if (Array.isArray(backFriends)) {
+      setFriends(
+        backFriends
+          .filter((f) => !!f?.id && !!f?.name)
+          .map((f) => ({
+            id: String(f.id),
+            name: String(f.name),
+            status: String(f.status || ''),
+            trusted: !!f.trusted,
+          }))
+      );
+    }
+
+    const backRooms = await backendRequest<BackendRoom[]>(
+      '/v1/rooms',
+      { method: 'GET' },
+      token
+    ).catch(() => []);
+    if (Array.isArray(backRooms)) {
+      const mapped = backRooms
+        .filter((r) => !!r?.id)
+        .map((r) => ({
+          id: String(r.id),
+          title: String(r.title || s.directRoomFallback),
+          members:
+            Array.isArray(r.members) && r.members.length
+              ? r.members.map((m) => String(m))
+              : [nextUserId || MY_ID],
+          isGroup: !!r.isGroup,
+          favorite: !!r.favorite,
+          muted: !!r.muted,
+          unread: Math.max(0, Number(r.unread || 0)),
+          preview: String(r.preview || ''),
+          updatedAt: parseTimestamp(r.updatedAt),
+        }));
+      setRooms(mapped);
+      setMessages((prev) => {
+        const next = { ...prev };
+        mapped.forEach((room) => {
+          if (!next[room.id]) next[room.id] = [];
+        });
+        return next;
+      });
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      if (!googleRes || googleRes.type !== 'success') return;
-      const token = googleRes.authentication?.accessToken;
-      if (!token) return;
+      setBackendState('checking');
+      setBackendStateMsg('');
       try {
-        const me = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!me.ok) throw new Error('failed');
-        const info = (await me.json()) as { name?: string; email?: string; picture?: string };
+        await backendRequest('/health', { method: 'GET' });
         if (cancelled) return;
-        setProfile((p) => ({
-          ...p,
-          name: info.name?.trim() || p.name,
-          email: info.email?.trim() || p.email,
-          avatarUri: p.avatarUri || info.picture?.trim() || '',
-        }));
-        setNameDraft(info.name?.trim() || '');
-        setStage('setup_name');
-      } catch {
-        if (!cancelled) setLoginErr(s.loginFailed);
+        setBackendState('ready');
+        setBackendStateMsg(s.loginServerReady);
+      } catch (err) {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : '';
+        setBackendState('error');
+        setBackendStateMsg(msg ? `${s.loginServerError} (${msg})` : s.loginServerError);
       }
     };
     run();
     return () => {
       cancelled = true;
     };
-  }, [googleRes, s.loginFailed]);
+  }, [backendBaseUrl, s.loginServerError, s.loginServerReady]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (!googleRes || googleRes.type !== 'success') return;
+      const gAccessToken = googleRes.authentication?.accessToken || '';
+      const gParams = (googleRes.params as Record<string, string | undefined> | undefined) ?? {};
+      const gIdToken =
+        (googleRes.authentication as { idToken?: string } | undefined)?.idToken ||
+        gParams.id_token ||
+        '';
+      if (!gAccessToken && !gIdToken) {
+        if (!cancelled) setLoginErr(s.loginFailed);
+        return;
+      }
+      try {
+        const authData = await backendRequest<BackendAuthData>('/v1/auth/google', {
+          method: 'POST',
+          body: JSON.stringify({
+            idToken: gIdToken,
+            accessToken: gAccessToken,
+            device: {
+              platform: Platform.OS,
+              appVersion: Constants.expoConfig?.version || '1.0.0',
+              deviceId: String(Constants.deviceName || Constants.sessionId || 'unknown'),
+            },
+          }),
+        });
+        if (cancelled) return;
+        const nextAccessToken = (authData.accessToken || '').trim();
+        if (!nextAccessToken) throw new Error('missing access token');
+        setAccessToken(nextAccessToken);
+        setRefreshToken((authData.refreshToken || '').trim());
+        await syncInitialFromBackend(nextAccessToken, authData.user);
+        if (cancelled) return;
+        setStage('setup_name');
+      } catch (err) {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : '';
+        setLoginErr(msg ? `${s.loginBackendAuthFailed} (${msg})` : s.loginBackendAuthFailed);
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [googleRes, s.loginBackendAuthFailed, s.loginFailed]);
 
   const setRoomMsgs = (rid: string, updater: (prev: Message[]) => Message[]) =>
     setMessages((p) => ({ ...p, [rid]: updater(p[rid] ?? []) }));
@@ -530,9 +758,6 @@ function App() {
     setProfileCrop((prev) => {
       const next = updater(prev);
       profileCropRef.current = next;
-      if (next) {
-      } else {
-      }
       return next;
     });
   };
@@ -891,7 +1116,11 @@ function App() {
   const startGoogle = async () => {
     setLoginErr('');
     if (!hasGoogle || !googleReq) {
-      setLoginErr(s.loginHint);
+      setLoginErr(s.loginHintMissing);
+      return;
+    }
+    if (backendState !== 'ready') {
+      setLoginErr(backendStateMsg || s.loginServerError);
       return;
     }
     const res = await googlePrompt();
@@ -1290,13 +1519,26 @@ function App() {
             <Text style={styles.brand}>{s.app}</Text>
             <Text style={styles.h1}>{s.login}</Text>
             <Text style={styles.sub}>{s.loginBody}</Text>
-            <Pressable style={styles.btn} onPress={startGoogle}>
+            <Pressable
+              style={[styles.btn, (backendState !== 'ready' || !hasGoogle) && styles.off]}
+              onPress={startGoogle}
+              disabled={backendState !== 'ready' || !hasGoogle}
+            >
               <Text style={styles.btnText}>{s.google}</Text>
             </Pressable>
             <Pressable style={styles.linkBtn} onPress={() => setStage('setup_name')}>
               <Text style={styles.link}>{s.loginSkip}</Text>
             </Pressable>
-            <Text style={styles.sub}>{loginErr || s.loginHint}</Text>
+            <Text style={styles.sub}>
+              {backendState === 'checking'
+                ? s.loginServerChecking
+                : backendState === 'ready'
+                  ? s.loginServerReady
+                  : backendStateMsg || s.loginServerError}
+            </Text>
+            <Text style={styles.sub}>
+              {loginErr || (hasGoogle ? s.loginHintReady : s.loginHintMissing)}
+            </Text>
           </View>
         </LinearGradient>
       </SafeAreaView>
