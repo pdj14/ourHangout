@@ -1,8 +1,12 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Image,
   KeyboardAvoidingView,
+  LayoutChangeEvent,
+  Linking,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -15,6 +19,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as AuthSession from 'expo-auth-session';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
@@ -55,9 +60,61 @@ type Room = {
 };
 type Profile = { name: string; status: string; email: string; avatarUri: string };
 type DraftMedia = { kind: 'image' | 'video'; uri: string };
+type CropTarget = 'profile' | 'chat';
+type ProfilePhotoCrop = {
+  uri: string;
+  imageWidth: number;
+  imageHeight: number;
+  minScale: number;
+  maxScale: number;
+  scale: number;
+  renderWidth: number;
+  renderHeight: number;
+  overflowX: number;
+  overflowY: number;
+  offsetX: number;
+  offsetY: number;
+};
+type TouchPoint = { pageX: number; pageY: number };
 
 const MY_ID = 'me';
-const LINK = /https?:\/\/\S+/gi;
+const URL_REGEX = /https?:\/\/\S+/gi;
+const PROFILE_CROP_BOX = 260;
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const finiteOr = (value: number | null | undefined, fallback = 0) =>
+  Number.isFinite(value) ? (value as number) : fallback;
+const touchDistance = (touches: TouchPoint[]) => {
+  if (touches.length < 2) return 0;
+  const dx = touches[0].pageX - touches[1].pageX;
+  const dy = touches[0].pageY - touches[1].pageY;
+  return Math.hypot(dx, dy);
+};
+const touchCenter = (touches: TouchPoint[]) => ({
+  x: (touches[0].pageX + touches[1].pageX) / 2,
+  y: (touches[0].pageY + touches[1].pageY) / 2,
+});
+const readLayoutSize = (evt: LayoutChangeEvent) => ({
+  x: finiteOr(evt.nativeEvent.layout.x, 0),
+  y: finiteOr(evt.nativeEvent.layout.y, 0),
+  width: Math.max(1, finiteOr(evt.nativeEvent.layout.width, PROFILE_CROP_BOX)),
+  height: Math.max(1, finiteOr(evt.nativeEvent.layout.height, PROFILE_CROP_BOX)),
+});
+const normalizeTouches = (value: unknown): TouchPoint[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => ({
+      pageX: finiteOr((item as { pageX?: number }).pageX, Number.NaN),
+      pageY: finiteOr((item as { pageY?: number }).pageY, Number.NaN),
+    }))
+    .filter((touch) => Number.isFinite(touch.pageX) && Number.isFinite(touch.pageY));
+};
+const cropGeometry = (imageWidth: number, imageHeight: number, scale: number) => {
+  const renderWidth = imageWidth * scale;
+  const renderHeight = imageHeight * scale;
+  const overflowX = Math.max(0, renderWidth - PROFILE_CROP_BOX);
+  const overflowY = Math.max(0, renderHeight - PROFILE_CROP_BOX);
+  return { renderWidth, renderHeight, overflowX, overflowY };
+};
 
 const TEXT = {
   en: {
@@ -99,6 +156,14 @@ const TEXT = {
     profilePhoto: 'Profile photo',
     photoPick: 'Choose photo',
     photoRemove: 'Remove photo',
+    photoCropHint: 'After selecting, adjust the visible area.',
+    photoCropTitle: 'Set visible area',
+    photoCropGuide: 'Drag the photo, then use zoom controls to set the visible area.',
+    photoZoomLabel: 'Zoom',
+    photoZoomOut: 'Zoom out',
+    photoZoomIn: 'Zoom in',
+    photoCenter: 'Center',
+    photoApply: 'Apply',
     statsFriends: 'Friends',
     statsRooms: 'Rooms',
     statsFavs: 'Favorites',
@@ -111,7 +176,14 @@ const TEXT = {
     deleteRoom: 'Delete room',
     report: 'Report',
     reported: 'Report added to guardian queue.',
-    safe: 'Browser links are blocked',
+    safe: 'Links open in an external browser app.',
+    linkUnavailableTitle: 'Cannot open link',
+    linkUnavailableBody: 'No browser app is available on this device.',
+    linkFailedTitle: 'Open failed',
+    linkFailedBody: 'Could not open the link.',
+    mediaPermissionTitle: 'Permission required',
+    mediaPermissionBody: 'Allow photo and video access to attach files.',
+    mediaPickFailed: 'Failed to load selected media.',
     msgInput: 'Write a message',
     mediaHint: 'Press send to share.',
     imageSelected: 'Image selected',
@@ -170,6 +242,14 @@ const TEXT = {
     profilePhoto: '프로필 사진',
     photoPick: '사진 선택',
     photoRemove: '사진 제거',
+    photoCropHint: '사진 선택 후 보일 영역을 설정해요.',
+    photoCropTitle: '보일 영역 설정',
+    photoCropGuide: '사진을 드래그하고 확대/축소로 보일 영역을 맞춰요.',
+    photoZoomLabel: '줌',
+    photoZoomOut: '축소',
+    photoZoomIn: '확대',
+    photoCenter: '가운데',
+    photoApply: '적용',
     statsFriends: '친구 수',
     statsRooms: '방 수',
     statsFavs: '즐겨찾기',
@@ -182,7 +262,14 @@ const TEXT = {
     deleteRoom: '방 삭제',
     report: '신고',
     reported: '보호자 검토 대기열에 신고가 접수됐어요.',
-    safe: '브라우저 링크는 차단돼요',
+    safe: '링크를 누르면 외부 브라우저 앱에서 열려요.',
+    linkUnavailableTitle: '링크를 열 수 없어요',
+    linkUnavailableBody: '이 기기에 사용할 수 있는 브라우저 앱이 없어요.',
+    linkFailedTitle: '열기 실패',
+    linkFailedBody: '링크를 열지 못했어요.',
+    mediaPermissionTitle: '권한이 필요해요',
+    mediaPermissionBody: '사진과 동영상을 첨부하려면 접근 권한을 허용해 주세요.',
+    mediaPickFailed: '선택한 미디어를 불러오지 못했어요.',
     msgInput: '메시지 입력',
     mediaHint: '전송 버튼을 눌러 공유해요.',
     imageSelected: '이미지 선택됨',
@@ -213,13 +300,56 @@ const localeKey = (): Locale =>
 const uid = () => `${Date.now()}-${Math.round(Math.random() * 99999)}`;
 const tLabel = (ms: number) =>
   new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-const safeText = (value: string, blocked: string) => value.replace(LINK, `[${blocked}]`);
+const splitLinkParts = (value: string): Array<{ text: string; url?: string }> => {
+  const out: Array<{ text: string; url?: string }> = [];
+  let cursor = 0;
+  const regex = new RegExp(URL_REGEX.source, 'gi');
+  let match: RegExpExecArray | null = null;
+  while ((match = regex.exec(value)) !== null) {
+    if (match.index > cursor) {
+      out.push({ text: value.slice(cursor, match.index) });
+    }
+    out.push({ text: match[0], url: match[0] });
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < value.length) out.push({ text: value.slice(cursor) });
+  if (!out.length) out.push({ text: value });
+  return out;
+};
 
 const randomReply = (isKo: boolean) => {
   const arr = isKo
     ? ['Sounds good!', 'Okay, I will reply soon.', 'Great idea.']
     : ['Looks good!', 'Got it!', 'Great idea.'];
   return arr[Math.floor(Math.random() * arr.length)] ?? arr[0];
+};
+
+const FOREST = {
+  gradientTop: '#183127',
+  gradientMid: '#31563A',
+  gradientBottom: '#7FAA72',
+  deep: '#102218',
+  card: 'rgba(244,251,238,0.14)',
+  cardStrong: 'rgba(244,251,238,0.2)',
+  border: 'rgba(191,219,178,0.42)',
+  text: '#F3F8EA',
+  textSoft: 'rgba(227,242,218,0.88)',
+  textMuted: 'rgba(208,229,198,0.78)',
+  link: '#E8F7DC',
+  button: '#6E9A5B',
+  buttonBorder: '#A6C694',
+  buttonSoft: 'rgba(162,208,146,0.3)',
+  inputBg: '#F5F8EE',
+  inputText: '#1D3527',
+  placeholder: '#70856B',
+  mineBubble: '#557F49',
+  otherBubble: '#F2F7EC',
+  sheetBg: 'rgba(16,39,26,0.98)',
+  sheetBorder: 'rgba(178,213,163,0.45)',
+  overlay: 'rgba(3,13,8,0.52)',
+  iconDark: 'rgba(20,53,35,0.48)',
+  iconLight: 'rgba(226,244,214,0.26)',
+  badge: '#DF8058',
 };
 
 function App() {
@@ -265,6 +395,21 @@ function App() {
   const [friendQuery, setFriendQuery] = useState('');
   const [input, setInput] = useState('');
   const [draftMedia, setDraftMedia] = useState<DraftMedia | null>(null);
+  const [cropTarget, setCropTarget] = useState<CropTarget>('profile');
+  const [profileCrop, setProfileCrop] = useState<ProfilePhotoCrop | null>(null);
+  const [isApplyingPhoto, setIsApplyingPhoto] = useState(false);
+  const profileCropRef = useRef<ProfilePhotoCrop | null>(null);
+  const cropPanPointerRef = useRef({ x: 0, y: 0 });
+  const cropGestureModeRef = useRef<'none' | 'pan' | 'pinch'>('none');
+  const cropViewportLayoutRef = useRef({ width: PROFILE_CROP_BOX, height: PROFILE_CROP_BOX });
+  const cropPinchStartRef = useRef({
+    distance: 0,
+    scale: 1,
+    centerPageX: 0,
+    centerPageY: 0,
+    centerImageX: 0,
+    centerImageY: 0,
+  });
 
   const [showFriendModal, setShowFriendModal] = useState(false);
   const [friendNameDraft, setFriendNameDraft] = useState('');
@@ -276,6 +421,7 @@ function App() {
   const [roomMenuId, setRoomMenuId] = useState<string | null>(null);
 
   const scrollRef = useRef<ScrollView>(null);
+  const cropOpenedAtRef = useRef(0);
 
   const getFriend = (fid: string) => friends.find((f) => f.id === fid);
   const roomTitle = (room: Room) =>
@@ -377,6 +523,57 @@ function App() {
 
   const setRoomMsgs = (rid: string, updater: (prev: Message[]) => Message[]) =>
     setMessages((p) => ({ ...p, [rid]: updater(p[rid] ?? []) }));
+
+  const setProfileCropSynced = (
+    updater: (prev: ProfilePhotoCrop | null) => ProfilePhotoCrop | null
+  ) => {
+    setProfileCrop((prev) => {
+      const next = updater(prev);
+      profileCropRef.current = next;
+      if (next) {
+      } else {
+      }
+      return next;
+    });
+  };
+
+  const closeCropModal = () => {
+    cropOpenedAtRef.current = 0;
+    cropGestureModeRef.current = 'none';
+    setCropTarget('profile');
+    setProfileCropSynced(() => null);
+  };
+
+  const normalizeImageForCrop = async (uri: string) => {
+    try {
+      const normalized = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ rotate: 0 }],
+        {
+          compress: 1,
+          format: ImageManipulator.SaveFormat.JPEG,
+        }
+      );
+      return normalized.uri || uri;
+    } catch {
+      return uri;
+    }
+  };
+
+  const beginPinch = (crop: ProfilePhotoCrop, touches: TouchPoint[]) => {
+    const distance = touchDistance(touches);
+    if (distance <= 0) return;
+    const center = touchCenter(touches);
+    cropGestureModeRef.current = 'pinch';
+    cropPinchStartRef.current = {
+      distance,
+      scale: crop.scale,
+      centerPageX: center.x,
+      centerPageY: center.y,
+      centerImageX: (-crop.offsetX + PROFILE_CROP_BOX / 2) / crop.scale,
+      centerImageY: (-crop.offsetY + PROFILE_CROP_BOX / 2) / crop.scale,
+    };
+  };
 
   const touchRoom = (rid: string, preview: string, incoming = false) =>
     setRooms((p) =>
@@ -495,7 +692,7 @@ function App() {
 
   const send = () => {
     if (!activeRoom) return;
-    const text = safeText(input.trim(), isKo ? '留곹겕李⑤떒' : 'blocked-link');
+    const text = input.trim();
     if (!text && !draftMedia) return;
 
     const out: Message[] = [];
@@ -566,27 +763,129 @@ function App() {
   const pickMedia = async (kind: 'image' | 'video') => {
     if (!activeRoomId) return;
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) return;
-    const r = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: [kind === 'image' ? 'images' : 'videos'],
-      allowsEditing: false,
-      quality: 0.9,
-      videoMaxDuration: 120,
+    if (!perm.granted) {
+      Alert.alert(s.mediaPermissionTitle, s.mediaPermissionBody);
+      return;
+    }
+    try {
+      const r = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: [kind === 'image' ? 'images' : 'videos'],
+        allowsEditing: false,
+        legacy: Platform.OS === 'android',
+        quality: 0.9,
+        videoMaxDuration: 120,
+      });
+      if (r.canceled || !r.assets.length || !r.assets[0].uri) return;
+      if (r.assets[0].type === 'video' || kind === 'video') {
+        setDraftMedia({ kind: 'video', uri: r.assets[0].uri });
+        return;
+      }
+      await openImageCrop(r.assets[0].uri, 'chat');
+    } catch {
+      Alert.alert(s.mediaPickFailed);
+    }
+  };
+
+  const openImageCrop = async (uri: string, target: CropTarget) => {
+    const sourceUri = await normalizeImageForCrop(uri);
+    setCropTarget(target);
+    if (target === 'profile') setProfilePhotoDraft(sourceUri);
+    Image.getSize(
+      sourceUri,
+      (imageWidth, imageHeight) => {
+        const minScale = Math.max(PROFILE_CROP_BOX / imageWidth, PROFILE_CROP_BOX / imageHeight);
+        const maxScale = minScale * 4;
+        const { renderWidth, renderHeight, overflowX, overflowY } = cropGeometry(
+          imageWidth,
+          imageHeight,
+          minScale
+        );
+        cropOpenedAtRef.current = Date.now();
+        cropGestureModeRef.current = 'none';
+        const initialCrop: ProfilePhotoCrop = {
+          uri: sourceUri,
+          imageWidth,
+          imageHeight,
+          minScale,
+          maxScale,
+          scale: minScale,
+          renderWidth,
+          renderHeight,
+          overflowX,
+          overflowY,
+          offsetX: -overflowX / 2,
+          offsetY: -overflowY / 2,
+        };
+        cropViewportLayoutRef.current = { width: PROFILE_CROP_BOX, height: PROFILE_CROP_BOX };
+        profileCropRef.current = initialCrop;
+        setProfileCrop(initialCrop);
+      },
+      () => {}
+    );
+  };
+
+  const zoomProfileCrop = (zoomIn: boolean) => {
+    setProfileCropSynced((prev) => {
+      if (!prev) return prev;
+      const nextScale = clamp(
+        prev.scale * (zoomIn ? 1.2 : 1 / 1.2),
+        prev.minScale,
+        prev.maxScale
+      );
+      if (Math.abs(nextScale - prev.scale) < 0.0001) return prev;
+
+      const centerX = (-prev.offsetX + PROFILE_CROP_BOX / 2) / prev.scale;
+      const centerY = (-prev.offsetY + PROFILE_CROP_BOX / 2) / prev.scale;
+      const { renderWidth, renderHeight, overflowX, overflowY } = cropGeometry(
+        prev.imageWidth,
+        prev.imageHeight,
+        nextScale
+      );
+      const offsetX = clamp(PROFILE_CROP_BOX / 2 - centerX * nextScale, -overflowX, 0);
+      const offsetY = clamp(PROFILE_CROP_BOX / 2 - centerY * nextScale, -overflowY, 0);
+
+      return {
+        ...prev,
+        scale: nextScale,
+        renderWidth,
+        renderHeight,
+        overflowX,
+        overflowY,
+        offsetX,
+        offsetY,
+      };
     });
-    if (r.canceled || !r.assets.length) return;
-    setDraftMedia({ kind: r.assets[0].type === 'video' ? 'video' : 'image', uri: r.assets[0].uri });
+  };
+
+  const centerProfileCrop = () => {
+    setProfileCropSynced((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        offsetX: -prev.overflowX / 2,
+        offsetY: -prev.overflowY / 2,
+      };
+    });
   };
 
   const pickProfilePhoto = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) return;
-    const r = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: false,
-      quality: 0.9,
-    });
-    if (r.canceled || !r.assets.length) return;
-    setProfilePhotoDraft(r.assets[0].uri);
+    if (!perm.granted) {
+      Alert.alert(s.mediaPermissionTitle, s.mediaPermissionBody);
+      return;
+    }
+    try {
+      const r = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        legacy: Platform.OS === 'android',
+        quality: 0.9,
+      });
+      if (r.canceled || !r.assets.length || !r.assets[0].uri) return;
+      await openImageCrop(r.assets[0].uri, 'profile');
+    } catch {
+      Alert.alert(s.mediaPickFailed);
+    }
   };
 
   const startGoogle = async () => {
@@ -612,6 +911,339 @@ function App() {
     }));
     setShowProfileModal(false);
   };
+
+  const openExternalUrl = async (url: string) => {
+    try {
+      const canOpen = await Linking.canOpenURL(url);
+      if (!canOpen) {
+        Alert.alert(s.linkUnavailableTitle, s.linkUnavailableBody);
+        return;
+      }
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert(s.linkFailedTitle, s.linkFailedBody);
+    }
+  };
+
+  const renderMessageText = (value: string, mine: boolean) => {
+    const parts = splitLinkParts(value);
+    return (
+      <Text style={[styles.msg, mine && styles.msgMine]}>
+        {parts.map((part, idx) =>
+          part.url ? (
+            <Text
+              key={`${part.url}-${idx}`}
+              style={[styles.msgLink, mine && styles.msgLinkMine]}
+              onPress={() => openExternalUrl(part.url!)}
+            >
+              {part.text}
+            </Text>
+          ) : (
+            <Text key={`plain-${idx}`}>{part.text}</Text>
+          )
+        )}
+      </Text>
+    );
+  };
+
+  const applyProfilePhotoCrop = async () => {
+    const crop = profileCropRef.current;
+    if (!crop || isApplyingPhoto) return;
+    setIsApplyingPhoto(true);
+    try {
+      const viewport = cropViewportLayoutRef.current;
+      const renderWidth = Math.max(1, Math.round(crop.renderWidth));
+      const renderHeight = Math.max(1, Math.round(crop.renderHeight));
+      const resized = await ImageManipulator.manipulateAsync(
+        crop.uri,
+        [{ resize: { width: renderWidth, height: renderHeight } }],
+        { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
+      );
+
+      const viewportW = Math.max(1, Math.round(viewport.width));
+      const viewportH = Math.max(1, Math.round(viewport.height));
+      const side = Math.max(1, Math.min(viewportW, viewportH, renderWidth, renderHeight));
+      const maxOriginX = Math.max(0, renderWidth - side);
+      const maxOriginY = Math.max(0, renderHeight - side);
+      const originX = clamp(Math.round(-crop.offsetX), 0, maxOriginX);
+      const originY = clamp(Math.round(-crop.offsetY), 0, maxOriginY);
+      const out = await ImageManipulator.manipulateAsync(
+        resized.uri,
+        [
+          { crop: { originX, originY, width: side, height: side } },
+          { resize: { width: 640, height: 640 } },
+        ],
+        {
+          compress: 0.9,
+          format: ImageManipulator.SaveFormat.JPEG,
+        }
+      );
+      if (cropTarget === 'chat') {
+        setDraftMedia({ kind: 'image', uri: out.uri });
+      } else {
+        setProfilePhotoDraft(out.uri);
+      }
+      closeCropModal();
+    } finally {
+      setIsApplyingPhoto(false);
+    }
+  };
+
+  const cropPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => !!profileCropRef.current,
+        onStartShouldSetPanResponderCapture: () => !!profileCropRef.current,
+        onMoveShouldSetPanResponder: () => !!profileCropRef.current,
+        onMoveShouldSetPanResponderCapture: () => !!profileCropRef.current,
+        onPanResponderGrant: (evt, gesture) => {
+          const current = profileCropRef.current;
+          if (!current) return;
+          const touches = normalizeTouches(evt.nativeEvent.touches);
+          if (touches.length >= 2) {
+            beginPinch(current, touches);
+            return;
+          }
+          const changed = normalizeTouches(evt.nativeEvent.changedTouches);
+          const lead = touches[0] ?? changed[0];
+          cropGestureModeRef.current = 'pan';
+          cropPanPointerRef.current = {
+            x: lead ? lead.pageX : finiteOr(gesture.moveX, cropPanPointerRef.current.x),
+            y: lead ? lead.pageY : finiteOr(gesture.moveY, cropPanPointerRef.current.y),
+          };
+        },
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderMove: (evt, gesture) => {
+          const current = profileCropRef.current;
+          if (!current) return;
+
+          const touches = normalizeTouches(evt.nativeEvent.touches);
+          if (gesture.numberActiveTouches >= 2 && touches.length >= 2) {
+            if (cropGestureModeRef.current !== 'pinch') {
+              beginPinch(current, touches);
+              return;
+            }
+
+            const start = cropPinchStartRef.current;
+            if (start.distance <= 0) return;
+            const distance = touchDistance(touches);
+            if (distance <= 0) return;
+            const center = touchCenter(touches);
+            const nextScale = clamp(
+              start.scale * (distance / start.distance),
+              current.minScale,
+              current.maxScale
+            );
+            const { renderWidth, renderHeight, overflowX, overflowY } = cropGeometry(
+              current.imageWidth,
+              current.imageHeight,
+              nextScale
+            );
+            const centerShiftX = center.x - start.centerPageX;
+            const centerShiftY = center.y - start.centerPageY;
+            const offsetX = clamp(
+              PROFILE_CROP_BOX / 2 - start.centerImageX * nextScale + centerShiftX,
+              -overflowX,
+              0
+            );
+            const offsetY = clamp(
+              PROFILE_CROP_BOX / 2 - start.centerImageY * nextScale + centerShiftY,
+              -overflowY,
+              0
+            );
+
+            setProfileCropSynced((prev) => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                scale: nextScale,
+                renderWidth,
+                renderHeight,
+                overflowX,
+                overflowY,
+                offsetX,
+                offsetY,
+              };
+            });
+            return;
+          }
+
+          const changed = normalizeTouches(evt.nativeEvent.changedTouches);
+          const lead = touches[0] ?? changed[0];
+          if (!lead) return;
+          if (cropGestureModeRef.current !== 'pan') {
+            cropGestureModeRef.current = 'pan';
+            cropPanPointerRef.current = {
+              x: lead.pageX,
+              y: lead.pageY,
+            };
+            return;
+          }
+
+          const moveX = lead.pageX;
+          const moveY = lead.pageY;
+          const dX = moveX - cropPanPointerRef.current.x;
+          const dY = moveY - cropPanPointerRef.current.y;
+          cropPanPointerRef.current = { x: moveX, y: moveY };
+          if (Math.abs(dX) < 0.01 && Math.abs(dY) < 0.01) return;
+
+          setProfileCropSynced((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              offsetX: clamp(prev.offsetX + dX, -prev.overflowX, 0),
+              offsetY: clamp(prev.offsetY + dY, -prev.overflowY, 0),
+            };
+          });
+        },
+        onPanResponderRelease: () => {
+          cropGestureModeRef.current = 'none';
+        },
+        onPanResponderTerminate: () => {
+          cropGestureModeRef.current = 'none';
+        },
+      }),
+    []
+  );
+
+  const renderProfilePhotoEditor = () => (
+    <>
+      <Text style={styles.sub}>{s.profilePhoto}</Text>
+      <View style={styles.profilePhotoRow}>
+        {profilePhotoDraft ? (
+          <Image source={{ uri: profilePhotoDraft }} style={styles.profilePhotoPreview} />
+        ) : (
+          <View style={styles.profilePhotoPreviewFallback}>
+            <Ionicons name="person" size={24} color={FOREST.text} />
+          </View>
+        )}
+        <View style={styles.profilePhotoActions}>
+          <Pressable style={styles.smallBtn} onPress={pickProfilePhoto}>
+            <Text style={styles.smallBtnText}>{s.photoPick}</Text>
+          </Pressable>
+          {profilePhotoDraft ? (
+            <Pressable style={styles.smallBtn} onPress={() => setProfilePhotoDraft('')}>
+              <Text style={styles.smallBtnText}>{s.photoRemove}</Text>
+            </Pressable>
+          ) : null}
+          <Text style={styles.sub}>{s.photoCropHint}</Text>
+        </View>
+      </View>
+    </>
+  );
+
+  const renderCropModal = () => (
+    <Modal
+      visible={!!profileCrop}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+    navigationBarTranslucent
+    onRequestClose={closeCropModal}
+  >
+      <View style={styles.overlay}>
+        <Pressable
+          style={styles.backdrop}
+          onPress={() => {
+            if (isApplyingPhoto) return;
+            if (Date.now() - cropOpenedAtRef.current < 400) return;
+            closeCropModal();
+          }}
+        />
+        <View style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}>
+          <View style={styles.sheet}>
+            <Text style={styles.h1}>{s.photoCropTitle}</Text>
+            <Text style={styles.sub}>{s.photoCropGuide}</Text>
+            {profileCrop ? (
+              <View
+                style={styles.cropViewport}
+                {...cropPanResponder.panHandlers}
+                onLayout={(evt) => {
+                  const layout = readLayoutSize(evt);
+                  cropViewportLayoutRef.current = { width: layout.width, height: layout.height };
+                }}
+              >
+                <Image
+                  source={{ uri: profileCrop.uri }}
+                  style={[
+                    styles.cropImage,
+                    {
+                      width: profileCrop.renderWidth,
+                      height: profileCrop.renderHeight,
+                      left: profileCrop.offsetX,
+                      top: profileCrop.offsetY,
+                    },
+                  ]}
+                />
+                <View pointerEvents="none" style={styles.cropFrame} />
+                <View pointerEvents="none" style={[styles.cropCorner, styles.cropCornerTL]} />
+                <View pointerEvents="none" style={[styles.cropCorner, styles.cropCornerTR]} />
+                <View pointerEvents="none" style={[styles.cropCorner, styles.cropCornerBL]} />
+                <View pointerEvents="none" style={[styles.cropCorner, styles.cropCornerBR]} />
+                <View pointerEvents="none" style={styles.cropCenterIcon}>
+                  <Ionicons name="scan-outline" size={22} color="rgba(243,248,234,0.82)" />
+                </View>
+              </View>
+            ) : null}
+            {profileCrop ? (
+              <Text style={styles.zoomText}>
+                {s.photoZoomLabel} {Math.round((profileCrop.scale / profileCrop.minScale) * 100)}%
+              </Text>
+            ) : null}
+            <View style={styles.row}>
+              <Pressable
+                style={[
+                  styles.smallBtn,
+                  (!profileCrop || profileCrop.scale <= profileCrop.minScale + 0.0001 || isApplyingPhoto) &&
+                    styles.off,
+                ]}
+                disabled={!profileCrop || profileCrop.scale <= profileCrop.minScale + 0.0001 || isApplyingPhoto}
+                onPress={() => zoomProfileCrop(false)}
+              >
+                <Text style={styles.smallBtnText}>{s.photoZoomOut}</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.smallBtn,
+                  (!profileCrop || profileCrop.scale >= profileCrop.maxScale - 0.0001 || isApplyingPhoto) &&
+                    styles.off,
+                ]}
+                disabled={!profileCrop || profileCrop.scale >= profileCrop.maxScale - 0.0001 || isApplyingPhoto}
+                onPress={() => zoomProfileCrop(true)}
+              >
+                <Text style={styles.smallBtnText}>{s.photoZoomIn}</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.smallBtn, isApplyingPhoto && styles.off]}
+                disabled={isApplyingPhoto}
+                onPress={centerProfileCrop}
+              >
+                <Text style={styles.smallBtnText}>{s.photoCenter}</Text>
+              </Pressable>
+            </View>
+            <View style={styles.row}>
+              <Pressable
+                style={[styles.smallBtn, isApplyingPhoto && styles.off]}
+                disabled={isApplyingPhoto}
+                onPress={() => {
+                  closeCropModal();
+                }}
+              >
+                <Text style={styles.smallBtnText}>{s.cancel}</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.smallBtn, isApplyingPhoto && styles.off]}
+                disabled={isApplyingPhoto}
+                onPress={applyProfilePhotoCrop}
+              >
+                <Text style={styles.smallBtnText}>{s.photoApply}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
 
   const toggleFavorite = (rid: string) =>
     setRooms((p) => p.map((r) => (r.id === rid ? { ...r, favorite: !r.favorite } : r)));
@@ -640,12 +1272,20 @@ function App() {
 
   const kbBehavior = Platform.OS === 'ios' ? 'padding' : 'height';
   const sheetBottomInset = Math.max(insets.bottom, 12);
+  const ForestBackdrop = () => (
+    <>
+      <View pointerEvents="none" style={styles.bgOrbTop} />
+      <View pointerEvents="none" style={styles.bgOrbMid} />
+      <View pointerEvents="none" style={styles.bgOrbBottom} />
+    </>
+  );
 
   if (stage === 'login') {
     return (
       <SafeAreaView style={styles.safe}>
         <StatusBar style="light" />
-        <LinearGradient colors={['#0A132F', '#1A3A7A']} style={styles.fill}>
+        <LinearGradient colors={[FOREST.gradientTop, FOREST.gradientMid, FOREST.gradientBottom]} style={styles.fill}>
+          <ForestBackdrop />
           <View style={styles.centerCard}>
             <Text style={styles.brand}>{s.app}</Text>
             <Text style={styles.h1}>{s.login}</Text>
@@ -665,10 +1305,12 @@ function App() {
 
   if (stage === 'setup_name' || stage === 'setup_intro') {
     const isName = stage === 'setup_name';
+    const setupBlocked = !nameDraft.trim();
     return (
       <SafeAreaView style={styles.safe}>
         <StatusBar style="light" />
-        <LinearGradient colors={['#0A132F', '#1A3A7A']} style={styles.fill}>
+        <LinearGradient colors={[FOREST.gradientTop, FOREST.gradientMid, FOREST.gradientBottom]} style={styles.fill}>
+          <ForestBackdrop />
           <KeyboardAvoidingView style={styles.fill} behavior={kbBehavior}>
             <View style={styles.centerCard}>
               <Text style={styles.h1}>{isName ? s.setup1 : s.setup2}</Text>
@@ -678,33 +1320,54 @@ function App() {
                   onChangeText={setNameDraft}
                   placeholder={s.displayName}
                   style={styles.field}
-                  placeholderTextColor="#7385A8"
+                  placeholderTextColor={FOREST.placeholder}
                 />
               ) : null}
               {!isName ? (
-                <Pressable style={styles.linkBtn} onPress={() => setStage('setup_name')}>
-                  <Text style={styles.link}>{s.editName}</Text>
-                </Pressable>
+                <>
+                  <TextInput
+                    style={styles.field}
+                    value={nameDraft}
+                    onChangeText={setNameDraft}
+                    placeholder={s.displayName}
+                    placeholderTextColor={FOREST.placeholder}
+                  />
+                  {renderProfilePhotoEditor()}
+                  <TextInput
+                    style={styles.field}
+                    value={statusDraft}
+                    onChangeText={setStatusDraft}
+                    placeholder={s.myStatus}
+                    placeholderTextColor={FOREST.placeholder}
+                  />
+                </>
               ) : null}
+
               <Pressable
-                style={[styles.btn, isName && !nameDraft.trim() && styles.off]}
+                style={[styles.btn, setupBlocked && styles.off]}
                 onPress={() => {
                   if (isName) {
                     setProfile((p) => ({ ...p, name: nameDraft.trim() }));
+                    setStatusDraft((prev) => prev || profile.status || s.defaultStatus);
+                    setProfilePhotoDraft((prev) => prev || profile.avatarUri || '');
                     setStage('setup_intro');
                     return;
                   }
-                  if (!profile.status) {
-                    setProfile((p) => ({ ...p, status: s.defaultStatus }));
-                  }
+                  setProfile((p) => ({
+                    ...p,
+                    name: nameDraft.trim() || p.name,
+                    status: statusDraft.trim() || p.status || s.defaultStatus,
+                    avatarUri: profilePhotoDraft.trim() || p.avatarUri,
+                  }));
                   setStage('app');
                 }}
-                disabled={isName && !nameDraft.trim()}
+                disabled={setupBlocked}
               >
                 <Text style={styles.btnText}>{isName ? s.next : s.start}</Text>
               </Pressable>
             </View>
           </KeyboardAvoidingView>
+          {renderCropModal()}
         </LinearGradient>
       </SafeAreaView>
     );
@@ -713,7 +1376,8 @@ function App() {
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar style="light" />
-      <LinearGradient colors={['#0A132F', '#1A3A7A']} style={styles.fill}>
+      <LinearGradient colors={[FOREST.gradientTop, FOREST.gradientMid, FOREST.gradientBottom]} style={styles.fill}>
+        <ForestBackdrop />
         <KeyboardAvoidingView
           style={[styles.fill, { paddingBottom: Math.max(8, insets.bottom) }]}
           behavior={kbBehavior}
@@ -722,11 +1386,11 @@ function App() {
             <>
               <View style={styles.header}>
                 <Pressable style={styles.iconDark} onPress={() => setActiveRoomId(null)}>
-                  <Ionicons name="chevron-back" size={16} color="#EFF9FF" />
+                  <Ionicons name="chevron-back" size={18} color={FOREST.text} />
                 </Pressable>
                 <Text style={styles.title}>{roomTitle(activeRoom)}</Text>
                 <Pressable style={styles.iconDark} onPress={() => setRoomMenuId(activeRoom.id)}>
-                  <Ionicons name="ellipsis-horizontal" size={16} color="#EFF9FF" />
+                  <Ionicons name="ellipsis-horizontal" size={18} color={FOREST.text} />
                 </Pressable>
               </View>
 
@@ -743,7 +1407,7 @@ function App() {
                     activeMsgs.map((m) => (
                       <View key={m.id} style={[styles.bubbleRow, m.mine ? styles.mineRow : styles.otherRow]}>
                         <View style={[styles.bubble, m.mine ? styles.mineBubble : styles.otherBubble]}>
-                          {m.kind === 'text' ? <Text style={[styles.msg, m.mine && styles.msgMine]}>{m.text}</Text> : null}
+                          {m.kind === 'text' ? renderMessageText(m.text || '', m.mine) : null}
                           {m.kind === 'image' ? <Image source={{ uri: m.uri }} style={styles.media} /> : null}
                           {m.kind === 'video' ? (
                             <View style={[styles.media, styles.video]}>
@@ -769,21 +1433,21 @@ function App() {
                   <View style={styles.draft}>
                     <Text style={styles.sub}>{draftMedia.kind === 'image' ? s.imageSelected : s.videoSelected}</Text>
                     <Pressable onPress={() => setDraftMedia(null)}>
-                      <Ionicons name="close-circle" size={18} color="#E7F4FF" />
+                      <Ionicons name="close-circle" size={18} color={FOREST.text} />
                     </Pressable>
                   </View>
                 ) : null}
                 <View style={styles.row}>
                   <Pressable style={styles.iconLight} onPress={() => pickMedia('image')}>
-                    <Ionicons name="image" size={16} color="#ECF9FF" />
+                    <Ionicons name="image" size={16} color={FOREST.text} />
                   </Pressable>
                   <Pressable style={styles.iconLight} onPress={() => pickMedia('video')}>
-                    <Ionicons name="videocam" size={16} color="#ECF9FF" />
+                    <Ionicons name="videocam" size={16} color={FOREST.text} />
                   </Pressable>
                   <TextInput
                     style={styles.composerInput}
                     placeholder={s.msgInput}
-                    placeholderTextColor="#7385A8"
+                    placeholderTextColor={FOREST.placeholder}
                     value={input}
                     onChangeText={setInput}
                     multiline
@@ -815,7 +1479,7 @@ function App() {
                   {profile.avatarUri ? (
                     <Image source={{ uri: profile.avatarUri }} style={styles.headerAvatar} />
                   ) : (
-                    <Ionicons name="person-circle" size={16} color="#EFF9FF" />
+                    <Ionicons name="person-circle" size={18} color={FOREST.text} />
                   )}
                 </Pressable>
               </View>
@@ -834,7 +1498,7 @@ function App() {
                     <TextInput
                       style={styles.field}
                       placeholder={s.searchChats}
-                      placeholderTextColor="#7385A8"
+                      placeholderTextColor={FOREST.placeholder}
                       value={chatQuery}
                       onChangeText={setChatQuery}
                     />
@@ -851,6 +1515,11 @@ function App() {
                       <ScrollView contentContainerStyle={styles.list}>
                         {filteredRooms.map((r) => (
                           <Pressable key={r.id} style={styles.item} onPress={() => openRoom(r.id)}>
+                            <View style={styles.listAvatar}>
+                              <Text style={styles.listAvatarText}>
+                                {roomTitle(r).slice(0, 1).toUpperCase()}
+                              </Text>
+                            </View>
                             <View style={{ flex: 1 }}>
                               <Text style={styles.itemTitle}>{roomTitle(r)}</Text>
                               <Text style={styles.sub} numberOfLines={1}>{r.preview || roomMembers(r)}</Text>
@@ -862,10 +1531,10 @@ function App() {
                                 </View>
                               ) : null}
                               <Pressable style={styles.iconLight} onPress={() => toggleFavorite(r.id)}>
-                                <Ionicons name={r.favorite ? 'star' : 'star-outline'} size={14} color={r.favorite ? '#FFD56A' : '#ECF9FF'} />
+                                <Ionicons name={r.favorite ? 'star' : 'star-outline'} size={16} color={r.favorite ? '#FFD27A' : FOREST.text} />
                               </Pressable>
                               <Pressable style={styles.iconLight} onPress={() => setRoomMenuId(r.id)}>
-                                <Ionicons name="ellipsis-horizontal" size={14} color="#ECF9FF" />
+                                <Ionicons name="ellipsis-horizontal" size={16} color={FOREST.text} />
                               </Pressable>
                             </View>
                           </Pressable>
@@ -888,7 +1557,7 @@ function App() {
                     <TextInput
                       style={styles.field}
                       placeholder={s.searchFriends}
-                      placeholderTextColor="#7385A8"
+                      placeholderTextColor={FOREST.placeholder}
                       value={friendQuery}
                       onChangeText={setFriendQuery}
                     />
@@ -900,15 +1569,20 @@ function App() {
                       <ScrollView contentContainerStyle={styles.list}>
                         {filteredFriends.map((f) => (
                           <View key={f.id} style={styles.item}>
+                            <View style={styles.listAvatar}>
+                              <Text style={styles.listAvatarText}>
+                                {f.name.slice(0, 1).toUpperCase()}
+                              </Text>
+                            </View>
                             <View style={{ flex: 1 }}>
                               <Text style={styles.itemTitle}>{f.name}</Text>
                               <Text style={styles.sub}>{f.status || s.startChat}</Text>
                             </View>
                             <Pressable style={styles.iconLight} onPress={() => toggleTrusted(f.id)}>
-                              <Ionicons name={f.trusted ? 'shield-checkmark' : 'shield-outline'} size={14} color="#ECF9FF" />
+                              <Ionicons name={f.trusted ? 'shield-checkmark' : 'shield-outline'} size={16} color={FOREST.text} />
                             </Pressable>
                             <Pressable style={styles.iconLight} onPress={() => openRoom(ensureDirectRoom(f.id))}>
-                              <Ionicons name="chatbubble-ellipses" size={14} color="#ECF9FF" />
+                              <Ionicons name="chatbubble-ellipses" size={16} color={FOREST.text} />
                             </Pressable>
                           </View>
                         ))}
@@ -959,12 +1633,15 @@ function App() {
 
               <View style={styles.tabs}>
                 <Pressable style={[styles.tab, tab === 'chats' && styles.tabOn]} onPress={() => setTab('chats')}>
+                  <Ionicons name="chatbubbles" size={18} color={tab === 'chats' ? FOREST.text : FOREST.textMuted} />
                   <Text style={styles.tabText}>{s.tabsChats}</Text>
                 </Pressable>
                 <Pressable style={[styles.tab, tab === 'friends' && styles.tabOn]} onPress={() => setTab('friends')}>
+                  <Ionicons name="people" size={18} color={tab === 'friends' ? FOREST.text : FOREST.textMuted} />
                   <Text style={styles.tabText}>{s.tabsFriends}</Text>
                 </Pressable>
                 <Pressable style={[styles.tab, tab === 'profile' && styles.tabOn]} onPress={() => setTab('profile')}>
+                  <Ionicons name="leaf" size={18} color={tab === 'profile' ? FOREST.text : FOREST.textMuted} />
                   <Text style={styles.tabText}>{s.tabsProfile}</Text>
                 </Pressable>
               </View>
@@ -991,14 +1668,14 @@ function App() {
                 <TextInput
                   style={styles.field}
                   placeholder={s.friendName}
-                  placeholderTextColor="#7385A8"
+                  placeholderTextColor={FOREST.placeholder}
                   value={friendNameDraft}
                   onChangeText={setFriendNameDraft}
                 />
                 <TextInput
                   style={styles.field}
                   placeholder={s.friendStatus}
-                  placeholderTextColor="#7385A8"
+                  placeholderTextColor={FOREST.placeholder}
                   value={friendStatusDraft}
                   onChangeText={setFriendStatusDraft}
                 />
@@ -1038,7 +1715,7 @@ function App() {
                 <TextInput
                   style={styles.field}
                   placeholder={s.groupName}
-                  placeholderTextColor="#7385A8"
+                  placeholderTextColor={FOREST.placeholder}
                   value={groupNameDraft}
                   onChangeText={setGroupNameDraft}
                 />
@@ -1047,7 +1724,7 @@ function App() {
                   {friends.map((f) => (
                     <Pressable key={f.id} style={styles.item} onPress={() => toggleGroupPick(f.id)}>
                       <Text style={styles.itemTitle}>{f.name}</Text>
-                      <Ionicons name={groupPick.includes(f.id) ? 'checkmark-circle' : 'ellipse-outline'} size={16} color="#E7F4FF" />
+                      <Ionicons name={groupPick.includes(f.id) ? 'checkmark-circle' : 'ellipse-outline'} size={18} color={FOREST.text} />
                     </Pressable>
                   ))}
                 </ScrollView>
@@ -1068,6 +1745,8 @@ function App() {
           </View>
         </Modal>
 
+        {renderCropModal()}
+
         <Modal
           visible={showProfileModal}
           transparent
@@ -1084,39 +1763,20 @@ function App() {
             >
               <View style={styles.sheet}>
                 <Text style={styles.h1}>{s.profileEdit}</Text>
-                <Text style={styles.sub}>{s.profilePhoto}</Text>
-                <View style={styles.profilePhotoRow}>
-                  {profilePhotoDraft ? (
-                    <Image source={{ uri: profilePhotoDraft }} style={styles.profilePhotoPreview} />
-                  ) : (
-                    <View style={styles.profilePhotoPreviewFallback}>
-                      <Ionicons name="person" size={24} color="#EAF7FF" />
-                    </View>
-                  )}
-                  <View style={styles.profilePhotoActions}>
-                    <Pressable style={styles.smallBtn} onPress={pickProfilePhoto}>
-                      <Text style={styles.smallBtnText}>{s.photoPick}</Text>
-                    </Pressable>
-                    {profilePhotoDraft ? (
-                      <Pressable style={styles.smallBtn} onPress={() => setProfilePhotoDraft('')}>
-                        <Text style={styles.smallBtnText}>{s.photoRemove}</Text>
-                      </Pressable>
-                    ) : null}
-                  </View>
-                </View>
+                {renderProfilePhotoEditor()}
                 <TextInput
                   style={styles.field}
                   value={nameDraft}
                   onChangeText={setNameDraft}
                   placeholder={s.displayName}
-                  placeholderTextColor="#7385A8"
+                  placeholderTextColor={FOREST.placeholder}
                 />
                 <TextInput
                   style={styles.field}
                   value={statusDraft}
                   onChangeText={setStatusDraft}
                   placeholder={s.myStatus}
-                  placeholderTextColor="#7385A8"
+                  placeholderTextColor={FOREST.placeholder}
                 />
                 <View style={styles.row}>
                   <Pressable style={styles.smallBtn} onPress={() => setShowProfileModal(false)}>
@@ -1176,104 +1836,148 @@ function App() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#0A132F' },
+  safe: { flex: 1, backgroundColor: FOREST.deep },
   fill: { flex: 1 },
+  bgOrbTop: {
+    position: 'absolute',
+    top: -80,
+    right: -40,
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: 'rgba(202,228,166,0.24)',
+  },
+  bgOrbMid: {
+    position: 'absolute',
+    top: 210,
+    left: -70,
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: 'rgba(124,170,114,0.23)',
+  },
+  bgOrbBottom: {
+    position: 'absolute',
+    bottom: -90,
+    right: -60,
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: 'rgba(235,209,156,0.2)',
+  },
   centerCard: {
     margin: 16,
-    marginTop: 40,
-    borderRadius: 20,
-    padding: 16,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    marginTop: 54,
+    borderRadius: 24,
+    padding: 18,
+    backgroundColor: FOREST.cardStrong,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
-    gap: 10,
+    borderColor: FOREST.border,
+    gap: 12,
   },
-  brand: { color: '#F7FAFF', fontSize: 28, textAlign: 'center', fontWeight: '700' },
-  h1: { color: '#F7FAFF', fontSize: 18, fontWeight: '700' },
-  title: { color: '#F7FAFF', fontSize: 16, fontWeight: '700', flex: 1 },
-  sub: { color: 'rgba(245,250,255,0.78)', fontSize: 11 },
+  brand: { color: FOREST.text, fontSize: 31, textAlign: 'center', fontWeight: '800', letterSpacing: 0.3 },
+  h1: { color: FOREST.text, fontSize: 20, fontWeight: '800' },
+  title: { color: FOREST.text, fontSize: 18, fontWeight: '800', flex: 1 },
+  sub: { color: FOREST.textSoft, fontSize: 13, lineHeight: 19 },
   btn: {
-    borderRadius: 12,
-    paddingVertical: 10,
-    alignItems: 'center',
-    backgroundColor: 'rgba(114,214,255,0.35)',
-    borderWidth: 1,
-    borderColor: 'rgba(170,232,255,0.5)',
-  },
-  btnText: { color: '#F2FAFF', fontSize: 12, fontWeight: '700' },
-  smallBtn: {
-    borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: 'rgba(114,214,255,0.26)',
-    borderWidth: 1,
-    borderColor: 'rgba(170,232,255,0.4)',
-  },
-  smallBtnText: { color: '#F2FAFF', fontSize: 11, fontWeight: '700' },
-  linkBtn: { alignSelf: 'flex-start' },
-  link: { color: '#CFEFFF', fontSize: 12, fontWeight: '700' },
-  off: { opacity: 0.45 },
-  header: {
-    marginHorizontal: 14,
-    marginTop: 8,
-    marginBottom: 8,
-    borderRadius: 16,
-    padding: 10,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  iconDark: {
-    width: 28,
-    height: 28,
     borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    minHeight: 50,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: FOREST.button,
+    borderWidth: 1,
+    borderColor: FOREST.buttonBorder,
+  },
+  btnText: { color: FOREST.text, fontSize: 15, fontWeight: '800' },
+  smallBtn: {
+    borderRadius: 12,
+    minHeight: 46,
+    paddingVertical: 10,
+    paddingHorizontal: 13,
+    backgroundColor: FOREST.buttonSoft,
+    borderWidth: 1,
+    borderColor: FOREST.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerAvatar: { width: 24, height: 24, borderRadius: 12 },
+  smallBtnText: { color: FOREST.text, fontSize: 14, fontWeight: '700' },
+  linkBtn: { alignSelf: 'flex-start' },
+  link: { color: FOREST.link, fontSize: 13, fontWeight: '700' },
+  off: { opacity: 0.42 },
+  header: {
+    marginHorizontal: 12,
+    marginTop: 8,
+    marginBottom: 8,
+    borderRadius: 20,
+    padding: 12,
+    backgroundColor: FOREST.cardStrong,
+    borderWidth: 1,
+    borderColor: FOREST.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  iconDark: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: FOREST.iconDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerAvatar: { width: 30, height: 30, borderRadius: 15 },
   iconLight: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.13)',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: FOREST.iconLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
   main: {
     flex: 1,
-    marginHorizontal: 14,
-    borderRadius: 16,
-    padding: 10,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    marginHorizontal: 12,
+    borderRadius: 20,
+    padding: 12,
+    backgroundColor: FOREST.card,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
-    gap: 8,
+    borderColor: FOREST.border,
+    gap: 10,
   },
-  list: { gap: 8, paddingBottom: 10 },
-  row: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  list: { gap: 10, paddingBottom: 12 },
+  row: { flexDirection: 'row', gap: 10, alignItems: 'center' },
   item: {
-    borderRadius: 12,
-    padding: 10,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 14,
+    padding: 12,
+    backgroundColor: 'rgba(246,252,241,0.16)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
+    borderColor: FOREST.border,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 8,
+    gap: 10,
   },
-  itemTitle: { color: '#F7FAFF', fontSize: 13, fontWeight: '700' },
-  itemRight: { flexDirection: 'row', gap: 6, alignItems: 'center' },
+  itemTitle: { color: FOREST.text, fontSize: 15, fontWeight: '700' },
+  itemRight: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  listAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(141,191,121,0.36)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+  },
+  listAvatarText: { color: FOREST.text, fontSize: 15, fontWeight: '800' },
   profileHero: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     overflow: 'hidden',
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(232,246,220,0.36)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1283,123 +1987,203 @@ const styles = StyleSheet.create({
     height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(114,214,255,0.32)',
+    backgroundColor: 'rgba(141,191,121,0.38)',
   },
-  profileAvatarText: { color: '#F7FAFF', fontSize: 24, fontWeight: '700' },
-  profileMeta: { flex: 1, gap: 2 },
-  profileStatus: { color: '#EAF7FF', fontSize: 12, fontWeight: '600' },
+  profileAvatarText: { color: FOREST.text, fontSize: 24, fontWeight: '800' },
+  profileMeta: { flex: 1, gap: 3 },
+  profileStatus: { color: FOREST.text, fontSize: 14, fontWeight: '600' },
   stat: {
     flex: 1,
-    borderRadius: 12,
-    padding: 10,
+    borderRadius: 14,
+    padding: 12,
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: FOREST.cardStrong,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
+    borderColor: FOREST.border,
+    gap: 3,
   },
   tabs: {
-    marginHorizontal: 14,
+    marginHorizontal: 12,
     marginTop: 8,
-    borderRadius: 14,
-    padding: 6,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 18,
+    padding: 7,
+    backgroundColor: FOREST.cardStrong,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
+    borderColor: FOREST.border,
     flexDirection: 'row',
-    gap: 6,
+    gap: 7,
   },
-  tab: { flex: 1, borderRadius: 10, paddingVertical: 8, alignItems: 'center' },
-  tabOn: { backgroundColor: 'rgba(114,214,255,0.28)' },
-  tabText: { color: '#F2FAFF', fontSize: 11, fontWeight: '700' },
+  tab: {
+    flex: 1,
+    borderRadius: 12,
+    minHeight: 62,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+  },
+  tabOn: {
+    backgroundColor: FOREST.buttonSoft,
+    borderWidth: 1,
+    borderColor: FOREST.border,
+  },
+  tabText: { color: FOREST.text, fontSize: 14, fontWeight: '700' },
   bubbleRow: { width: '100%' },
   mineRow: { alignItems: 'flex-end' },
   otherRow: { alignItems: 'flex-start' },
-  bubble: { maxWidth: '90%', borderRadius: 14, padding: 10 },
-  mineBubble: { backgroundColor: '#2E88FF' },
-  otherBubble: { backgroundColor: 'rgba(255,255,255,0.9)' },
-  msg: { color: '#18305D', fontSize: 13, fontWeight: '600' },
-  msgMine: { color: '#F4FBFF' },
-  meta: { marginTop: 4, color: 'rgba(20,50,95,0.64)', fontSize: 10 },
-  metaMine: { color: 'rgba(240,252,255,0.84)' },
-  system: { color: '#604A14', fontSize: 11, fontWeight: '700' },
-  media: { width: 180, height: 130, borderRadius: 10, backgroundColor: '#163A76' },
+  bubble: { maxWidth: '88%', borderRadius: 16, padding: 12 },
+  mineBubble: { backgroundColor: FOREST.mineBubble },
+  otherBubble: {
+    backgroundColor: FOREST.otherBubble,
+    borderWidth: 1,
+    borderColor: 'rgba(146,175,137,0.35)',
+  },
+  msg: { color: '#1D3528', fontSize: 15, fontWeight: '600', lineHeight: 22 },
+  msgMine: { color: FOREST.text },
+  msgLink: { color: '#2D6EEA', textDecorationLine: 'underline', fontWeight: '700' },
+  msgLinkMine: { color: '#F0FFD8' },
+  meta: { marginTop: 5, color: 'rgba(26,53,37,0.6)', fontSize: 11, fontWeight: '600' },
+  metaMine: { color: 'rgba(238,249,232,0.88)' },
+  system: { color: '#355B3A', fontSize: 12, fontWeight: '700' },
+  media: { width: 196, height: 136, borderRadius: 12, backgroundColor: '#31563A' },
   video: { alignItems: 'center', justifyContent: 'center' },
   composer: {
-    marginHorizontal: 14,
+    marginHorizontal: 12,
     marginTop: 8,
-    borderRadius: 14,
-    padding: 8,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 18,
+    padding: 10,
+    backgroundColor: FOREST.cardStrong,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
-    gap: 6,
+    borderColor: FOREST.border,
+    gap: 8,
   },
   draft: {
-    borderRadius: 10,
-    padding: 8,
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 12,
+    padding: 10,
+    backgroundColor: 'rgba(229,246,220,0.22)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
+    borderColor: FOREST.border,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
   field: {
     width: '100%',
-    minHeight: 42,
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    backgroundColor: '#F4F8FF',
-    color: '#172A4E',
-    fontSize: 13,
+    minHeight: 46,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: FOREST.inputBg,
+    color: FOREST.inputText,
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: 'rgba(157,189,147,0.55)',
   },
   composerInput: {
     flex: 1,
-    minHeight: 40,
-    maxHeight: 100,
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    backgroundColor: '#F4F8FF',
-    color: '#172A4E',
-    fontSize: 13,
-  },
-  send: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2E88FF' },
-  badge: { minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F86B8E' },
-  badgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
-  empty: {
-    borderRadius: 12,
-    padding: 14,
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    minHeight: 42,
+    maxHeight: 110,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: FOREST.inputBg,
+    color: FOREST.inputText,
+    fontSize: 15,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.16)',
+    borderColor: 'rgba(157,189,147,0.55)',
+  },
+  send: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: FOREST.button,
+    borderWidth: 1,
+    borderColor: FOREST.buttonBorder,
+  },
+  badge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: FOREST.badge,
+  },
+  badgeText: { color: '#fff', fontSize: 11, fontWeight: '800' },
+  empty: {
+    borderRadius: 14,
+    padding: 16,
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(246,252,241,0.15)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
   },
   overlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end' },
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.42)' },
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: FOREST.overlay },
   sheetWrap: { width: '100%' },
   sheet: {
-    margin: 14,
-    borderRadius: 14,
-    padding: 12,
-    backgroundColor: 'rgba(8,20,48,0.96)',
+    margin: 12,
+    borderRadius: 18,
+    padding: 14,
+    backgroundColor: FOREST.sheetBg,
     borderWidth: 1,
-    borderColor: 'rgba(157,224,255,0.4)',
-    gap: 8,
+    borderColor: FOREST.sheetBorder,
+    gap: 10,
   },
-  profilePhotoRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
-  profilePhotoPreview: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#163A76' },
-  profilePhotoPreviewFallback: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: 'rgba(114,214,255,0.28)',
+  cropViewport: {
+    width: PROFILE_CROP_BOX,
+    height: PROFILE_CROP_BOX,
+    alignSelf: 'center',
+    borderRadius: 24,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(11,25,16,0.7)',
+  },
+  cropImage: {
+    position: 'absolute',
+  },
+  cropFrame: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 24,
+    borderWidth: 2,
+    borderColor: 'rgba(243,248,234,0.92)',
+  },
+  cropCorner: {
+    position: 'absolute',
+    width: 24,
+    height: 24,
+    borderColor: 'rgba(243,248,234,0.98)',
+  },
+  cropCornerTL: { top: 8, left: 8, borderTopWidth: 3, borderLeftWidth: 3, borderTopLeftRadius: 10 },
+  cropCornerTR: { top: 8, right: 8, borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 10 },
+  cropCornerBL: { bottom: 8, left: 8, borderBottomWidth: 3, borderLeftWidth: 3, borderBottomLeftRadius: 10 },
+  cropCornerBR: { bottom: 8, right: 8, borderBottomWidth: 3, borderRightWidth: 3, borderBottomRightRadius: 10 },
+  cropCenterIcon: {
+    ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  profilePhotoActions: { gap: 8 },
+  zoomText: {
+    color: FOREST.text,
+    textAlign: 'center',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  profilePhotoRow: { flexDirection: 'row', gap: 12, alignItems: 'center' },
+  profilePhotoPreview: { width: 76, height: 76, borderRadius: 38, backgroundColor: '#2E5237' },
+  profilePhotoPreviewFallback: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: 'rgba(141,191,121,0.36)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+  },
+  profilePhotoActions: { gap: 8, flex: 1 },
 });
 
 export default App;
