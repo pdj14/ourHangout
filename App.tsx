@@ -22,8 +22,10 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
+import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -78,13 +80,21 @@ type TouchPoint = { pageX: number; pageY: number };
 type BackendAuthUser = {
   id?: string;
   name?: string;
+  displayName?: string;
   email?: string;
   avatarUri?: string;
+};
+type BackendAuthTokens = {
+  accessToken?: string;
+  refreshToken?: string;
+  expiresIn?: string;
+  tokenType?: string;
 };
 type BackendAuthData = {
   accessToken?: string;
   refreshToken?: string;
   expiresInSec?: number;
+  tokens?: BackendAuthTokens;
   user?: BackendAuthUser;
 };
 type BackendProfile = {
@@ -118,14 +128,23 @@ type BackendEnvelope<T> = {
   error?: { message?: string; code?: string };
   message?: string;
 };
+type BackendListData<T> = {
+  items?: T[];
+  nextCursor?: string;
+};
 type AppExtra = {
   googleAuth?: { androidClientId?: string; iosClientId?: string; webClientId?: string };
   backend?: { baseUrl?: string };
+};
+type PersistedSession = {
+  accessToken: string;
+  refreshToken?: string;
 };
 
 const MY_ID = 'me';
 const URL_REGEX = /https?:\/\/\S+/gi;
 const PROFILE_CROP_BOX = 260;
+const SESSION_STORAGE_KEY = 'ourhangout.session.v1';
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const finiteOr = (value: number | null | undefined, fallback = 0) =>
   Number.isFinite(value) ? (value as number) : fallback;
@@ -161,6 +180,70 @@ const cropGeometry = (imageWidth: number, imageHeight: number, scale: number) =>
   const overflowY = Math.max(0, renderHeight - PROFILE_CROP_BOX);
   return { renderWidth, renderHeight, overflowX, overflowY };
 };
+const canUseSecureStore = Platform.OS !== 'web';
+const parsePersistedSession = (raw: string | null | undefined): PersistedSession | null => {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as PersistedSession;
+    const accessToken = (parsed.accessToken || '').trim();
+    const refreshToken = (parsed.refreshToken || '').trim();
+    if (!accessToken) return null;
+    return {
+      accessToken,
+      ...(refreshToken ? { refreshToken } : {})
+    };
+  } catch {
+    return null;
+  }
+};
+const readSessionFromStorage = async (): Promise<PersistedSession | null> => {
+  if (canUseSecureStore) {
+    try {
+      const secureRaw = await SecureStore.getItemAsync(SESSION_STORAGE_KEY);
+      const secure = parsePersistedSession(secureRaw);
+      if (secure?.accessToken) {
+        return secure;
+      }
+    } catch {
+      // Ignore SecureStore read failure and fallback to AsyncStorage.
+    }
+  }
+  try {
+    const fallbackRaw = await AsyncStorage.getItem(SESSION_STORAGE_KEY);
+    return parsePersistedSession(fallbackRaw);
+  } catch {
+    return null;
+  }
+};
+const writeSessionToStorage = async (session: PersistedSession): Promise<void> => {
+  const payload = JSON.stringify(session);
+  if (canUseSecureStore) {
+    try {
+      await SecureStore.setItemAsync(SESSION_STORAGE_KEY, payload);
+    } catch {
+      // Keep fallback persistence even when SecureStore fails.
+    }
+  }
+  try {
+    await AsyncStorage.setItem(SESSION_STORAGE_KEY, payload);
+  } catch {
+    // Ignore fallback storage failure.
+  }
+};
+const clearSessionInStorage = async (): Promise<void> => {
+  if (canUseSecureStore) {
+    try {
+      await SecureStore.deleteItemAsync(SESSION_STORAGE_KEY);
+    } catch {
+      // Ignore cleanup failure.
+    }
+  }
+  try {
+    await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch {
+    // Ignore cleanup failure.
+  }
+};
 
 const TEXT = {
   en: {
@@ -174,9 +257,12 @@ const TEXT = {
     loginServerChecking: 'Checking backend connection...',
     loginServerReady: 'Backend connected.',
     loginServerError: 'Backend connection failed.',
+    loginSessionRestoring: 'Restoring previous session...',
     loginBackendAuthFailed: 'Backend Google login failed.',
     loginBackendSyncFailed: 'Logged in, but initial backend sync failed.',
     loginFailed: 'Google sign-in failed.',
+    loginCanceled: 'Google sign-in was canceled.',
+    loginDismissed: 'Google sign-in was closed before completion.',
     setup1: 'Set your display name',
     setup2: 'Core flow: friends -> room list -> chat',
     displayName: 'Display name',
@@ -266,9 +352,12 @@ const TEXT = {
     loginServerChecking: '백엔드 연결을 확인 중이에요...',
     loginServerReady: '백엔드에 연결됐어요.',
     loginServerError: '백엔드 연결에 실패했어요.',
+    loginSessionRestoring: '이전 로그인 세션을 복원 중이에요...',
     loginBackendAuthFailed: '백엔드 Google 로그인에 실패했어요.',
     loginBackendSyncFailed: '로그인은 되었지만 초기 데이터 동기화에 실패했어요.',
     loginFailed: 'Google 로그인에 실패했어요.',
+    loginCanceled: 'Google 로그인이 취소되었어요.',
+    loginDismissed: 'Google 로그인 창이 완료 전에 닫혔어요.',
     setup1: '표시 이름을 설정해요',
     setup2: '핵심 흐름: 친구 -> 대화방 -> 채팅',
     displayName: '표시 이름',
@@ -429,24 +518,50 @@ function App() {
       {}
     ) as AppExtra;
   }, []);
-  const g = {
-    androidClientId: (extra.googleAuth?.androidClientId || '').trim(),
-    iosClientId: (extra.googleAuth?.iosClientId || '').trim(),
-    webClientId: (extra.googleAuth?.webClientId || '').trim(),
+  const runtimeEnv = useMemo(() => {
+    const runtimeProcess = (globalThis as { process?: { env?: Record<string, string | undefined> } })
+      .process;
+    return runtimeProcess?.env ?? {};
+  }, []);
+  const pickValue = (primary?: string, fallback?: string): string =>
+    (primary || '').trim() || (fallback || '').trim();
+  const toGoogleNativeRedirectUri = (clientId?: string): string => {
+    const trimmed = (clientId || '').trim();
+    const suffix = '.apps.googleusercontent.com';
+    if (!trimmed || !trimmed.endsWith(suffix)) return '';
+    const guid = trimmed.slice(0, -suffix.length);
+    return guid ? `com.googleusercontent.apps.${guid}:/oauthredirect` : '';
   };
-  const backendBaseUrl = (extra.backend?.baseUrl?.trim() || 'http://wowjini0228.synology.me:7083')
-    .replace(/\/+$/, '');
+  const g = {
+    androidClientId: pickValue(
+      extra.googleAuth?.androidClientId,
+      runtimeEnv.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID
+    ),
+    iosClientId: pickValue(extra.googleAuth?.iosClientId, runtimeEnv.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID),
+    webClientId: pickValue(extra.googleAuth?.webClientId, runtimeEnv.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID),
+  };
+  const androidGoogleClientId = pickValue(g.androidClientId, g.webClientId);
+  const backendBaseUrl = pickValue(
+    extra.backend?.baseUrl,
+    runtimeEnv.EXPO_PUBLIC_BACKEND_BASE_URL
+  )
+    .replace(/\/+$/, '') || 'http://wowjini0228.synology.me:7083';
 
   const hasGoogle = !!Platform.select({
-    android: g.androidClientId || g.webClientId,
+    android: androidGoogleClientId,
     ios: g.iosClientId || g.webClientId,
     default: g.webClientId,
   });
+  const googleRedirectUri =
+    Platform.OS === 'android'
+      ? toGoogleNativeRedirectUri(androidGoogleClientId) || undefined
+      : undefined;
 
   const [googleReq, googleRes, googlePrompt] = Google.useAuthRequest({
-    androidClientId: g.androidClientId,
+    androidClientId: androidGoogleClientId,
     iosClientId: g.iosClientId,
     webClientId: g.webClientId,
+    redirectUri: googleRedirectUri,
     scopes: ['openid', 'profile', 'email'],
   });
 
@@ -461,6 +576,7 @@ function App() {
   const [backendStateMsg, setBackendStateMsg] = useState('');
   const [accessToken, setAccessToken] = useState('');
   const [refreshToken, setRefreshToken] = useState('');
+  const [isSessionRestoring, setIsSessionRestoring] = useState(true);
   const [currentUserId, setCurrentUserId] = useState(MY_ID);
 
   const [friends, setFriends] = useState<Friend[]>([]);
@@ -500,6 +616,7 @@ function App() {
 
   const scrollRef = useRef<ScrollView>(null);
   const cropOpenedAtRef = useRef(0);
+  const sessionRestoreStartedRef = useRef(false);
 
   const getFriend = (fid: string) => friends.find((f) => f.id === fid);
   const roomTitle = (room: Room) =>
@@ -611,26 +728,39 @@ function App() {
     return Number.isFinite(ms) ? ms : Date.now();
   };
 
-  const syncInitialFromBackend = async (token: string, fallbackUser?: BackendAuthUser) => {
+  const asListItems = <T,>(value: unknown): T[] => {
+    if (Array.isArray(value)) return value as T[];
+    if (value && typeof value === 'object' && Array.isArray((value as BackendListData<T>).items)) {
+      return (value as BackendListData<T>).items ?? [];
+    }
+    return [];
+  };
+
+  const syncInitialFromBackend = async (
+    token: string,
+    fallbackUser?: BackendAuthUser
+  ): Promise<{ hasProfileName: boolean }> => {
     const me = await backendRequest<BackendProfile>('/v1/me', { method: 'GET' }, token).catch(
       () => null
     );
     const nextUserId = (me?.id || fallbackUser?.id || MY_ID).trim();
+    const resolvedName = (me?.name || fallbackUser?.name || fallbackUser?.displayName || '').trim();
     setCurrentUserId(nextUserId || MY_ID);
     setProfile((prev) => ({
       ...prev,
-      name: (me?.name || fallbackUser?.name || prev.name || '').trim(),
+      name: resolvedName || prev.name || '',
       status: (me?.status || prev.status || '').trim(),
       email: (me?.email || fallbackUser?.email || prev.email || '').trim(),
       avatarUri: (me?.avatarUri || fallbackUser?.avatarUri || prev.avatarUri || '').trim(),
     }));
-    setNameDraft((me?.name || fallbackUser?.name || '').trim());
+    setNameDraft(resolvedName);
 
-    const backFriends = await backendRequest<BackendFriend[]>(
+    const backFriendsRaw = await backendRequest<BackendFriend[] | BackendListData<BackendFriend>>(
       '/v1/friends',
       { method: 'GET' },
       token
     ).catch(() => []);
+    const backFriends = asListItems<BackendFriend>(backFriendsRaw);
     if (Array.isArray(backFriends)) {
       setFriends(
         backFriends
@@ -644,11 +774,12 @@ function App() {
       );
     }
 
-    const backRooms = await backendRequest<BackendRoom[]>(
+    const backRoomsRaw = await backendRequest<BackendRoom[] | BackendListData<BackendRoom>>(
       '/v1/rooms',
       { method: 'GET' },
       token
     ).catch(() => []);
+    const backRooms = asListItems<BackendRoom>(backRoomsRaw);
     if (Array.isArray(backRooms)) {
       const mapped = backRooms
         .filter((r) => !!r?.id)
@@ -673,8 +804,9 @@ function App() {
           if (!next[room.id]) next[room.id] = [];
         });
         return next;
-      });
+        });
     }
+    return { hasProfileName: resolvedName.length > 0 };
   };
 
   useEffect(() => {
@@ -701,37 +833,140 @@ function App() {
   }, [backendBaseUrl, s.loginServerError, s.loginServerReady]);
 
   useEffect(() => {
+    if (backendState !== 'ready') return;
+    if (sessionRestoreStartedRef.current) return;
+    sessionRestoreStartedRef.current = true;
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        const stored = await readSessionFromStorage();
+        if (!stored?.accessToken) return;
+
+        const applySession = async (nextAccessToken: string, nextRefreshToken?: string, user?: BackendAuthUser) => {
+          setAccessToken(nextAccessToken);
+          setRefreshToken((nextRefreshToken || '').trim());
+          const synced = await syncInitialFromBackend(nextAccessToken, user);
+          if (cancelled) return;
+          setStage(synced.hasProfileName ? 'app' : 'setup_name');
+        };
+
+        try {
+          await applySession(stored.accessToken, stored.refreshToken);
+          return;
+        } catch {
+          const storedRefreshToken = (stored.refreshToken || '').trim();
+          if (!storedRefreshToken) throw new Error('missing refresh token');
+          const refreshed = await backendRequest<BackendAuthData>('/v1/auth/refresh', {
+            method: 'POST',
+            body: JSON.stringify({ refreshToken: storedRefreshToken }),
+          });
+          const nextAccessToken = (refreshed.accessToken || refreshed.tokens?.accessToken || '').trim();
+          const nextRefreshToken =
+            (refreshed.refreshToken || refreshed.tokens?.refreshToken || storedRefreshToken).trim();
+          if (!nextAccessToken) throw new Error('missing access token');
+          await writeSessionToStorage({
+            accessToken: nextAccessToken,
+            ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {})
+          });
+          await applySession(nextAccessToken, nextRefreshToken, refreshed.user);
+        }
+      } catch {
+        if (cancelled) return;
+        setAccessToken('');
+        setRefreshToken('');
+        await clearSessionInStorage();
+      } finally {
+        if (!cancelled) setIsSessionRestoring(false);
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [backendState]);
+
+  useEffect(() => {
+    if (isSessionRestoring) return;
     let cancelled = false;
     const run = async () => {
-      if (!googleRes || googleRes.type !== 'success') return;
-      const gAccessToken = googleRes.authentication?.accessToken || '';
+      const nextAccessToken = accessToken.trim();
+      const nextRefreshToken = refreshToken.trim();
+      if (!nextAccessToken) {
+        await clearSessionInStorage();
+        return;
+      }
+      await writeSessionToStorage({
+        accessToken: nextAccessToken,
+        ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {})
+      });
+    };
+    run().catch(() => {
+      if (cancelled) return;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, refreshToken, isSessionRestoring]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (!googleRes) return;
+      if (googleRes.type === 'error') {
+        const maybeErr = (googleRes as { error?: { message?: string } }).error;
+        const msg = (maybeErr?.message || '').trim();
+        if (!cancelled) setLoginErr(msg ? `${s.loginFailed} (${msg})` : s.loginFailed);
+        return;
+      }
+      if (googleRes.type !== 'success') return;
       const gParams = (googleRes.params as Record<string, string | undefined> | undefined) ?? {};
+      const gAccessToken =
+        googleRes.authentication?.accessToken || gParams.access_token || gParams.accessToken || '';
       const gIdToken =
         (googleRes.authentication as { idToken?: string } | undefined)?.idToken ||
         gParams.id_token ||
+        gParams.idToken ||
         '';
-      if (!gAccessToken && !gIdToken) {
+      if (!gIdToken.trim()) {
         if (!cancelled) setLoginErr(s.loginFailed);
         return;
       }
       try {
-        const authData = await backendRequest<BackendAuthData>('/v1/auth/google', {
-          method: 'POST',
-          body: JSON.stringify({
-            idToken: gIdToken,
-            accessToken: gAccessToken,
+        const postGoogleAuth = async (idToken: string, accessToken: string) => {
+          const payload: {
+            idToken?: string;
+            accessToken?: string;
+            device: { platform: string; appVersion: string; deviceId: string };
+          } = {
             device: {
               platform: Platform.OS,
               appVersion: Constants.expoConfig?.version || '1.0.0',
               deviceId: String(Constants.deviceName || Constants.sessionId || 'unknown'),
             },
-          }),
-        });
+          };
+          const trimmedIdToken = idToken.trim();
+          const trimmedAccessToken = accessToken.trim();
+          if (trimmedIdToken) payload.idToken = trimmedIdToken;
+          if (trimmedAccessToken) payload.accessToken = trimmedAccessToken;
+          return backendRequest<BackendAuthData>('/v1/auth/google', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          });
+        };
+
+        const authData = await postGoogleAuth(gIdToken, gAccessToken);
         if (cancelled) return;
-        const nextAccessToken = (authData.accessToken || '').trim();
+        const nextAccessToken = (authData.accessToken || authData.tokens?.accessToken || '').trim();
+        const nextRefreshToken = (authData.refreshToken || authData.tokens?.refreshToken || '').trim();
         if (!nextAccessToken) throw new Error('missing access token');
+        await writeSessionToStorage({
+          accessToken: nextAccessToken,
+          ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {})
+        });
         setAccessToken(nextAccessToken);
-        setRefreshToken((authData.refreshToken || '').trim());
+        setRefreshToken(nextRefreshToken);
         await syncInitialFromBackend(nextAccessToken, authData.user);
         if (cancelled) return;
         setStage('setup_name');
@@ -1117,13 +1352,30 @@ function App() {
       setLoginErr(s.loginHintMissing);
       return;
     }
+    if (isSessionRestoring) {
+      return;
+    }
     if (backendState !== 'ready') {
       setLoginErr(backendStateMsg || s.loginServerError);
       return;
     }
-    const res = await googlePrompt();
-    if (res.type !== 'success' && res.type !== 'dismiss' && res.type !== 'cancel') {
-      setLoginErr(s.loginFailed);
+    try {
+      const res = await googlePrompt();
+      if (res.type === 'success') return;
+      if (res.type === 'cancel') {
+        setLoginErr(s.loginCanceled);
+        return;
+      }
+      if (res.type === 'dismiss') {
+        setLoginErr(s.loginDismissed);
+        return;
+      }
+      const maybeErr = (res as { error?: { message?: string } }).error;
+      const msg = (maybeErr?.message || '').trim();
+      setLoginErr(msg ? `${s.loginFailed} (${msg})` : s.loginFailed);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      setLoginErr(msg ? `${s.loginFailed} (${msg})` : s.loginFailed);
     }
   };
 
@@ -1518,9 +1770,9 @@ function App() {
             <Text style={styles.h1}>{s.login}</Text>
             <Text style={styles.sub}>{s.loginBody}</Text>
             <Pressable
-              style={[styles.btn, (backendState !== 'ready' || !hasGoogle) && styles.off]}
+              style={[styles.btn, (backendState !== 'ready' || !hasGoogle || isSessionRestoring) && styles.off]}
               onPress={startGoogle}
-              disabled={backendState !== 'ready' || !hasGoogle}
+              disabled={backendState !== 'ready' || !hasGoogle || isSessionRestoring}
             >
               <Text style={styles.btnText}>{s.google}</Text>
             </Pressable>
@@ -1528,7 +1780,9 @@ function App() {
               <Text style={styles.link}>{s.loginSkip}</Text>
             </Pressable>
             <Text style={styles.sub}>
-              {backendState === 'checking'
+              {isSessionRestoring
+                ? s.loginSessionRestoring
+                : backendState === 'checking'
                 ? s.loginServerChecking
                 : backendState === 'ready'
                   ? s.loginServerReady

@@ -1,22 +1,25 @@
 # BE + Google Login Verification Checklist
 
-Last updated: 2026-03-02
+Last updated: 2026-03-05
 
 ## 1. Backend Basic Health
-1. Confirm backend URL in `app.json`:
-   - `expo.extra.backend.baseUrl = http://wowjini0228.synology.me:7083`
-2. Verify backend is reachable from device network:
+1. Confirm backend URL in `.env`:
+   - `EXPO_PUBLIC_BACKEND_BASE_URL=http://wowjini0228.synology.me:7083`
+2. Check resolved app config:
+   - `npm run config:check`
+   - verify `extra.backend.baseUrl` is the expected URL
+3. Verify backend is reachable from device network:
    - `GET /health`
    - `GET /ready` (if enabled on backend)
-3. Launch app and confirm login screen backend status shows "connected".
+4. Launch app and confirm login screen backend status shows "connected".
 
 ## 2. Google Cloud OAuth Setup
 1. Confirm Android OAuth client exists for package `com.ourhangout`.
 2. Confirm SHA-1 fingerprint is registered (debug and release if needed).
 3. Confirm OAuth consent screen is published/test-user configured.
-4. Set client IDs in `app.json`:
-   - `expo.extra.googleAuth.androidClientId`
-   - `expo.extra.googleAuth.webClientId` (recommended)
+4. Set client IDs in `.env`:
+   - `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`
+   - `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` (recommended)
 
 ## 3. App-side Google Login Flow
 1. Tap `Continue with Google`.

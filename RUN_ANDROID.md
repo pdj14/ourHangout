@@ -1,30 +1,41 @@
 # Run On Android Device
 
-Last updated: 2026-02-28
+Last updated: 2026-03-05
 
-## Option 1: Fastest Preview (Expo Go)
-This app can be checked immediately without building APK.
+## 0) Prepare environment
+
+1. `cd C:\workspace\ourHangoutFamily\ourHangout`
+2. Create `.env` from `.env.example`
+3. Set `EXPO_PUBLIC_BACKEND_BASE_URL` to your Synology backend URL
+   - Example: `http://wowjini0228.synology.me:7083`
+4. If needed, update Google OAuth client IDs in `.env`
+
+## 1) Fastest preview (Expo Go)
 
 1. Install Expo Go on your Android device.
 2. On PC:
-   - `cd C:\workspace\ourHome\kidchat-app`
+   - `cd C:\workspace\ourHangoutFamily\ourHangout`
    - `npm install`
    - `npm run start:tunnel`
 3. Scan the QR code from Expo Go.
-4. The app opens directly on your phone.
+4. App opens on your phone.
 
 Notes:
-- Current app uses local mock chat flow, so relay server is not required to preview UI.
-- Tunnel mode is used so local network restrictions are less likely to block connection.
-- If your phone is connected by adb, you can open Expo URL automatically:
+- Login screen checks backend `/health` before Google login.
+- If backend is down or unreachable, Google login is disabled.
+- If your phone is connected with adb, you can open Expo URL automatically:
   - `powershell -ExecutionPolicy Bypass -File .\tools\open-on-adb.ps1`
 
-## Option 2: Build APK (Installable file)
-1. `cd C:\workspace\ourHome\kidchat-app`
-2. `npx eas-cli login`
-3. `npm run build:apk`
-4. When build finishes, download the APK link from EAS and install on device.
+## 2) Build APK (EAS cloud build)
+
+1. `cd C:\workspace\ourHangoutFamily\ourHangout`
+2. `npm install`
+3. `npx expo config --type public`
+4. `npx eas-cli login`
+5. `npm run build:apk`
+6. Download generated APK from EAS and install.
 
 Notes:
-- `eas.json` is already configured with `preview` profile for APK output.
+- `eas.json` already has `preview` profile for APK output.
+- Build uses values from `.env` through `app.config.ts`.
 - Cloud build requires Expo account login.
