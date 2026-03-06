@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 import {
   Alert,
   Image,
@@ -110,6 +111,41 @@ type BackendFriend = {
   status?: string;
   trusted?: boolean;
 };
+type BackendFriendSearchUser = {
+  id?: string;
+  name?: string;
+  status?: string;
+  email?: string;
+  avatarUri?: string;
+  isFriend?: boolean;
+  outgoingPending?: boolean;
+  incomingPending?: boolean;
+};
+type BackendFriendRequest = {
+  id?: string;
+  peerUserId?: string;
+  peerName?: string;
+  createdAt?: string;
+};
+type BackendFriendRequestList = {
+  incoming?: BackendFriendRequest[];
+  outgoing?: BackendFriendRequest[];
+};
+type FriendRequestItem = {
+  id: string;
+  peerUserId: string;
+  peerName: string;
+  createdAt: number;
+};
+type FriendLookupResult = {
+  id: string;
+  name: string;
+  status: string;
+  email: string;
+  isFriend: boolean;
+  outgoingPending: boolean;
+  incomingPending: boolean;
+};
 type BackendRoom = {
   id?: string;
   title?: string;
@@ -120,6 +156,17 @@ type BackendRoom = {
   unread?: number;
   preview?: string;
   updatedAt?: string | number;
+};
+type BackendRoomMessage = {
+  id?: string;
+  roomId?: string;
+  senderId?: string;
+  senderName?: string;
+  kind?: MsgKind;
+  text?: string;
+  uri?: string;
+  at?: string | number;
+  delivery?: Delivery;
 };
 type BackendEnvelope<T> = {
   ok?: boolean;
@@ -143,8 +190,24 @@ type PersistedSession = {
 
 const MY_ID = 'me';
 const URL_REGEX = /https?:\/\/\S+/gi;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const PROFILE_CROP_BOX = 260;
 const SESSION_STORAGE_KEY = 'ourhangout.session.v1';
+const FOREST_GLOWS: Array<{
+  top?: number;
+  bottom?: number;
+  left?: number;
+  right?: number;
+  size: number;
+  color: string;
+}> = [
+  { top: 78, left: 34, size: 7, color: 'rgba(248, 225, 150, 0.72)' },
+  { top: 142, right: 52, size: 6, color: 'rgba(207, 240, 178, 0.65)' },
+  { top: 260, left: 88, size: 5, color: 'rgba(240, 199, 126, 0.62)' },
+  { bottom: 208, right: 40, size: 8, color: 'rgba(200, 234, 183, 0.58)' },
+  { bottom: 126, left: 52, size: 6, color: 'rgba(249, 216, 160, 0.55)' },
+  { bottom: 58, right: 108, size: 4, color: 'rgba(214, 241, 184, 0.48)' },
+];
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const finiteOr = (value: number | null | undefined, fallback = 0) =>
   Number.isFinite(value) ? (value as number) : fallback;
@@ -251,7 +314,9 @@ const TEXT = {
     login: 'Sign in',
     loginBody: 'Use Google sign-in, then set your profile.',
     google: 'Continue with Google',
-    loginSkip: 'Continue without sign-in',
+    loginSkip: 'Preview demo',
+    needsLoginTitle: 'Sign in needed',
+    needsLoginBody: 'This part of the hideout opens after sign-in.',
     loginHintMissing: 'Set app.json extra.googleAuth to enable Google login.',
     loginHintReady: 'Press Google sign-in to continue.',
     loginServerChecking: 'Checking backend connection...',
@@ -285,11 +350,53 @@ const TEXT = {
     addFriend: 'Add friend',
     friendName: 'Friend name',
     friendStatus: 'Status message',
+    friendLookupPlaceholder: 'Enter friend email',
+    friendLookupAction: 'Search',
+    friendLookupNeedQuery: 'Enter email first.',
+    friendLookupInvalidEmail: 'Enter a valid email address.',
+    friendLookupEmpty: 'No user found for this email.',
+    friendIncoming: 'Incoming requests',
+    friendOutgoing: 'Sent requests',
+    friendNoIncoming: 'No incoming requests.',
+    friendNoOutgoing: 'No sent requests.',
+    friendRequestSend: 'Request',
+    friendRequestSent: 'Requested',
+    friendRequestAccept: 'Accept',
+    friendRequestReject: 'Reject',
+    friendAlready: 'Already friend',
+    friendRequestSentDone: 'Friend request sent.',
+    friendRequestAcceptedDone: 'Friend request accepted.',
+    friendRequestRejectedDone: 'Friend request rejected.',
+    friendLoading: 'Loading...',
+    denGreeting: 'Welcome back to the hideout',
+    denGreetingBody: 'Step away from the noise and settle into moss, lantern light, and easy conversation.',
+    denChatsTitle: 'Rooms glowing softly tonight',
+    denChatsBody: 'A calm place to pick up the conversations that matter.',
+    denFriendsTitle: 'Companions of the clearing',
+    denFriendsBody: 'Invite people in and keep your circle close.',
+    denProfileTitle: 'My woodland cabin',
+    denProfileBody: 'Keep your little cabin simple and warm.',
+    denQuickNewChat: 'New circle',
+    denQuickFriends: 'Invite someone',
+    denSectionRooms: 'Cozy corners',
+    denSectionFriends: 'Forest crew',
+    denSectionRequests: 'Footsteps at the gate',
+    denNoRoomsTitle: 'No glowing rooms yet',
+    denNoRoomsBody: 'Start with one friend or gather a little campfire circle.',
+    denQuietNote: 'Slow down. This room can wait for you.',
+    denRoomDirect: 'A quiet corner for two',
+    denRoomGroup: 'A shared fire for the group',
+    denChatHint: 'A warm pocket of conversation, ready when you are.',
+    denFriendHint: 'The people who make the hideout feel lived in.',
+    denProfileHint: 'Keep your own little cabin soft, clear, and welcoming.',
     save: 'Save',
     cancel: 'Cancel',
     remove: 'Remove',
     startChat: 'Start chat',
     profileEdit: 'Edit profile',
+    logout: 'Log out',
+    logoutTitle: 'Log out?',
+    logoutBody: 'You will need Google sign-in again next time.',
     myStatus: 'My status message',
     profilePhoto: 'Profile photo',
     photoPick: 'Choose photo',
@@ -346,7 +453,9 @@ const TEXT = {
     login: '로그인',
     loginBody: '구글 로그인 후 프로필을 설정해요.',
     google: '구글로 계속하기',
-    loginSkip: '로그인 없이 계속',
+    loginSkip: '데모로 둘러보기',
+    needsLoginTitle: '로그인이 필요해요',
+    needsLoginBody: '이 공간은 로그인 후 사용할 수 있어요.',
     loginHintMissing: 'Google 로그인은 app.json extra.googleAuth 설정이 필요해요.',
     loginHintReady: '구글로 계속하기를 눌러 시작해요.',
     loginServerChecking: '백엔드 연결을 확인 중이에요...',
@@ -380,11 +489,53 @@ const TEXT = {
     addFriend: '친구 추가',
     friendName: '친구 이름',
     friendStatus: '상태 메시지',
+    friendLookupPlaceholder: '친구 이메일 입력',
+    friendLookupAction: '검색',
+    friendLookupNeedQuery: '이메일을 먼저 입력해 주세요.',
+    friendLookupInvalidEmail: '올바른 이메일 형식으로 입력해 주세요.',
+    friendLookupEmpty: '해당 이메일의 사용자가 없어요.',
+    friendIncoming: '받은 요청',
+    friendOutgoing: '보낸 요청',
+    friendNoIncoming: '받은 요청이 없어요.',
+    friendNoOutgoing: '보낸 요청이 없어요.',
+    friendRequestSend: '요청',
+    friendRequestSent: '요청됨',
+    friendRequestAccept: '수락',
+    friendRequestReject: '거절',
+    friendAlready: '이미 친구',
+    friendRequestSentDone: '친구 요청을 보냈어요.',
+    friendRequestAcceptedDone: '친구 요청을 수락했어요.',
+    friendRequestRejectedDone: '친구 요청을 거절했어요.',
+    friendLoading: '불러오는 중...',
+    denGreeting: '숲속 아지트에 다시 왔어요',
+    denGreetingBody: '바깥의 소음을 잠시 내려두고, 이끼 냄새와 등불빛 사이에서 천천히 쉬어가요.',
+    denChatsTitle: '오늘의 아지트 대화',
+    denChatsBody: '중요한 대화를 조용히 이어가는 공간이에요.',
+    denFriendsTitle: '아지트를 함께할 사람들',
+    denFriendsBody: '사람을 초대하고, 가까운 사람들을 곁에 두세요.',
+    denProfileTitle: '나의 작은 숲 오두막',
+    denProfileBody: '내 작은 오두막을 단정하고 따뜻하게 가꿔요.',
+    denQuickNewChat: '새 모임',
+    denQuickFriends: '친구 초대',
+    denSectionRooms: '포근한 대화방',
+    denSectionFriends: '숲속 친구들',
+    denSectionRequests: '문 앞의 발자국',
+    denNoRoomsTitle: '아직 불이 켜진 방이 없어요',
+    denNoRoomsBody: '친구 한 명과 시작하거나, 작은 모닥불 모임을 만들어 보세요.',
+    denQuietNote: '조금 천천히 가도 괜찮아요. 이 방은 기다려줘요.',
+    denRoomDirect: '둘만의 조용한 쉼터',
+    denRoomGroup: '함께 둘러앉는 숲속 모닥불',
+    denChatHint: '천천히 이어가는 대화가 머무는 따뜻한 공간이에요.',
+    denFriendHint: '이 아지트를 함께 채워 줄 사람들을 가까이 두세요.',
+    denProfileHint: '내 오두막의 온도와 분위기를 다듬는 곳이에요.',
     save: '저장',
     cancel: '취소',
     remove: '삭제',
     startChat: '대화 시작',
     profileEdit: '프로필 수정',
+    logout: '로그아웃',
+    logoutTitle: '로그아웃할까요?',
+    logoutBody: '다음에 다시 구글 로그인이 필요해요.',
     myStatus: '상태 메시지',
     profilePhoto: '프로필 사진',
     photoPick: '사진 선택',
@@ -447,6 +598,14 @@ const localeKey = (): Locale =>
 const uid = () => `${Date.now()}-${Math.round(Math.random() * 99999)}`;
 const tLabel = (ms: number) =>
   new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const roomTimeLabel = (ms: number) => {
+  const target = new Date(ms);
+  const now = new Date();
+  if (target.toDateString() === now.toDateString()) {
+    return tLabel(ms);
+  }
+  return target.toLocaleDateString([], { month: 'short', day: 'numeric' });
+};
 const splitLinkParts = (value: string): Array<{ text: string; url?: string }> => {
   const out: Array<{ text: string; url?: string }> = [];
   let cursor = 0;
@@ -472,31 +631,31 @@ const randomReply = (isKo: boolean) => {
 };
 
 const FOREST = {
-  gradientTop: '#183127',
-  gradientMid: '#31563A',
-  gradientBottom: '#7FAA72',
-  deep: '#102218',
-  card: 'rgba(244,251,238,0.14)',
-  cardStrong: 'rgba(244,251,238,0.2)',
-  border: 'rgba(191,219,178,0.42)',
-  text: '#F3F8EA',
-  textSoft: 'rgba(227,242,218,0.88)',
-  textMuted: 'rgba(208,229,198,0.78)',
-  link: '#E8F7DC',
-  button: '#6E9A5B',
-  buttonBorder: '#A6C694',
-  buttonSoft: 'rgba(162,208,146,0.3)',
-  inputBg: '#F5F8EE',
-  inputText: '#1D3527',
-  placeholder: '#70856B',
-  mineBubble: '#557F49',
-  otherBubble: '#F2F7EC',
-  sheetBg: 'rgba(16,39,26,0.98)',
-  sheetBorder: 'rgba(178,213,163,0.45)',
-  overlay: 'rgba(3,13,8,0.52)',
-  iconDark: 'rgba(20,53,35,0.48)',
-  iconLight: 'rgba(226,244,214,0.26)',
-  badge: '#DF8058',
+  gradientTop: '#09120E',
+  gradientMid: '#193227',
+  gradientBottom: '#425B42',
+  deep: '#050B08',
+  card: 'rgba(20, 33, 26, 0.76)',
+  cardStrong: 'rgba(44, 66, 50, 0.82)',
+  border: 'rgba(190, 215, 173, 0.22)',
+  text: '#F5F0E4',
+  textSoft: 'rgba(238, 231, 216, 0.88)',
+  textMuted: 'rgba(206, 217, 197, 0.72)',
+  link: '#E2F3C8',
+  button: '#6D8F56',
+  buttonBorder: '#B9D191',
+  buttonSoft: 'rgba(139, 176, 117, 0.26)',
+  inputBg: '#F2ECDD',
+  inputText: '#1B2A21',
+  placeholder: '#7A8476',
+  mineBubble: '#5E7B4D',
+  otherBubble: '#F6F0E4',
+  sheetBg: 'rgba(11, 20, 15, 0.97)',
+  sheetBorder: 'rgba(173, 208, 160, 0.3)',
+  overlay: 'rgba(3, 8, 6, 0.68)',
+  iconDark: 'rgba(12, 22, 17, 0.6)',
+  iconLight: 'rgba(223, 239, 208, 0.18)',
+  badge: '#C88453',
 };
 
 function App() {
@@ -606,26 +765,35 @@ function App() {
   });
 
   const [showFriendModal, setShowFriendModal] = useState(false);
-  const [friendNameDraft, setFriendNameDraft] = useState('');
-  const [friendStatusDraft, setFriendStatusDraft] = useState('');
+  const [friendLookupQuery, setFriendLookupQuery] = useState('');
+  const [friendLookupResults, setFriendLookupResults] = useState<FriendLookupResult[]>([]);
+  const [friendLookupMsg, setFriendLookupMsg] = useState('');
+  const [isFriendLookupLoading, setIsFriendLookupLoading] = useState(false);
+  const [friendRequestsIncoming, setFriendRequestsIncoming] = useState<FriendRequestItem[]>([]);
+  const [friendRequestsOutgoing, setFriendRequestsOutgoing] = useState<FriendRequestItem[]>([]);
+  const [friendActionKey, setFriendActionKey] = useState('');
+  const [isFriendSyncing, setIsFriendSyncing] = useState(false);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [groupNameDraft, setGroupNameDraft] = useState('');
   const [groupPick, setGroupPick] = useState<string[]>([]);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [roomMenuId, setRoomMenuId] = useState<string | null>(null);
+  const [wsRetryTick, setWsRetryTick] = useState(0);
 
   const scrollRef = useRef<ScrollView>(null);
   const cropOpenedAtRef = useRef(0);
   const sessionRestoreStartedRef = useRef(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getFriend = (fid: string) => friends.find((f) => f.id === fid);
   const roomTitle = (room: Room) =>
     room.isGroup
       ? room.title
-      : getFriend(room.members.find((m) => m !== MY_ID) ?? '')?.name ?? room.title;
+      : getFriend(room.members.find((m) => m !== currentUserId) ?? '')?.name ?? room.title;
   const roomMembers = (room: Room) =>
     room.members
-      .filter((m) => m !== MY_ID)
+      .filter((m) => m !== currentUserId)
       .map((m) => getFriend(m)?.name ?? '')
       .filter(Boolean)
       .join(', ');
@@ -674,6 +842,51 @@ function App() {
   );
 
   const roomMap = useMemo(() => new Map(rooms.map((r) => [r.id, r])), [rooms]);
+  const knockCount = friendRequestsIncoming.length + friendRequestsOutgoing.length;
+  const activeRoomCompanions = activeRoom?.members.filter((m) => m !== currentUserId).length ?? 0;
+
+  const renderNookHero = ({
+    title,
+    body,
+    iconName,
+    footer,
+    actions,
+  }: {
+    title: string;
+    body: string;
+    iconName: ComponentProps<typeof Ionicons>['name'];
+    footer?: ReactNode;
+    actions?: ReactNode;
+  }) => (
+    <View style={styles.denHero}>
+      <View pointerEvents="none" style={styles.denGlow} />
+      <LinearGradient colors={['rgba(255,248,235,0.06)', 'rgba(14,24,18,0.1)']} style={styles.denHeroSurface}>
+        <View style={styles.denHeroBadge}>
+          <Ionicons name={iconName} size={16} color={FOREST.text} />
+        </View>
+        <View style={styles.denHeroCopy}>
+          <Text style={styles.denTitle}>{title}</Text>
+          <Text style={styles.denBody}>{body}</Text>
+        </View>
+      </LinearGradient>
+      {footer ? <View style={styles.denStatsRow}>{footer}</View> : null}
+      {actions ? <View style={styles.denActionRow}>{actions}</View> : null}
+    </View>
+  );
+
+  const renderDenStat = (
+    iconName: ComponentProps<typeof Ionicons>['name'],
+    value: string | number,
+    label: string
+  ) => (
+    <View style={styles.denStatPill}>
+      <Ionicons name={iconName} size={14} color={FOREST.text} />
+      <View style={styles.denStatCopy}>
+        <Text style={styles.denStatValue}>{value}</Text>
+        <Text style={styles.denStatLabel}>{label}</Text>
+      </View>
+    </View>
+  );
 
   useEffect(() => {
     activeRoomRef.current = activeRoomId;
@@ -684,6 +897,35 @@ function App() {
     const t = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
     return () => clearTimeout(t);
   }, [activeRoomId, activeMsgs.length]);
+
+  useEffect(() => {
+    const token = accessToken.trim();
+    if (!activeRoomId || !token) return;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        await syncRoomMessagesFromBackend(token, activeRoomId);
+        if (!cancelled) {
+          await backendRequest(`/v1/rooms/${activeRoomId}/read`, { method: 'POST' }, token).catch(() => null);
+        }
+      } catch {
+        if (cancelled) return;
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRoomId, accessToken]);
+
+  useEffect(() => {
+    const token = accessToken.trim();
+    if (!activeRoomId || !token) return;
+    const interval = setInterval(() => {
+      void syncRoomMessagesFromBackend(token, activeRoomId).catch(() => null);
+    }, 1800);
+    return () => clearInterval(interval);
+  }, [activeRoomId, accessToken]);
 
   const unwrapEnvelope = <T,>(raw: unknown): T => {
     if (!raw || typeof raw !== 'object') return {} as T;
@@ -700,26 +942,82 @@ function App() {
     init?: RequestInit,
     token?: string
   ): Promise<T> => {
-    const headers: Record<string, string> = {
-      ...(init?.headers as Record<string, string> | undefined),
+    const perform = async (resolvedToken?: string) => {
+      const headers: Record<string, string> = {
+        ...(init?.headers as Record<string, string> | undefined),
+      };
+      if (!headers['Content-Type'] && init?.body) headers['Content-Type'] = 'application/json';
+      if (resolvedToken) headers.Authorization = `Bearer ${resolvedToken}`;
+      const res = await fetch(`${backendBaseUrl}${path}`, { ...(init || {}), headers });
+      const txt = await res.text();
+      let json: unknown = null;
+      if (txt) {
+        try {
+          json = JSON.parse(txt);
+        } catch {
+          json = {};
+        }
+      }
+      return { res, json };
     };
-    if (!headers['Content-Type'] && init?.body) headers['Content-Type'] = 'application/json';
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await fetch(`${backendBaseUrl}${path}`, { ...(init || {}), headers });
-    const txt = await res.text();
-    let json: unknown = null;
-    if (txt) {
+
+    const shouldAttemptRefresh =
+      path !== '/v1/auth/refresh' &&
+      path !== '/v1/auth/google' &&
+      path !== '/health' &&
+      !!refreshToken.trim();
+
+    let resolvedToken = token;
+    let response = await perform(resolvedToken);
+
+    if (response.res.status === 401 && shouldAttemptRefresh) {
       try {
-        json = JSON.parse(txt);
+        const refreshResponse = await perform(undefined);
+        void refreshResponse;
       } catch {
-        json = {};
+        // noop
+      }
+      try {
+        const refreshed = await fetch(`${backendBaseUrl}/v1/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken: refreshToken.trim() }),
+        });
+        const refreshText = await refreshed.text();
+        let refreshJson: unknown = null;
+        if (refreshText) {
+          try {
+            refreshJson = JSON.parse(refreshText);
+          } catch {
+            refreshJson = {};
+          }
+        }
+        if (refreshed.ok) {
+          const refreshData = unwrapEnvelope<BackendAuthData>(refreshJson || {});
+          const nextAccessToken = (refreshData.accessToken || refreshData.tokens?.accessToken || '').trim();
+          const nextRefreshToken =
+            (refreshData.refreshToken || refreshData.tokens?.refreshToken || refreshToken).trim();
+          if (nextAccessToken) {
+            setAccessToken(nextAccessToken);
+            setRefreshToken(nextRefreshToken);
+            await writeSessionToStorage({
+              accessToken: nextAccessToken,
+              ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {}),
+            });
+            resolvedToken = nextAccessToken;
+            response = await perform(resolvedToken);
+          }
+        }
+      } catch {
+        // Keep the original 401 handling below.
       }
     }
-    if (!res.ok) {
-      const body = (json || {}) as BackendEnvelope<unknown>;
-      throw new Error(body.error?.message || body.message || `HTTP ${res.status}`);
+
+    if (!response.res.ok) {
+      const body = (response.json || {}) as BackendEnvelope<unknown>;
+      throw new Error(body.error?.message || body.message || `HTTP ${response.res.status}`);
     }
-    return unwrapEnvelope<T>(json || {});
+    return unwrapEnvelope<T>(response.json || {});
   };
 
   const parseTimestamp = (value: string | number | undefined) => {
@@ -734,6 +1032,127 @@ function App() {
       return (value as BackendListData<T>).items ?? [];
     }
     return [];
+  };
+
+  const mapBackendRoom = (room: BackendRoom, fallbackUserId?: string): Room => ({
+    id: String(room.id || uid()),
+    title: String(room.title || s.directRoomFallback),
+    members:
+      Array.isArray(room.members) && room.members.length
+        ? room.members.map((member) => String(member))
+        : [(fallbackUserId || currentUserId || MY_ID).trim() || MY_ID],
+    isGroup: !!room.isGroup,
+    favorite: !!room.favorite,
+    muted: !!room.muted,
+    unread: Math.max(0, Number(room.unread || 0)),
+    preview: String(room.preview || ''),
+    updatedAt: parseTimestamp(room.updatedAt),
+  });
+
+  const mapBackendMessage = (message: BackendRoomMessage): Message => {
+    const senderId = String(message.senderId || '');
+    return {
+      id: String(message.id || uid()),
+      roomId: String(message.roomId || activeRoomId || ''),
+      senderId,
+      senderName: String(message.senderName || getFriend(senderId)?.name || profile.name || s.me),
+      mine: !!senderId && senderId === currentUserId,
+      kind: (message.kind || 'text') as MsgKind,
+      ...(message.text ? { text: String(message.text) } : {}),
+      ...(message.uri ? { uri: String(message.uri) } : {}),
+      at: parseTimestamp(message.at),
+      delivery: (message.delivery || 'sent') as Delivery,
+    };
+  };
+
+  const previewFromMessage = (message: Pick<Message, 'kind' | 'text'>) => {
+    if (message.kind === 'image') return s.imageLabel;
+    if (message.kind === 'video') return s.videoLabel;
+    return message.text || '';
+  };
+
+  const requireAccessToken = (): string => {
+    const token = accessToken.trim();
+    if (token) return token;
+    Alert.alert(s.needsLoginTitle, s.needsLoginBody);
+    return '';
+  };
+
+  const mapFriendRequests = (value: BackendFriendRequest[] | undefined): FriendRequestItem[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((item) => !!item?.id && !!item?.peerUserId && !!item?.peerName)
+      .map((item) => ({
+        id: String(item.id),
+        peerUserId: String(item.peerUserId),
+        peerName: String(item.peerName),
+        createdAt: parseTimestamp(item.createdAt),
+      }))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  };
+
+  const refreshFriendsAndRequests = async (token: string) => {
+    const [backFriendsRaw, requestsRaw] = await Promise.all([
+      backendRequest<BackendFriend[] | BackendListData<BackendFriend>>('/v1/friends', { method: 'GET' }, token).catch(
+        () => []
+      ),
+      backendRequest<BackendFriendRequestList>('/v1/friends/requests', { method: 'GET' }, token).catch(() => ({
+        incoming: [],
+        outgoing: [],
+      })),
+    ]);
+
+    const backFriends = asListItems<BackendFriend>(backFriendsRaw);
+    if (Array.isArray(backFriends)) {
+      setFriends(
+        backFriends
+          .filter((f) => !!f?.id && !!f?.name)
+          .map((f) => ({
+            id: String(f.id),
+            name: String(f.name),
+            status: String(f.status || ''),
+            trusted: !!f.trusted,
+          }))
+      );
+    }
+
+    setFriendRequestsIncoming(mapFriendRequests(requestsRaw.incoming));
+    setFriendRequestsOutgoing(mapFriendRequests(requestsRaw.outgoing));
+  };
+
+  const refreshRoomsFromBackend = async (token: string, fallbackUserId?: string) => {
+    const backRoomsRaw = await backendRequest<BackendRoom[] | BackendListData<BackendRoom>>(
+      '/v1/rooms',
+      { method: 'GET' },
+      token
+    ).catch(() => []);
+    const backRooms = asListItems<BackendRoom>(backRoomsRaw);
+    if (Array.isArray(backRooms)) {
+      const mapped = backRooms
+        .filter((r) => !!r?.id)
+        .map((r) => mapBackendRoom(r, fallbackUserId));
+      setRooms(mapped);
+      setMessages((prev) => {
+        const next = { ...prev };
+        mapped.forEach((room) => {
+          if (!next[room.id]) next[room.id] = [];
+        });
+        return next;
+      });
+    }
+  };
+
+  const syncRoomMessagesFromBackend = async (token: string, roomId: string) => {
+    const raw = await backendRequest<BackendRoomMessage[] | BackendListData<BackendRoomMessage>>(
+      `/v1/rooms/${roomId}/messages?limit=100`,
+      { method: 'GET' },
+      token
+    );
+    const items = asListItems<BackendRoomMessage>(raw).filter((item) => !!item?.id);
+    setMessages((prev) => ({
+      ...prev,
+      [roomId]: items.map((item) => mapBackendMessage(item)),
+    }));
   };
 
   const syncInitialFromBackend = async (
@@ -755,59 +1174,124 @@ function App() {
     }));
     setNameDraft(resolvedName);
 
-    const backFriendsRaw = await backendRequest<BackendFriend[] | BackendListData<BackendFriend>>(
-      '/v1/friends',
-      { method: 'GET' },
-      token
-    ).catch(() => []);
-    const backFriends = asListItems<BackendFriend>(backFriendsRaw);
-    if (Array.isArray(backFriends)) {
-      setFriends(
-        backFriends
-          .filter((f) => !!f?.id && !!f?.name)
-          .map((f) => ({
-            id: String(f.id),
-            name: String(f.name),
-            status: String(f.status || ''),
-            trusted: !!f.trusted,
-          }))
-      );
-    }
+    await refreshFriendsAndRequests(token);
 
-    const backRoomsRaw = await backendRequest<BackendRoom[] | BackendListData<BackendRoom>>(
-      '/v1/rooms',
-      { method: 'GET' },
-      token
-    ).catch(() => []);
-    const backRooms = asListItems<BackendRoom>(backRoomsRaw);
-    if (Array.isArray(backRooms)) {
-      const mapped = backRooms
-        .filter((r) => !!r?.id)
-        .map((r) => ({
-          id: String(r.id),
-          title: String(r.title || s.directRoomFallback),
-          members:
-            Array.isArray(r.members) && r.members.length
-              ? r.members.map((m) => String(m))
-              : [nextUserId || MY_ID],
-          isGroup: !!r.isGroup,
-          favorite: !!r.favorite,
-          muted: !!r.muted,
-          unread: Math.max(0, Number(r.unread || 0)),
-          preview: String(r.preview || ''),
-          updatedAt: parseTimestamp(r.updatedAt),
-        }));
-      setRooms(mapped);
-      setMessages((prev) => {
-        const next = { ...prev };
-        mapped.forEach((room) => {
-          if (!next[room.id]) next[room.id] = [];
-        });
-        return next;
-        });
-    }
+    await refreshRoomsFromBackend(token, nextUserId);
     return { hasProfileName: resolvedName.length > 0 };
   };
+
+  useEffect(() => {
+    const token = accessToken.trim();
+    if (backendState !== 'ready' || !token) {
+      if (wsReconnectTimerRef.current) {
+        clearTimeout(wsReconnectTimerRef.current);
+        wsReconnectTimerRef.current = null;
+      }
+      wsRef.current?.close();
+      wsRef.current = null;
+      return;
+    }
+
+    let disposed = false;
+    const wsBaseUrl = backendBaseUrl.replace(/^https?/i, (value) =>
+      value.toLowerCase() === 'https' ? 'wss' : 'ws'
+    );
+    const socket = new WebSocket(`${wsBaseUrl}/v1/ws?token=${encodeURIComponent(token)}`);
+    wsRef.current = socket;
+
+    socket.onmessage = (event) => {
+      if (disposed) return;
+      try {
+        const raw = typeof event.data === 'string' ? event.data : String(event.data || '');
+        const payload = JSON.parse(raw) as {
+          type?: string;
+          event?: string;
+          data?: Record<string, unknown>;
+        };
+
+        if (payload.event === 'message.new' && payload.data) {
+          const roomId = typeof payload.data.roomId === 'string' ? payload.data.roomId : '';
+          const message = (payload.data.message || {}) as BackendRoomMessage;
+          if (roomId && message) {
+            void applyRealtimeMessage(token, roomId, message);
+            if (activeRoomRef.current === roomId) {
+              void syncRoomMessagesFromBackend(token, roomId).catch(() => null);
+            }
+          }
+          return;
+        }
+
+        if (payload.event === 'message.delivery' && payload.data) {
+          const roomId = typeof payload.data.roomId === 'string' ? payload.data.roomId : '';
+          const messageId = typeof payload.data.messageId === 'string' ? payload.data.messageId : '';
+          const delivery = typeof payload.data.delivery === 'string' ? (payload.data.delivery as Delivery) : null;
+          if (roomId && messageId && delivery) {
+            setRoomMsgs(roomId, (prev) =>
+              prev.map((message) => (message.id === messageId ? { ...message, delivery } : message))
+            );
+          }
+          return;
+        }
+
+        if (payload.event === 'room.unread.updated' && payload.data) {
+          const roomId = typeof payload.data.roomId === 'string' ? payload.data.roomId : '';
+          const unread = Number(payload.data.unread ?? Number.NaN);
+          if (roomId && Number.isFinite(unread)) {
+            setRooms((prev) => prev.map((room) => (room.id === roomId ? { ...room, unread } : room)));
+          }
+          return;
+        }
+
+        if (payload.event === 'room.updated' && payload.data) {
+          const roomId = typeof payload.data.roomId === 'string' ? payload.data.roomId : '';
+          const deleted = !!payload.data.deleted;
+          if (deleted && roomId && activeRoomRef.current === roomId) {
+            setActiveRoomId(null);
+          }
+          void refreshRoomsFromBackend(token);
+          if (roomId && activeRoomRef.current === roomId) {
+            void syncRoomMessagesFromBackend(token, roomId).catch(() => null);
+          }
+          return;
+        }
+
+        if (payload.event === 'friend.updated') {
+          void refreshFriendsAndRequests(token);
+        }
+      } catch {
+        // Ignore malformed websocket payloads and keep the socket alive.
+      }
+    };
+
+    socket.onclose = () => {
+      if (wsRef.current === socket) {
+        wsRef.current = null;
+      }
+      if (disposed) return;
+      if (wsReconnectTimerRef.current) {
+        clearTimeout(wsReconnectTimerRef.current);
+      }
+      wsReconnectTimerRef.current = setTimeout(() => {
+        setWsRetryTick((value) => value + 1);
+      }, 1500);
+    };
+
+    socket.onerror = () => {
+      // The close handler drives reconnect.
+    };
+
+    return () => {
+      disposed = true;
+      if (wsReconnectTimerRef.current) {
+        clearTimeout(wsReconnectTimerRef.current);
+        wsReconnectTimerRef.current = null;
+      }
+      if (wsRef.current === socket) {
+        wsRef.current = null;
+      }
+      socket.close();
+    };
+  }, [accessToken, backendBaseUrl, backendState, wsRetryTick]);
 
   useEffect(() => {
     let cancelled = false;
@@ -967,9 +1451,9 @@ function App() {
         });
         setAccessToken(nextAccessToken);
         setRefreshToken(nextRefreshToken);
-        await syncInitialFromBackend(nextAccessToken, authData.user);
+        const synced = await syncInitialFromBackend(nextAccessToken, authData.user);
         if (cancelled) return;
-        setStage('setup_name');
+        setStage(synced.hasProfileName ? 'app' : 'setup_name');
       } catch (err) {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : '';
@@ -1062,21 +1546,90 @@ function App() {
     touchRoom(rid, text, false);
   };
 
-  const ensureDirectRoom = (fid: string) => {
+  const applyRealtimeMessage = async (token: string, roomId: string, rawMessage: BackendRoomMessage) => {
+    const mapped = mapBackendMessage({ ...rawMessage, roomId: rawMessage.roomId || roomId });
+    let inserted = false;
+
+    setMessages((prev) => {
+      const existing = prev[roomId] ?? [];
+      const index = existing.findIndex((message) => message.id === mapped.id);
+      if (index >= 0) {
+        const next = [...existing];
+        next[index] = { ...next[index], ...mapped };
+        next.sort((a, b) => a.at - b.at);
+        return { ...prev, [roomId]: next };
+      }
+      inserted = true;
+      return { ...prev, [roomId]: [...existing, mapped].sort((a, b) => a.at - b.at) };
+    });
+
+    setRooms((prev) => {
+      const exists = prev.some((room) => room.id === roomId);
+      if (!exists) return prev;
+      return prev.map((room) =>
+        room.id === roomId
+          ? {
+              ...room,
+              preview: previewFromMessage(mapped),
+              updatedAt: Math.max(room.updatedAt, mapped.at),
+              unread: inserted && !mapped.mine && activeRoomRef.current !== roomId ? room.unread + 1 : room.unread,
+            }
+          : room
+      );
+    });
+
+    if (!rooms.some((room) => room.id === roomId)) {
+      void refreshRoomsFromBackend(token);
+    }
+
+    if (activeRoomRef.current === roomId && !mapped.mine) {
+      await backendRequest(
+        `/v1/rooms/${roomId}/read`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ lastReadMessageId: mapped.id }),
+        },
+        token
+      ).catch(() => null);
+    }
+  };
+
+  const ensureDirectRoom = async (fid: string) => {
     const old = rooms.find(
       (r) =>
         !r.isGroup &&
         r.members.length === 2 &&
-        r.members.includes(MY_ID) &&
+        r.members.includes(currentUserId) &&
         r.members.includes(fid)
     );
     if (old) return old.id;
+
+    const token = accessToken.trim();
+    if (token) {
+      try {
+        const backRoom = await backendRequest<BackendRoom>(
+          '/v1/rooms/direct',
+          {
+            method: 'POST',
+            body: JSON.stringify({ friendUserId: fid }),
+          },
+          token
+        );
+        const mapped = mapBackendRoom(backRoom, currentUserId);
+        setRooms((prev) => [mapped, ...prev.filter((room) => room.id !== mapped.id)]);
+        setMessages((prev) => ({ ...prev, [mapped.id]: prev[mapped.id] ?? [] }));
+        return mapped.id;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        Alert.alert(msg || s.loginBackendSyncFailed);
+      }
+    }
 
     const rid = uid();
     const room: Room = {
       id: rid,
       title: getFriend(fid)?.name ?? s.directRoomFallback,
-      members: [MY_ID, fid],
+      members: [currentUserId, fid],
       isGroup: false,
       favorite: false,
       muted: false,
@@ -1090,6 +1643,11 @@ function App() {
     return rid;
   };
 
+  const startDirectRoom = async (fid: string) => {
+    const rid = await ensureDirectRoom(fid);
+    openRoom(rid);
+  };
+
   const openRoom = (rid: string) => {
     setActiveRoomId(rid);
     setTab('chats');
@@ -1098,25 +1656,147 @@ function App() {
     setRooms((p) => p.map((r) => (r.id === rid ? { ...r, unread: 0 } : r)));
   };
 
-  const addFriend = () => {
-    const name = friendNameDraft.trim();
-    if (!name) return;
-    if (friends.some((f) => f.name.toLowerCase() === name.toLowerCase())) {
-      setShowFriendModal(false);
-      return;
+  const refreshFriendTabData = async () => {
+    const token = accessToken.trim();
+    if (!token) return;
+    setIsFriendSyncing(true);
+    try {
+      await refreshFriendsAndRequests(token);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg) Alert.alert(msg);
+    } finally {
+      setIsFriendSyncing(false);
     }
-    setFriends((p) => [
-      ...p,
-      { id: uid(), name, status: friendStatusDraft.trim(), trusted: false },
-    ]);
-    setFriendNameDraft('');
-    setFriendStatusDraft('');
-    setShowFriendModal(false);
   };
 
-  const createGroup = () => {
+  const openFriendModal = () => {
+    setFriendLookupQuery('');
+    setFriendLookupResults([]);
+    setFriendLookupMsg('');
+    setShowFriendModal(true);
+  };
+
+  const searchFriendCandidates = async () => {
+    const token = requireAccessToken();
+    if (!token) return;
+    const query = friendLookupQuery.trim();
+    if (!query) {
+      setFriendLookupMsg(s.friendLookupNeedQuery);
+      setFriendLookupResults([]);
+      return;
+    }
+    if (!EMAIL_REGEX.test(query)) {
+      setFriendLookupMsg(s.friendLookupInvalidEmail);
+      setFriendLookupResults([]);
+      return;
+    }
+    setFriendLookupMsg('');
+    setIsFriendLookupLoading(true);
+    try {
+      const encoded = encodeURIComponent(query);
+      const raw = await backendRequest<BackendFriendSearchUser[] | BackendListData<BackendFriendSearchUser>>(
+        `/v1/friends/search?q=${encoded}&limit=20`,
+        { method: 'GET' },
+        token
+      );
+      const emailQuery = query.toLowerCase();
+      const items = asListItems<BackendFriendSearchUser>(raw)
+        .filter((item) => {
+          if (!item?.id || !item?.name || !item?.email) return false;
+          return String(item.email).trim().toLowerCase() === emailQuery;
+        })
+        .map((item) => ({
+          id: String(item.id),
+          name: String(item.name),
+          status: String(item.status || ''),
+          email: String(item.email),
+          isFriend: !!item.isFriend,
+          outgoingPending: !!item.outgoingPending,
+          incomingPending: !!item.incomingPending,
+        }));
+      setFriendLookupResults(items);
+      if (items.length === 0) setFriendLookupMsg(s.friendLookupEmpty);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      setFriendLookupMsg(msg || s.loginBackendSyncFailed);
+      setFriendLookupResults([]);
+    } finally {
+      setIsFriendLookupLoading(false);
+    }
+  };
+
+  const sendFriendRequest = async (targetUserId: string) => {
+    const token = requireAccessToken();
+    if (!token) return;
+    const actionKey = `send:${targetUserId}`;
+    setFriendActionKey(actionKey);
+    try {
+      await backendRequest(
+        '/v1/friends/requests',
+        {
+          method: 'POST',
+          body: JSON.stringify({ targetUserId }),
+        },
+        token
+      );
+      await refreshFriendsAndRequests(token);
+      setFriendLookupResults((prev) =>
+        prev.map((item) =>
+          item.id === targetUserId ? { ...item, outgoingPending: true, incomingPending: false } : item
+        )
+      );
+      Alert.alert(s.friendRequestSentDone);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(msg || s.loginBackendSyncFailed);
+    } finally {
+      setFriendActionKey('');
+    }
+  };
+
+  const acceptFriendRequest = async (requestId: string) => {
+    const token = requireAccessToken();
+    if (!token) return;
+    const actionKey = `accept:${requestId}`;
+    setFriendActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/friends/requests/${requestId}/accept`, { method: 'POST' }, token);
+      await Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token)]);
+      Alert.alert(s.friendRequestAcceptedDone);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(msg || s.loginBackendSyncFailed);
+    } finally {
+      setFriendActionKey('');
+    }
+  };
+
+  const rejectFriendRequest = async (requestId: string) => {
+    const token = requireAccessToken();
+    if (!token) return;
+    const actionKey = `reject:${requestId}`;
+    setFriendActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/friends/requests/${requestId}/reject`, { method: 'POST' }, token);
+      await refreshFriendsAndRequests(token);
+      Alert.alert(s.friendRequestRejectedDone);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(msg || s.loginBackendSyncFailed);
+    } finally {
+      setFriendActionKey('');
+    }
+  };
+
+  useEffect(() => {
+    if (tab !== 'friends') return;
+    if (!accessToken.trim()) return;
+    void refreshFriendTabData();
+  }, [tab, accessToken]);
+
+  const createGroup = async () => {
     if (groupPick.length < 2) return;
-    const rid = uid();
     const title =
       groupNameDraft.trim() ||
       groupPick
@@ -1125,10 +1805,36 @@ function App() {
         .slice(0, 3)
         .join(', ');
 
+    const token = accessToken.trim();
+    if (token) {
+      try {
+        const backRoom = await backendRequest<BackendRoom>(
+          '/v1/rooms/group',
+          {
+            method: 'POST',
+            body: JSON.stringify({ title, memberUserIds: groupPick }),
+          },
+          token
+        );
+        const mapped = mapBackendRoom(backRoom, currentUserId);
+        setRooms((prev) => [mapped, ...prev.filter((room) => room.id !== mapped.id)]);
+        setMessages((prev) => ({ ...prev, [mapped.id]: prev[mapped.id] ?? [] }));
+        setGroupNameDraft('');
+        setGroupPick([]);
+        setShowGroupModal(false);
+        openRoom(mapped.id);
+        return;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        Alert.alert(msg || s.loginBackendSyncFailed);
+      }
+    }
+
+    const rid = uid();
     const room: Room = {
       id: rid,
       title,
-      members: [MY_ID, ...groupPick],
+      members: [currentUserId, ...groupPick],
       isGroup: true,
       favorite: false,
       muted: false,
@@ -1148,17 +1854,45 @@ function App() {
   const updateDelivery = (rid: string, mid: string, d: Delivery) =>
     setRoomMsgs(rid, (p) => p.map((m) => (m.id === mid ? { ...m, delivery: d } : m)));
 
-  const send = () => {
+  const send = async () => {
     if (!activeRoom) return;
     const text = input.trim();
     if (!text && !draftMedia) return;
+
+    const token = accessToken.trim();
+    if (token && text && !draftMedia) {
+      try {
+        const created = await backendRequest<BackendRoomMessage>(
+          `/v1/rooms/${activeRoom.id}/messages`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              clientMessageId: uid(),
+              kind: 'text',
+              text,
+            }),
+          },
+          token
+        );
+        const mapped = mapBackendMessage(created);
+        setRoomMsgs(activeRoom.id, (prev) => [...prev, mapped]);
+        touchRoom(activeRoom.id, mapped.text || '', false);
+        setInput('');
+        setDraftMedia(null);
+        return;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        Alert.alert(msg || s.loginBackendSyncFailed);
+        return;
+      }
+    }
 
     const out: Message[] = [];
     if (text) {
       out.push({
         id: uid(),
         roomId: activeRoom.id,
-        senderId: MY_ID,
+        senderId: currentUserId,
         senderName: profile.name || s.me,
         mine: true,
         kind: 'text',
@@ -1172,7 +1906,7 @@ function App() {
       out.push({
         id: uid(),
         roomId: activeRoom.id,
-        senderId: MY_ID,
+        senderId: currentUserId,
         senderName: profile.name || s.me,
         mine: true,
         kind: draftMedia.kind,
@@ -1198,7 +1932,7 @@ function App() {
       setTimeout(() => updateDelivery(activeRoom.id, m.id, 'read'), 760 + i * 180);
     });
 
-    const others = activeRoom.members.filter((m) => m !== MY_ID);
+    const others = activeRoom.members.filter((m) => m !== currentUserId);
     const replier = getFriend(others[Math.floor(Math.random() * others.length)] ?? '');
     if (replier) {
       setTimeout(() => {
@@ -1379,16 +2113,48 @@ function App() {
     }
   };
 
-  const saveProfile = () => {
-    const n = nameDraft.trim();
-    if (!n) return;
+  const persistProfile = async (nextProfile: { name: string; status: string; avatarUri: string }) => {
+    const token = accessToken.trim();
+    if (!token) {
+      setProfile((p) => ({ ...p, ...nextProfile }));
+      return true;
+    }
+    const saved = await backendRequest<BackendProfile>(
+      '/v1/me',
+      {
+        method: 'PATCH',
+        body: JSON.stringify(nextProfile),
+      },
+      token
+    );
     setProfile((p) => ({
       ...p,
+      name: String(saved.name || nextProfile.name),
+      status: String(saved.status || nextProfile.status),
+      email: String(saved.email || p.email),
+      avatarUri: String(saved.avatarUri || nextProfile.avatarUri),
+    }));
+    setNameDraft(String(saved.name || nextProfile.name));
+    setStatusDraft(String(saved.status || nextProfile.status));
+    setProfilePhotoDraft(String(saved.avatarUri || nextProfile.avatarUri));
+    return true;
+  };
+
+  const saveProfile = async () => {
+    const n = nameDraft.trim();
+    if (!n) return;
+    const nextProfile = {
       name: n,
       status: statusDraft.trim(),
       avatarUri: profilePhotoDraft.trim(),
-    }));
-    setShowProfileModal(false);
+    };
+    try {
+      await persistProfile(nextProfile);
+      setShowProfileModal(false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(msg || s.loginBackendSyncFailed);
+    }
   };
 
   const openExternalUrl = async (url: string) => {
@@ -1724,16 +2490,92 @@ function App() {
     </Modal>
   );
 
-  const toggleFavorite = (rid: string) =>
-    setRooms((p) => p.map((r) => (r.id === rid ? { ...r, favorite: !r.favorite } : r)));
-  const toggleMute = (rid: string) =>
-    setRooms((p) => p.map((r) => (r.id === rid ? { ...r, muted: !r.muted } : r)));
-  const toggleTrusted = (fid: string) =>
-    setFriends((p) => p.map((f) => (f.id === fid ? { ...f, trusted: !f.trusted } : f)));
+  const updateRoomPrefs = async (rid: string, patch: { favorite?: boolean; muted?: boolean }) => {
+    const token = accessToken.trim();
+    const room = rooms.find((item) => item.id === rid);
+    if (!room) return;
+    const nextFavorite = patch.favorite ?? room.favorite;
+    const nextMuted = patch.muted ?? room.muted;
+    if (!token) {
+      setRooms((p) => p.map((r) => (r.id === rid ? { ...r, favorite: nextFavorite, muted: nextMuted } : r)));
+      return;
+    }
+    try {
+      const updated = await backendRequest<{ favorite?: boolean; muted?: boolean }>(
+        `/v1/rooms/${rid}/settings`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify(patch),
+        },
+        token
+      );
+      setRooms((p) =>
+        p.map((r) =>
+          r.id === rid
+            ? {
+                ...r,
+                favorite: updated.favorite ?? nextFavorite,
+                muted: updated.muted ?? nextMuted,
+              }
+            : r
+        )
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(msg || s.loginBackendSyncFailed);
+    }
+  };
+
+  const toggleFavorite = (rid: string) => {
+    const room = rooms.find((item) => item.id === rid);
+    if (!room) return;
+    void updateRoomPrefs(rid, { favorite: !room.favorite });
+  };
+
+  const toggleMute = (rid: string) => {
+    const room = rooms.find((item) => item.id === rid);
+    if (!room) return;
+    void updateRoomPrefs(rid, { muted: !room.muted });
+  };
+  const toggleTrusted = async (fid: string) => {
+    const token = requireAccessToken();
+    if (!token) return;
+    const friend = friends.find((item) => item.id === fid);
+    if (!friend) return;
+    const nextTrusted = !friend.trusted;
+    const actionKey = `trusted:${fid}`;
+    setFriendActionKey(actionKey);
+    try {
+      await backendRequest(
+        `/v1/friends/${fid}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ trusted: nextTrusted }),
+        },
+        token
+      );
+      setFriends((p) => p.map((f) => (f.id === fid ? { ...f, trusted: nextTrusted } : f)));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(msg || s.loginBackendSyncFailed);
+    } finally {
+      setFriendActionKey('');
+    }
+  };
   const toggleGroupPick = (fid: string) =>
     setGroupPick((p) => (p.includes(fid) ? p.filter((x) => x !== fid) : [...p, fid]));
 
-  const deleteRoom = (rid: string) => {
+  const deleteRoom = async (rid: string) => {
+    const token = accessToken.trim();
+    if (token) {
+      try {
+        await backendRequest(`/v1/rooms/${rid}`, { method: 'DELETE' }, token);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        Alert.alert(msg || s.loginBackendSyncFailed);
+        return;
+      }
+    }
     setRooms((p) => p.filter((r) => r.id !== rid));
     setMessages((p) => {
       const next = { ...p };
@@ -1749,6 +2591,60 @@ function App() {
     setRoomMenuId(null);
   };
 
+  const resetForLogout = () => {
+    setAccessToken('');
+    setRefreshToken('');
+    setCurrentUserId(MY_ID);
+    setStage('login');
+    setTab('chats');
+    setActiveRoomId(null);
+    setProfile({ name: '', status: '', email: '', avatarUri: '' });
+    setNameDraft('');
+    setStatusDraft('');
+    setProfilePhotoDraft('');
+    setFriends([]);
+    setRooms([]);
+    setMessages({});
+    setChatQuery('');
+    setFriendQuery('');
+    setFriendLookupQuery('');
+    setFriendLookupResults([]);
+    setFriendLookupMsg('');
+    setIsFriendLookupLoading(false);
+    setFriendRequestsIncoming([]);
+    setFriendRequestsOutgoing([]);
+    setFriendActionKey('');
+    setIsFriendSyncing(false);
+    setInput('');
+    setDraftMedia(null);
+    setShowProfileModal(false);
+    setShowFriendModal(false);
+    setShowGroupModal(false);
+    setRoomMenuId(null);
+    setLoginErr('');
+  };
+
+  const requestLogout = () => {
+    Alert.alert(s.logoutTitle, s.logoutBody, [
+      { text: s.cancel, style: 'cancel' },
+      {
+        text: s.logout,
+        style: 'destructive',
+        onPress: () => {
+          const run = async () => {
+            try {
+              await clearSessionInStorage();
+            } finally {
+              setIsSessionRestoring(false);
+              resetForLogout();
+            }
+          };
+          void run();
+        },
+      },
+    ]);
+  };
+
   const kbBehavior = Platform.OS === 'ios' ? 'padding' : 'height';
   const sheetBottomInset = Math.max(insets.bottom, 12);
   const ForestBackdrop = () => (
@@ -1756,6 +2652,25 @@ function App() {
       <View pointerEvents="none" style={styles.bgOrbTop} />
       <View pointerEvents="none" style={styles.bgOrbMid} />
       <View pointerEvents="none" style={styles.bgOrbBottom} />
+      {FOREST_GLOWS.map((glow, index) => (
+        <View
+          key={`glow-${index}`}
+          pointerEvents="none"
+          style={[
+            styles.firefly,
+            {
+              top: glow.top,
+              bottom: glow.bottom,
+              left: glow.left,
+              right: glow.right,
+              width: glow.size,
+              height: glow.size,
+              borderRadius: glow.size / 2,
+              backgroundColor: glow.color,
+            },
+          ]}
+        />
+      ))}
     </>
   );
 
@@ -1847,13 +2762,21 @@ function App() {
                     setStage('setup_intro');
                     return;
                   }
-                  setProfile((p) => ({
-                    ...p,
-                    name: nameDraft.trim() || p.name,
-                    status: statusDraft.trim() || p.status || s.defaultStatus,
-                    avatarUri: profilePhotoDraft.trim() || p.avatarUri,
-                  }));
-                  setStage('app');
+                  const nextProfile = {
+                    name: nameDraft.trim() || profile.name,
+                    status: statusDraft.trim() || profile.status || s.defaultStatus,
+                    avatarUri: profilePhotoDraft.trim() || profile.avatarUri,
+                  };
+                  const run = async () => {
+                    try {
+                      await persistProfile(nextProfile);
+                      setStage('app');
+                    } catch (err) {
+                      const msg = err instanceof Error ? err.message : '';
+                      Alert.alert(msg || s.loginBackendSyncFailed);
+                    }
+                  };
+                  void run();
                 }}
                 disabled={setupBlocked}
               >
@@ -1878,11 +2801,18 @@ function App() {
         >
           {activeRoom ? (
             <>
-              <View style={styles.header}>
+              <View style={[styles.header, styles.headerRetreat]}>
                 <Pressable style={styles.iconDark} onPress={() => setActiveRoomId(null)}>
                   <Ionicons name="chevron-back" size={18} color={FOREST.text} />
                 </Pressable>
-                <Text style={styles.title}>{roomTitle(activeRoom)}</Text>
+                <View style={styles.headerCopy}>
+                  <Text style={styles.title}>{roomTitle(activeRoom)}</Text>
+                  <Text style={styles.headerMeta}>
+                    {activeRoom.isGroup
+                      ? `${s.denRoomGroup} · ${activeRoomCompanions} ${isKo ? '명과 함께' : 'companions nearby'}`
+                      : s.denRoomDirect}
+                  </Text>
+                </View>
                 <Pressable style={styles.iconDark} onPress={() => setRoomMenuId(activeRoom.id)}>
                   <Ionicons name="ellipsis-horizontal" size={18} color={FOREST.text} />
                 </Pressable>
@@ -1890,9 +2820,24 @@ function App() {
 
               <View style={styles.main}>
                 <ScrollView ref={scrollRef} contentContainerStyle={styles.list}>
+                  <View style={styles.roomSceneCard}>
+                    <View style={styles.roomSceneIcon}>
+                      <Ionicons name={activeRoom.isGroup ? 'bonfire-outline' : 'leaf-outline'} size={16} color={FOREST.text} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.sectionTitle}>{activeRoom.isGroup ? s.denRoomGroup : s.denRoomDirect}</Text>
+                      <Text style={styles.roomSceneText}>{s.denQuietNote}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.roomDayChip}>
+                    <Text style={styles.roomDayChipText}>
+                      {new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}
+                    </Text>
+                  </View>
                   {activeMsgs.length === 0 ? (
-                    <View style={styles.empty}>
-                      <Text style={styles.sub}>{s.noMsg}</Text>
+                    <View style={[styles.empty, styles.emptyCove]}>
+                      <Text style={styles.h1}>{s.noMsg}</Text>
+                      <Text style={styles.sub}>{s.denQuietNote}</Text>
                       <Pressable style={styles.btn} onPress={() => setInput(s.hello)}>
                         <Text style={styles.btnText}>{s.firstMsg}</Text>
                       </Pressable>
@@ -1900,6 +2845,9 @@ function App() {
                   ) : (
                     activeMsgs.map((m) => (
                       <View key={m.id} style={[styles.bubbleRow, m.mine ? styles.mineRow : styles.otherRow]}>
+                        {!m.mine && m.kind !== 'system' ? (
+                          <Text style={styles.roomSender}>{m.senderName}</Text>
+                        ) : null}
                         <View style={[styles.bubble, m.mine ? styles.mineBubble : styles.otherBubble]}>
                           {m.kind === 'text' ? renderMessageText(m.text || '', m.mine) : null}
                           {m.kind === 'image' ? <Image source={{ uri: m.uri }} style={styles.media} /> : null}
@@ -1924,13 +2872,14 @@ function App() {
 
               <View style={styles.composer}>
                 {draftMedia ? (
-                  <View style={styles.draft}>
+                  <View style={[styles.draft, styles.draftNest]}>
                     <Text style={styles.sub}>{draftMedia.kind === 'image' ? s.imageSelected : s.videoSelected}</Text>
                     <Pressable onPress={() => setDraftMedia(null)}>
                       <Ionicons name="close-circle" size={18} color={FOREST.text} />
                     </Pressable>
                   </View>
                 ) : null}
+                <Text style={styles.composerHint}>{s.denQuietNote}</Text>
                 <View style={styles.row}>
                   <Pressable style={styles.iconLight} onPress={() => pickMedia('image')}>
                     <Ionicons name="image" size={16} color={FOREST.text} />
@@ -1949,7 +2898,9 @@ function App() {
                   <Pressable
                     style={[styles.send, !input.trim() && !draftMedia && styles.off]}
                     disabled={!input.trim() && !draftMedia}
-                    onPress={send}
+                    onPress={() => {
+                      void send();
+                    }}
                   >
                     <Ionicons name="arrow-up" size={16} color="#fff" />
                   </Pressable>
@@ -1980,15 +2931,31 @@ function App() {
 
               <View style={styles.main}>
                 {tab === 'chats' ? (
-                  <>
-                    <View style={styles.row}>
-                      <Pressable style={styles.smallBtn} onPress={() => setShowGroupModal(true)}>
-                        <Text style={styles.smallBtnText}>{s.newGroup}</Text>
-                      </Pressable>
-                      <Pressable style={styles.smallBtn} onPress={() => setTab('friends')}>
-                        <Text style={styles.smallBtnText}>{s.goFriends}</Text>
-                      </Pressable>
-                    </View>
+                  <ScrollView contentContainerStyle={styles.list}>
+                    {renderNookHero({
+                      title: s.denChatsTitle,
+                      body: s.denChatsBody,
+                      iconName: 'moon-outline',
+                      footer: (
+                        <>
+                          {renderDenStat('people-outline', stats.friends, s.statsFriends)}
+                          {renderDenStat('chatbubble-ellipses-outline', stats.rooms, s.statsRooms)}
+                          {renderDenStat('star-outline', stats.favs, s.statsFavs)}
+                        </>
+                      ),
+                      actions: (
+                        <>
+                          <Pressable style={styles.heroBtn} onPress={() => setShowGroupModal(true)}>
+                            <Ionicons name="bonfire-outline" size={15} color={FOREST.text} />
+                            <Text style={styles.heroBtnText}>{s.denQuickNewChat}</Text>
+                          </Pressable>
+                          <Pressable style={styles.heroBtn} onPress={() => setTab('friends')}>
+                            <Ionicons name="people-outline" size={15} color={FOREST.text} />
+                            <Text style={styles.heroBtnText}>{s.denQuickFriends}</Text>
+                          </Pressable>
+                        </>
+                      ),
+                    })}
                     <TextInput
                       style={styles.field}
                       placeholder={s.searchChats}
@@ -1997,57 +2964,141 @@ function App() {
                       onChangeText={setChatQuery}
                     />
                     {sortedRooms.length === 0 ? (
-                      <View style={styles.empty}>
-                        <Text style={styles.h1}>{s.noRooms}</Text>
-                        <Text style={styles.sub}>{s.noRoomsBody}</Text>
+                      <View style={[styles.empty, styles.emptyCove]}>
+                        <Text style={styles.h1}>{s.denNoRoomsTitle}</Text>
+                        <Text style={styles.sub}>{s.denNoRoomsBody}</Text>
                       </View>
                     ) : filteredRooms.length === 0 ? (
-                      <View style={styles.empty}>
+                      <View style={[styles.empty, styles.emptyCove]}>
                         <Text style={styles.sub}>{s.noSearchRooms}</Text>
                       </View>
                     ) : (
-                      <ScrollView contentContainerStyle={styles.list}>
+                      <>
+                        <Text style={styles.sectionTitle}>{s.denSectionRooms}</Text>
                         {filteredRooms.map((r) => (
-                          <Pressable key={r.id} style={styles.item} onPress={() => openRoom(r.id)}>
-                            <View style={styles.listAvatar}>
-                              <Text style={styles.listAvatarText}>
-                                {roomTitle(r).slice(0, 1).toUpperCase()}
-                              </Text>
-                            </View>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.itemTitle}>{roomTitle(r)}</Text>
-                              <Text style={styles.sub} numberOfLines={1}>{r.preview || roomMembers(r)}</Text>
-                            </View>
-                            <View style={styles.itemRight}>
-                              {r.unread > 0 ? (
-                                <View style={styles.badge}>
-                                  <Text style={styles.badgeText}>{r.unread > 99 ? '99+' : r.unread}</Text>
+                          <Pressable key={r.id} style={styles.roomItem} onPress={() => openRoom(r.id)}>
+                            <View style={styles.roomItemTop}>
+                              <View style={styles.listAvatar}>
+                                <Text style={styles.listAvatarText}>
+                                  {roomTitle(r).slice(0, 1).toUpperCase()}
+                                </Text>
+                              </View>
+                              <View style={styles.roomItemCopy}>
+                                <View style={styles.roomItemHead}>
+                                  <Text style={[styles.itemTitle, { flex: 1 }]}>{roomTitle(r)}</Text>
+                                  <Text style={styles.roomItemTime}>{roomTimeLabel(r.updatedAt)}</Text>
                                 </View>
-                              ) : null}
-                              <Pressable style={styles.iconLight} onPress={() => toggleFavorite(r.id)}>
-                                <Ionicons name={r.favorite ? 'star' : 'star-outline'} size={16} color={r.favorite ? '#FFD27A' : FOREST.text} />
-                              </Pressable>
-                              <Pressable style={styles.iconLight} onPress={() => setRoomMenuId(r.id)}>
-                                <Ionicons name="ellipsis-horizontal" size={16} color={FOREST.text} />
-                              </Pressable>
+                                <Text style={styles.roomPreview} numberOfLines={2}>
+                                  {r.preview || roomMembers(r) || s.startChat}
+                                </Text>
+                              </View>
+                            </View>
+                            <View style={styles.roomItemFoot}>
+                              <View style={styles.moodChip}>
+                                <Ionicons
+                                  name={r.isGroup ? 'people-outline' : 'chatbubble-outline'}
+                                  size={13}
+                                  color={FOREST.text}
+                                />
+                                <Text style={styles.moodChipText}>
+                                  {r.isGroup ? (isKo ? '모임' : 'Group') : isKo ? '쉼터' : 'Quiet'}
+                                </Text>
+                              </View>
+                              <View style={styles.itemRight}>
+                                {r.unread > 0 ? (
+                                  <View style={styles.badge}>
+                                    <Text style={styles.badgeText}>{r.unread > 99 ? '99+' : r.unread}</Text>
+                                  </View>
+                                ) : null}
+                                <Pressable style={styles.iconLight} onPress={() => toggleFavorite(r.id)}>
+                                  <Ionicons
+                                    name={r.favorite ? 'star' : 'star-outline'}
+                                    size={16}
+                                    color={r.favorite ? '#FFD27A' : FOREST.text}
+                                  />
+                                </Pressable>
+                                <Pressable style={styles.iconLight} onPress={() => setRoomMenuId(r.id)}>
+                                  <Ionicons name="ellipsis-horizontal" size={16} color={FOREST.text} />
+                                </Pressable>
+                              </View>
                             </View>
                           </Pressable>
                         ))}
-                      </ScrollView>
+                      </>
                     )}
-                  </>
+                  </ScrollView>
                 ) : null}
 
                 {tab === 'friends' ? (
-                  <>
-                    <View style={styles.row}>
-                      <Pressable style={styles.smallBtn} onPress={() => setShowFriendModal(true)}>
-                        <Text style={styles.smallBtnText}>{s.addFriend}</Text>
-                      </Pressable>
-                      <Pressable style={styles.smallBtn} onPress={() => setShowGroupModal(true)}>
-                        <Text style={styles.smallBtnText}>{s.newGroup}</Text>
-                      </Pressable>
-                    </View>
+                  <ScrollView contentContainerStyle={styles.list}>
+                    {renderNookHero({
+                      title: s.denFriendsTitle,
+                      body: s.denFriendsBody,
+                      iconName: 'people-circle-outline',
+                      footer: (
+                        <>
+                          {renderDenStat('leaf-outline', friends.length, s.denSectionFriends)}
+                          {renderDenStat('mail-unread-outline', knockCount, s.denSectionRequests)}
+                        </>
+                      ),
+                      actions: (
+                        <>
+                          <Pressable style={styles.heroBtn} onPress={openFriendModal}>
+                            <Ionicons name="person-add-outline" size={15} color={FOREST.text} />
+                            <Text style={styles.heroBtnText}>{s.addFriend}</Text>
+                          </Pressable>
+                          <Pressable style={styles.heroBtn} onPress={() => setShowGroupModal(true)}>
+                            <Ionicons name="bonfire-outline" size={15} color={FOREST.text} />
+                            <Text style={styles.heroBtnText}>{s.newGroup}</Text>
+                          </Pressable>
+                        </>
+                      ),
+                    })}
+                    {isFriendSyncing ? <Text style={styles.sub}>{s.friendLoading}</Text> : null}
+                    {friendRequestsIncoming.length > 0 ? (
+                      <>
+                        <Text style={styles.sectionTitle}>{s.friendIncoming}</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
+                          {friendRequestsIncoming.map((req) => (
+                            <View key={req.id} style={styles.requestCard}>
+                              <Text style={styles.itemTitle}>{req.peerName}</Text>
+                              <Text style={styles.sub}>
+                                {new Date(req.createdAt).toLocaleDateString()}
+                              </Text>
+                              <View style={styles.row}>
+                                <Pressable
+                                  style={[styles.requestBtn, !!friendActionKey && styles.off]}
+                                  disabled={!!friendActionKey}
+                                  onPress={() => void acceptFriendRequest(req.id)}
+                                >
+                                  <Text style={styles.requestBtnText}>{s.friendRequestAccept}</Text>
+                                </Pressable>
+                                <Pressable
+                                  style={[styles.requestBtn, !!friendActionKey && styles.off]}
+                                  disabled={!!friendActionKey}
+                                  onPress={() => void rejectFriendRequest(req.id)}
+                                >
+                                  <Text style={styles.requestBtnText}>{s.friendRequestReject}</Text>
+                                </Pressable>
+                              </View>
+                            </View>
+                          ))}
+                        </ScrollView>
+                      </>
+                    ) : null}
+                    {friendRequestsOutgoing.length > 0 ? (
+                      <>
+                        <Text style={styles.sectionTitle}>{s.friendOutgoing}</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
+                          {friendRequestsOutgoing.map((req) => (
+                            <View key={req.id} style={styles.requestCard}>
+                              <Text style={styles.itemTitle}>{req.peerName}</Text>
+                              <Text style={styles.sub}>{s.friendRequestSent}</Text>
+                            </View>
+                          ))}
+                        </ScrollView>
+                      </>
+                    ) : null}
                     <TextInput
                       style={styles.field}
                       placeholder={s.searchFriends}
@@ -2056,38 +3107,79 @@ function App() {
                       onChangeText={setFriendQuery}
                     />
                     {friends.length === 0 ? (
-                      <View style={styles.empty}><Text style={styles.sub}>{s.noFriends}</Text></View>
+                      <View style={[styles.empty, styles.emptyCove]}>
+                        <Text style={styles.h1}>{s.noFriends}</Text>
+                        <Text style={styles.sub}>{s.denFriendHint}</Text>
+                      </View>
                     ) : filteredFriends.length === 0 ? (
-                      <View style={styles.empty}><Text style={styles.sub}>{s.noSearchFriends}</Text></View>
+                      <View style={[styles.empty, styles.emptyCove]}>
+                        <Text style={styles.sub}>{s.noSearchFriends}</Text>
+                      </View>
                     ) : (
-                      <ScrollView contentContainerStyle={styles.list}>
-                        {filteredFriends.map((f) => (
-                          <View key={f.id} style={styles.item}>
-                            <View style={styles.listAvatar}>
-                              <Text style={styles.listAvatarText}>
-                                {f.name.slice(0, 1).toUpperCase()}
-                              </Text>
+                      <>
+                        <Text style={styles.sectionTitle}>{s.denSectionFriends}</Text>
+                        {filteredFriends.map((f) => {
+                          const trustedBusy = friendActionKey === `trusted:${f.id}`;
+                          return (
+                            <View key={f.id} style={styles.friendItem}>
+                              <View style={styles.listAvatar}>
+                                <Text style={styles.listAvatarText}>
+                                  {f.name.slice(0, 1).toUpperCase()}
+                                </Text>
+                              </View>
+                              <View style={styles.friendItemCopy}>
+                                <Text style={styles.itemTitle}>{f.name}</Text>
+                                <Text style={styles.sub}>{f.status || s.startChat}</Text>
+                                <View style={styles.friendMetaRow}>
+                                  <View style={[styles.moodChip, f.trusted && styles.trustPill]}>
+                                    <Ionicons
+                                      name={f.trusted ? 'shield-checkmark' : 'leaf-outline'}
+                                      size={12}
+                                      color={FOREST.text}
+                                    />
+                                    <Text style={styles.moodChipText}>
+                                      {f.trusted ? (isKo ? '믿는 친구' : 'Trusted') : (isKo ? '함께 쉬는 친구' : 'Gentle company')}
+                                    </Text>
+                                  </View>
+                                </View>
+                              </View>
+                              <Pressable
+                                style={[styles.iconLight, (trustedBusy || !!friendActionKey) && styles.off]}
+                                disabled={!!friendActionKey}
+                                onPress={() => void toggleTrusted(f.id)}
+                              >
+                                <Ionicons
+                                  name={f.trusted ? 'shield-checkmark' : 'shield-outline'}
+                                  size={16}
+                                  color={FOREST.text}
+                                />
+                              </Pressable>
+                              <Pressable style={styles.iconLight} onPress={() => void startDirectRoom(f.id)}>
+                                <Ionicons name="chatbubble-ellipses" size={16} color={FOREST.text} />
+                              </Pressable>
                             </View>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.itemTitle}>{f.name}</Text>
-                              <Text style={styles.sub}>{f.status || s.startChat}</Text>
-                            </View>
-                            <Pressable style={styles.iconLight} onPress={() => toggleTrusted(f.id)}>
-                              <Ionicons name={f.trusted ? 'shield-checkmark' : 'shield-outline'} size={16} color={FOREST.text} />
-                            </Pressable>
-                            <Pressable style={styles.iconLight} onPress={() => openRoom(ensureDirectRoom(f.id))}>
-                              <Ionicons name="chatbubble-ellipses" size={16} color={FOREST.text} />
-                            </Pressable>
-                          </View>
-                        ))}
-                      </ScrollView>
+                          );
+                        })}
+                      </>
                     )}
-                  </>
+                  </ScrollView>
                 ) : null}
 
                 {tab === 'profile' ? (
                   <ScrollView contentContainerStyle={styles.list}>
-                    <View style={styles.item}>
+                    {renderNookHero({
+                      title: s.denProfileTitle,
+                      body: s.denProfileBody,
+                      iconName: 'home-outline',
+                      footer: (
+                        <>
+                          {renderDenStat('people-outline', stats.friends, s.statsFriends)}
+                          {renderDenStat('chatbubble-ellipses-outline', stats.rooms, s.statsRooms)}
+                          {renderDenStat('star-outline', stats.favs, s.statsFavs)}
+                        </>
+                      ),
+                    })}
+                    <View style={styles.profileCabinCard}>
                       <View style={styles.profileHero}>
                         {profile.avatarUri ? (
                           <Image source={{ uri: profile.avatarUri }} style={styles.profileAvatar} />
@@ -2099,7 +3191,7 @@ function App() {
                           </View>
                         )}
                       </View>
-                      <View style={styles.profileMeta}>
+                      <View style={styles.profileCabinText}>
                         <Text style={styles.h1}>{profile.name || s.app}</Text>
                         <Text style={styles.profileStatus}>{profile.status || s.myStatus}</Text>
                         <Text style={styles.sub}>{profile.email || '-'}</Text>
@@ -2121,6 +3213,10 @@ function App() {
                       <View style={styles.stat}><Text style={styles.itemTitle}>{stats.rooms}</Text><Text style={styles.sub}>{s.statsRooms}</Text></View>
                       <View style={styles.stat}><Text style={styles.itemTitle}>{stats.favs}</Text><Text style={styles.sub}>{s.statsFavs}</Text></View>
                     </View>
+                    <Pressable style={styles.logoutBtn} onPress={requestLogout}>
+                      <Ionicons name="log-out-outline" size={16} color="#FFDADD" />
+                      <Text style={styles.logoutText}>{s.logout}</Text>
+                    </Pressable>
                   </ScrollView>
                 ) : null}
               </View>
@@ -2161,30 +3257,82 @@ function App() {
                 <Text style={styles.h1}>{s.addFriend}</Text>
                 <TextInput
                   style={styles.field}
-                  placeholder={s.friendName}
+                  placeholder={s.friendLookupPlaceholder}
                   placeholderTextColor={FOREST.placeholder}
-                  value={friendNameDraft}
-                  onChangeText={setFriendNameDraft}
-                />
-                <TextInput
-                  style={styles.field}
-                  placeholder={s.friendStatus}
-                  placeholderTextColor={FOREST.placeholder}
-                  value={friendStatusDraft}
-                  onChangeText={setFriendStatusDraft}
+                  value={friendLookupQuery}
+                  onChangeText={setFriendLookupQuery}
+                  onSubmitEditing={() => {
+                    void searchFriendCandidates();
+                  }}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
                 />
                 <View style={styles.row}>
+                  <Pressable
+                    style={[styles.smallBtn, (!friendLookupQuery.trim() || isFriendLookupLoading) && styles.off]}
+                    disabled={!friendLookupQuery.trim() || isFriendLookupLoading}
+                    onPress={() => {
+                      void searchFriendCandidates();
+                    }}
+                  >
+                    <Text style={styles.smallBtnText}>{s.friendLookupAction}</Text>
+                  </Pressable>
                   <Pressable style={styles.smallBtn} onPress={() => setShowFriendModal(false)}>
                     <Text style={styles.smallBtnText}>{s.cancel}</Text>
                   </Pressable>
-                  <Pressable
-                    style={[styles.smallBtn, !friendNameDraft.trim() && styles.off]}
-                    disabled={!friendNameDraft.trim()}
-                    onPress={addFriend}
-                  >
-                    <Text style={styles.smallBtnText}>{s.save}</Text>
-                  </Pressable>
                 </View>
+                {isFriendLookupLoading ? <Text style={styles.sub}>{s.friendLoading}</Text> : null}
+                {friendLookupMsg ? <Text style={styles.sub}>{friendLookupMsg}</Text> : null}
+                <ScrollView style={{ maxHeight: 260 }} contentContainerStyle={styles.list}>
+                  {friendLookupResults.map((item) => {
+                    const incomingReq = friendRequestsIncoming.find((req) => req.peerUserId === item.id);
+                    const outgoingReq = friendRequestsOutgoing.find((req) => req.peerUserId === item.id);
+                    const hasOutgoing = item.outgoingPending || !!outgoingReq;
+                    const hasIncoming = item.incomingPending || !!incomingReq;
+                    let actionLabel: string = s.friendRequestSend;
+                    let actionDisabled = !!friendActionKey;
+                    let actionHandler: (() => void) | null = () => {
+                      void sendFriendRequest(item.id);
+                    };
+
+                    if (item.isFriend) {
+                      actionLabel = s.friendAlready;
+                      actionDisabled = true;
+                      actionHandler = null;
+                    } else if (hasIncoming && incomingReq) {
+                      actionLabel = s.friendRequestAccept;
+                      actionHandler = () => {
+                        void acceptFriendRequest(incomingReq.id);
+                      };
+                    } else if (hasOutgoing || hasIncoming) {
+                      actionLabel = s.friendRequestSent;
+                      actionDisabled = true;
+                      actionHandler = null;
+                    }
+
+                    return (
+                      <View key={item.id} style={styles.item}>
+                        <View style={styles.listAvatar}>
+                          <Text style={styles.listAvatarText}>{item.name.slice(0, 1).toUpperCase()}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.itemTitle}>{item.name}</Text>
+                          <Text style={styles.sub} numberOfLines={1}>
+                            {item.status || item.email}
+                          </Text>
+                        </View>
+                        <Pressable
+                          style={[styles.requestBtn, actionDisabled && styles.off]}
+                          disabled={actionDisabled || !actionHandler}
+                          onPress={() => actionHandler?.()}
+                        >
+                          <Text style={styles.requestBtnText}>{actionLabel}</Text>
+                        </Pressable>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
               </View>
             </KeyboardAvoidingView>
           </View>
@@ -2229,7 +3377,9 @@ function App() {
                   <Pressable
                     style={[styles.smallBtn, groupPick.length < 2 && styles.off]}
                     disabled={groupPick.length < 2}
-                    onPress={createGroup}
+                    onPress={() => {
+                      void createGroup();
+                    }}
                   >
                     <Text style={styles.smallBtnText}>{s.createRoom}</Text>
                   </Pressable>
@@ -2313,7 +3463,7 @@ function App() {
                     <Pressable style={styles.item} onPress={() => reportRoom(roomMenuId)}>
                       <Text style={styles.itemTitle}>{s.report}</Text>
                     </Pressable>
-                    <Pressable style={styles.item} onPress={() => deleteRoom(roomMenuId)}>
+                    <Pressable style={styles.item} onPress={() => void deleteRoom(roomMenuId)}>
                       <Text style={[styles.itemTitle, { color: '#FFD4DE' }]}>
                         {roomMap.get(roomMenuId)?.isGroup ? s.leaveRoom : s.deleteRoom}
                       </Text>
@@ -2334,62 +3484,74 @@ const styles = StyleSheet.create({
   fill: { flex: 1 },
   bgOrbTop: {
     position: 'absolute',
-    top: -80,
+    top: -70,
     right: -40,
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    backgroundColor: 'rgba(202,228,166,0.24)',
+    width: 250,
+    height: 250,
+    borderRadius: 125,
+    backgroundColor: 'rgba(180, 217, 141, 0.16)',
   },
   bgOrbMid: {
     position: 'absolute',
-    top: 210,
+    top: 240,
     left: -70,
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: 'rgba(124,170,114,0.23)',
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: 'rgba(111, 151, 110, 0.18)',
   },
   bgOrbBottom: {
     position: 'absolute',
-    bottom: -90,
+    bottom: -110,
     right: -60,
-    width: 260,
-    height: 260,
-    borderRadius: 130,
-    backgroundColor: 'rgba(235,209,156,0.2)',
+    width: 290,
+    height: 290,
+    borderRadius: 145,
+    backgroundColor: 'rgba(230, 197, 134, 0.18)',
+  },
+  firefly: {
+    position: 'absolute',
+    shadowColor: '#FFE5A4',
+    shadowOpacity: 0.55,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 5,
   },
   centerCard: {
     margin: 16,
     marginTop: 54,
-    borderRadius: 24,
-    padding: 18,
+    borderRadius: 28,
+    padding: 20,
     backgroundColor: FOREST.cardStrong,
     borderWidth: 1,
     borderColor: FOREST.border,
-    gap: 12,
+    gap: 14,
   },
-  brand: { color: FOREST.text, fontSize: 31, textAlign: 'center', fontWeight: '800', letterSpacing: 0.3 },
-  h1: { color: FOREST.text, fontSize: 20, fontWeight: '800' },
+  brand: { color: FOREST.text, fontSize: 32, textAlign: 'center', fontWeight: '800', letterSpacing: 0.8 },
+  h1: { color: FOREST.text, fontSize: 21, fontWeight: '800' },
   title: { color: FOREST.text, fontSize: 18, fontWeight: '800', flex: 1 },
-  sub: { color: FOREST.textSoft, fontSize: 13, lineHeight: 19 },
+  sub: { color: FOREST.textSoft, fontSize: 13, lineHeight: 20 },
   btn: {
-    borderRadius: 14,
-    minHeight: 50,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
+    borderRadius: 16,
+    minHeight: 52,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: FOREST.button,
     borderWidth: 1,
     borderColor: FOREST.buttonBorder,
+    shadowColor: '#000',
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
   },
   btnText: { color: FOREST.text, fontSize: 15, fontWeight: '800' },
   smallBtn: {
-    borderRadius: 12,
-    minHeight: 46,
+    borderRadius: 14,
+    minHeight: 48,
     paddingVertical: 10,
-    paddingHorizontal: 13,
+    paddingHorizontal: 14,
     backgroundColor: FOREST.buttonSoft,
     borderWidth: 1,
     borderColor: FOREST.border,
@@ -2404,8 +3566,8 @@ const styles = StyleSheet.create({
     marginHorizontal: 12,
     marginTop: 8,
     marginBottom: 8,
-    borderRadius: 20,
-    padding: 12,
+    borderRadius: 22,
+    padding: 14,
     backgroundColor: FOREST.cardStrong,
     borderWidth: 1,
     borderColor: FOREST.border,
@@ -2413,6 +3575,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
+  headerRetreat: {
+    backgroundColor: 'rgba(42, 65, 50, 0.88)',
+  },
+  headerCopy: { flex: 1, gap: 2 },
+  headerMeta: { color: FOREST.textMuted, fontSize: 12, fontWeight: '600' },
   iconDark: {
     width: 36,
     height: 36,
@@ -2433,19 +3600,123 @@ const styles = StyleSheet.create({
   main: {
     flex: 1,
     marginHorizontal: 12,
-    borderRadius: 20,
+    borderRadius: 24,
     padding: 12,
     backgroundColor: FOREST.card,
     borderWidth: 1,
     borderColor: FOREST.border,
     gap: 10,
   },
-  list: { gap: 10, paddingBottom: 12 },
+  list: { gap: 12, paddingBottom: 18 },
   row: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  sectionTitle: { color: FOREST.text, fontSize: 14, fontWeight: '800', letterSpacing: 0.2 },
+  eyebrow: { color: '#DDE8BC', fontSize: 11, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase' },
+  denHero: {
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 24,
+    padding: 0,
+    backgroundColor: 'rgba(34, 50, 39, 0.9)',
+    borderWidth: 1,
+    borderColor: 'rgba(199, 222, 180, 0.16)',
+  },
+  denGlow: {
+    position: 'absolute',
+    top: -52,
+    right: -42,
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: 'rgba(242, 202, 127, 0.1)',
+  },
+  denHeroSurface: {
+    minHeight: 124,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  denHeroBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(250, 233, 183, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  denHeroCopy: { flex: 1, gap: 6, justifyContent: 'center' },
+  denTitle: { color: FOREST.text, fontSize: 20, fontWeight: '800', lineHeight: 25 },
+  denBody: { color: FOREST.textSoft, fontSize: 12, lineHeight: 18, maxWidth: '98%' },
+  denStatsRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  denStatPill: {
+    minWidth: 84,
+    borderRadius: 999,
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    backgroundColor: 'rgba(14, 25, 20, 0.24)',
+    borderWidth: 1,
+    borderColor: 'rgba(203, 224, 184, 0.12)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  denStatIcon: { display: 'none' },
+  denStatCopy: { gap: 0 },
+  denStatValue: { color: FOREST.text, fontSize: 13, fontWeight: '800' },
+  denStatLabel: { color: FOREST.textMuted, fontSize: 9, fontWeight: '700' },
+  denActionRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  heroBtn: {
+    minHeight: 36,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: 'rgba(13, 23, 18, 0.24)',
+    borderWidth: 1,
+    borderColor: 'rgba(204, 222, 184, 0.12)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  heroBtnText: { color: FOREST.text, fontSize: 11, fontWeight: '700' },
+  infoStrip: {
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(249, 218, 160, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(237, 210, 163, 0.14)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  infoStripText: { color: FOREST.textSoft, fontSize: 12, fontWeight: '600', flex: 1, lineHeight: 18 },
+  requestCard: {
+    minWidth: 170,
+    borderRadius: 18,
+    padding: 14,
+    backgroundColor: 'rgba(26, 40, 31, 0.58)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+    gap: 8,
+  },
+  requestBtn: {
+    borderRadius: 10,
+    minHeight: 34,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: FOREST.buttonSoft,
+    borderWidth: 1,
+    borderColor: FOREST.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  requestBtnText: { color: FOREST.text, fontSize: 12, fontWeight: '700' },
   item: {
-    borderRadius: 14,
+    borderRadius: 18,
     padding: 12,
-    backgroundColor: 'rgba(246,252,241,0.16)',
+    backgroundColor: 'rgba(24, 37, 30, 0.48)',
     borderWidth: 1,
     borderColor: FOREST.border,
     flexDirection: 'row',
@@ -2455,23 +3726,63 @@ const styles = StyleSheet.create({
   },
   itemTitle: { color: FOREST.text, fontSize: 15, fontWeight: '700' },
   itemRight: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  roomItem: {
+    borderRadius: 20,
+    padding: 14,
+    backgroundColor: 'rgba(24, 36, 30, 0.72)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+    gap: 12,
+  },
+  roomItemTop: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
+  roomItemCopy: { flex: 1, gap: 6 },
+  roomItemHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  roomItemTime: { color: FOREST.textMuted, fontSize: 11, fontWeight: '700', marginLeft: 'auto' },
+  roomPreview: { color: FOREST.textSoft, fontSize: 13, lineHeight: 20 },
+  roomItemFoot: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  friendItem: {
+    borderRadius: 20,
+    padding: 14,
+    backgroundColor: 'rgba(24, 36, 30, 0.72)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  friendItemCopy: { flex: 1, gap: 6 },
+  friendMetaRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  moodChip: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: 'rgba(230, 236, 213, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(201, 218, 185, 0.12)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    maxWidth: '100%',
+  },
+  moodChipText: { color: FOREST.textSoft, fontSize: 11, fontWeight: '700' },
+  trustPill: { backgroundColor: 'rgba(226, 208, 136, 0.12)' },
   listAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(141,191,121,0.36)',
+    backgroundColor: 'rgba(144, 183, 123, 0.3)',
     borderWidth: 1,
     borderColor: FOREST.border,
   },
-  listAvatarText: { color: FOREST.text, fontSize: 15, fontWeight: '800' },
+  listAvatarText: { color: FOREST.text, fontSize: 16, fontWeight: '800' },
   profileHero: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 84,
+    height: 84,
+    borderRadius: 42,
     overflow: 'hidden',
-    backgroundColor: 'rgba(232,246,220,0.36)',
+    backgroundColor: 'rgba(232,246,220,0.24)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2483,25 +3794,50 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(141,191,121,0.38)',
   },
-  profileAvatarText: { color: FOREST.text, fontSize: 24, fontWeight: '800' },
+  profileAvatarText: { color: FOREST.text, fontSize: 28, fontWeight: '800' },
   profileMeta: { flex: 1, gap: 3 },
   profileStatus: { color: FOREST.text, fontSize: 14, fontWeight: '600' },
+  profileCabinCard: {
+    borderRadius: 24,
+    padding: 16,
+    backgroundColor: 'rgba(26, 39, 31, 0.76)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  profileCabinText: { flex: 1, gap: 4 },
   stat: {
     flex: 1,
-    borderRadius: 14,
-    padding: 12,
+    borderRadius: 18,
+    padding: 14,
     alignItems: 'center',
-    backgroundColor: FOREST.cardStrong,
+    backgroundColor: 'rgba(26, 39, 31, 0.72)',
     borderWidth: 1,
     borderColor: FOREST.border,
     gap: 3,
   },
+  logoutBtn: {
+    borderRadius: 14,
+    minHeight: 46,
+    paddingVertical: 10,
+    paddingHorizontal: 13,
+    backgroundColor: 'rgba(138,45,45,0.28)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,187,187,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  logoutText: { color: '#FFE2E2', fontSize: 14, fontWeight: '800' },
   tabs: {
     marginHorizontal: 12,
     marginTop: 8,
-    borderRadius: 18,
+    borderRadius: 22,
     padding: 7,
-    backgroundColor: FOREST.cardStrong,
+    backgroundColor: 'rgba(26, 39, 31, 0.82)',
     borderWidth: 1,
     borderColor: FOREST.border,
     flexDirection: 'row',
@@ -2510,14 +3846,14 @@ const styles = StyleSheet.create({
   tab: {
     flex: 1,
     borderRadius: 12,
-    minHeight: 62,
+    minHeight: 64,
     paddingVertical: 8,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 3,
   },
   tabOn: {
-    backgroundColor: FOREST.buttonSoft,
+    backgroundColor: 'rgba(135, 170, 114, 0.28)',
     borderWidth: 1,
     borderColor: FOREST.border,
   },
@@ -2525,12 +3861,27 @@ const styles = StyleSheet.create({
   bubbleRow: { width: '100%' },
   mineRow: { alignItems: 'flex-end' },
   otherRow: { alignItems: 'flex-start' },
-  bubble: { maxWidth: '88%', borderRadius: 16, padding: 12 },
+  bubble: {
+    maxWidth: '88%',
+    borderRadius: 20,
+    padding: 13,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  roomSender: {
+    marginBottom: 4,
+    paddingHorizontal: 6,
+    color: FOREST.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+  },
   mineBubble: { backgroundColor: FOREST.mineBubble },
   otherBubble: {
     backgroundColor: FOREST.otherBubble,
     borderWidth: 1,
-    borderColor: 'rgba(146,175,137,0.35)',
+    borderColor: 'rgba(146,175,137,0.22)',
   },
   msg: { color: '#1D3528', fontSize: 15, fontWeight: '600', lineHeight: 22 },
   msgMine: { color: FOREST.text },
@@ -2541,32 +3892,64 @@ const styles = StyleSheet.create({
   system: { color: '#355B3A', fontSize: 12, fontWeight: '700' },
   media: { width: 196, height: 136, borderRadius: 12, backgroundColor: '#31563A' },
   video: { alignItems: 'center', justifyContent: 'center' },
+  roomSceneCard: {
+    borderRadius: 18,
+    padding: 14,
+    backgroundColor: 'rgba(246, 213, 148, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(240, 208, 162, 0.14)',
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'center',
+  },
+  roomSceneIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(248, 214, 143, 0.1)',
+  },
+  roomSceneText: { color: FOREST.textSoft, fontSize: 12, lineHeight: 18 },
+  roomDayChip: { alignItems: 'center', marginTop: 2 },
+  roomDayChipText: {
+    color: FOREST.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(231, 236, 210, 0.08)',
+  },
   composer: {
     marginHorizontal: 12,
     marginTop: 8,
-    borderRadius: 18,
-    padding: 10,
-    backgroundColor: FOREST.cardStrong,
+    borderRadius: 22,
+    padding: 12,
+    backgroundColor: 'rgba(28, 42, 34, 0.92)',
     borderWidth: 1,
     borderColor: FOREST.border,
     gap: 8,
   },
+  composerHint: { color: FOREST.textMuted, fontSize: 12, fontWeight: '600' },
   draft: {
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 10,
-    backgroundColor: 'rgba(229,246,220,0.22)',
+    backgroundColor: 'rgba(229,246,220,0.12)',
     borderWidth: 1,
     borderColor: FOREST.border,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  draftNest: { backgroundColor: 'rgba(229,246,220,0.14)' },
   field: {
     width: '100%',
-    minHeight: 46,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    minHeight: 48,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     backgroundColor: FOREST.inputBg,
     color: FOREST.inputText,
     fontSize: 15,
@@ -2577,9 +3960,9 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 42,
     maxHeight: 110,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
     backgroundColor: FOREST.inputBg,
     color: FOREST.inputText,
     fontSize: 15,
@@ -2587,9 +3970,9 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(157,189,147,0.55)',
   },
   send: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: FOREST.button,
@@ -2607,14 +3990,15 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: '#fff', fontSize: 11, fontWeight: '800' },
   empty: {
-    borderRadius: 14,
-    padding: 16,
+    borderRadius: 18,
+    padding: 18,
     alignItems: 'center',
     gap: 8,
-    backgroundColor: 'rgba(246,252,241,0.15)',
+    backgroundColor: 'rgba(24, 37, 30, 0.5)',
     borderWidth: 1,
     borderColor: FOREST.border,
   },
+  emptyCove: { paddingVertical: 24 },
   overlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end' },
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: FOREST.overlay },
   sheetWrap: { width: '100%' },
