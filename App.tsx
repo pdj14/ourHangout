@@ -3172,7 +3172,7 @@ function App() {
                               <View style={styles.receiptWrap}>
                                 {typeof m.unreadCount === 'number' && m.unreadCount > 0 ? (
                                   <Text style={styles.receiptBadge}>{m.unreadCount}</Text>
-                                ) : m.delivery === 'read' ? (
+                                ) : m.delivery === 'read' || m.unreadCount === 0 ? (
                                   <Text style={styles.receiptCheck}>✓</Text>
                                 ) : null}
                               </View>
