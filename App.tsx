@@ -631,31 +631,31 @@ const randomReply = (isKo: boolean) => {
 };
 
 const FOREST = {
-  gradientTop: '#09120E',
-  gradientMid: '#193227',
-  gradientBottom: '#425B42',
-  deep: '#050B08',
-  card: 'rgba(20, 33, 26, 0.76)',
-  cardStrong: 'rgba(44, 66, 50, 0.82)',
-  border: 'rgba(190, 215, 173, 0.22)',
-  text: '#F5F0E4',
-  textSoft: 'rgba(238, 231, 216, 0.88)',
-  textMuted: 'rgba(206, 217, 197, 0.72)',
-  link: '#E2F3C8',
-  button: '#6D8F56',
-  buttonBorder: '#B9D191',
-  buttonSoft: 'rgba(139, 176, 117, 0.26)',
-  inputBg: '#F2ECDD',
-  inputText: '#1B2A21',
-  placeholder: '#7A8476',
-  mineBubble: '#5E7B4D',
-  otherBubble: '#F6F0E4',
-  sheetBg: 'rgba(11, 20, 15, 0.97)',
-  sheetBorder: 'rgba(173, 208, 160, 0.3)',
-  overlay: 'rgba(3, 8, 6, 0.68)',
-  iconDark: 'rgba(12, 22, 17, 0.6)',
-  iconLight: 'rgba(223, 239, 208, 0.18)',
-  badge: '#C88453',
+  gradientTop: '#FFF6FB',
+  gradientMid: '#EEF7FF',
+  gradientBottom: '#F6FFE8',
+  deep: '#F6F8FF',
+  card: 'rgba(255, 255, 255, 0.72)',
+  cardStrong: 'rgba(255, 255, 255, 0.9)',
+  border: 'rgba(167, 177, 230, 0.2)',
+  text: '#40436C',
+  textSoft: 'rgba(76, 83, 130, 0.82)',
+  textMuted: 'rgba(120, 127, 171, 0.72)',
+  link: '#5E74EA',
+  button: '#8B95FF',
+  buttonBorder: '#B0B6FF',
+  buttonSoft: 'rgba(139, 149, 255, 0.12)',
+  inputBg: '#FFFFFF',
+  inputText: '#40436C',
+  placeholder: '#A0A7D0',
+  mineBubble: '#8B95FF',
+  otherBubble: '#FFFFFF',
+  sheetBg: 'rgba(255, 255, 255, 0.98)',
+  sheetBorder: 'rgba(167, 177, 230, 0.24)',
+  overlay: 'rgba(116, 126, 184, 0.22)',
+  iconDark: 'rgba(139, 149, 255, 0.12)',
+  iconLight: 'rgba(139, 149, 255, 0.1)',
+  badge: '#FF94B6',
 };
 
 function App() {
@@ -725,7 +725,7 @@ function App() {
   });
 
   const [stage, setStage] = useState<Stage>('login');
-  const [tab, setTab] = useState<Tab>('chats');
+  const [tab, setTab] = useState<Tab>('friends');
   const [profile, setProfile] = useState<Profile>({ name: '', status: '', email: '', avatarUri: '' });
   const [nameDraft, setNameDraft] = useState('');
   const [statusDraft, setStatusDraft] = useState('');
@@ -823,6 +823,18 @@ function App() {
     return friends.filter((f) => `${f.name} ${f.status}`.toLowerCase().includes(q));
   }, [friendQuery, friends]);
 
+  const favoriteRooms = useMemo(() => sortedRooms.filter((room) => room.favorite), [sortedRooms]);
+  const otherRooms = useMemo(() => sortedRooms.filter((room) => !room.favorite), [sortedRooms]);
+  const sortedFriendsByTrust = useMemo(
+    () =>
+      [...friends].sort((a, b) =>
+        a.trusted === b.trusted ? a.name.localeCompare(b.name) : a.trusted ? -1 : 1
+      ),
+    [friends]
+  );
+  const favoriteFriends = useMemo(() => sortedFriendsByTrust.filter((friend) => friend.trusted), [sortedFriendsByTrust]);
+  const otherFriends = useMemo(() => sortedFriendsByTrust.filter((friend) => !friend.trusted), [sortedFriendsByTrust]);
+
   const activeRoom = useMemo(
     () => rooms.find((r) => r.id === activeRoomId) ?? null,
     [rooms, activeRoomId]
@@ -887,6 +899,64 @@ function App() {
       </View>
     </View>
   );
+
+  const renderRoomRow = (room: Room) => (
+    <Pressable key={room.id} style={styles.roomItem} onPress={() => openRoom(room.id)}>
+      <View style={styles.listAvatar}>
+        <Text style={styles.listAvatarText}>{roomTitle(room).slice(0, 1).toUpperCase()}</Text>
+      </View>
+      <View style={styles.roomItemCopy}>
+        <View style={styles.roomItemHead}>
+          <Text style={[styles.itemTitle, { flex: 1 }]}>{roomTitle(room)}</Text>
+          <Text style={styles.roomItemTime}>{roomTimeLabel(room.updatedAt)}</Text>
+        </View>
+        <Text style={styles.roomPreview} numberOfLines={1}>
+          {room.preview || roomMembers(room) || s.startChat}
+        </Text>
+      </View>
+      <View style={styles.itemRight}>
+        {room.unread > 0 ? (
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>{room.unread > 99 ? '99+' : room.unread}</Text>
+          </View>
+        ) : null}
+        <Pressable style={styles.iconLight} onPress={() => toggleFavorite(room.id)}>
+          <Ionicons
+            name={room.favorite ? 'star' : 'star-outline'}
+            size={16}
+            color={room.favorite ? '#FFB347' : FOREST.text}
+          />
+        </Pressable>
+      </View>
+    </Pressable>
+  );
+
+  const renderFriendRow = (friend: Friend) => {
+    const trustedBusy = friendActionKey === `trusted:${friend.id}`;
+    return (
+      <View key={friend.id} style={styles.friendItem}>
+        <View style={styles.listAvatar}>
+          <Text style={styles.listAvatarText}>{friend.name.slice(0, 1).toUpperCase()}</Text>
+        </View>
+        <View style={styles.friendItemCopy}>
+          <Text style={styles.itemTitle}>{friend.name}</Text>
+          <Text style={styles.roomPreview} numberOfLines={1}>
+            {friend.status || s.startChat}
+          </Text>
+        </View>
+        <Pressable
+          style={[styles.iconLight, (trustedBusy || !!friendActionKey) && styles.off]}
+          disabled={!!friendActionKey}
+          onPress={() => void toggleTrusted(friend.id)}
+        >
+          <Ionicons name={friend.trusted ? 'star' : 'star-outline'} size={16} color={FOREST.text} />
+        </Pressable>
+        <Pressable style={styles.iconLight} onPress={() => void startDirectRoom(friend.id)}>
+          <Ionicons name="chatbubble-ellipses" size={16} color={FOREST.text} />
+        </Pressable>
+      </View>
+    );
+  };
 
   useEffect(() => {
     activeRoomRef.current = activeRoomId;
@@ -2820,15 +2890,6 @@ function App() {
 
               <View style={styles.main}>
                 <ScrollView ref={scrollRef} contentContainerStyle={styles.list}>
-                  <View style={styles.roomSceneCard}>
-                    <View style={styles.roomSceneIcon}>
-                      <Ionicons name={activeRoom.isGroup ? 'bonfire-outline' : 'leaf-outline'} size={16} color={FOREST.text} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.sectionTitle}>{activeRoom.isGroup ? s.denRoomGroup : s.denRoomDirect}</Text>
-                      <Text style={styles.roomSceneText}>{s.denQuietNote}</Text>
-                    </View>
-                  </View>
                   <View style={styles.roomDayChip}>
                     <Text style={styles.roomDayChipText}>
                       {new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}
@@ -2871,22 +2932,7 @@ function App() {
               </View>
 
               <View style={styles.composer}>
-                {draftMedia ? (
-                  <View style={[styles.draft, styles.draftNest]}>
-                    <Text style={styles.sub}>{draftMedia.kind === 'image' ? s.imageSelected : s.videoSelected}</Text>
-                    <Pressable onPress={() => setDraftMedia(null)}>
-                      <Ionicons name="close-circle" size={18} color={FOREST.text} />
-                    </Pressable>
-                  </View>
-                ) : null}
-                <Text style={styles.composerHint}>{s.denQuietNote}</Text>
                 <View style={styles.row}>
-                  <Pressable style={styles.iconLight} onPress={() => pickMedia('image')}>
-                    <Ionicons name="image" size={16} color={FOREST.text} />
-                  </Pressable>
-                  <Pressable style={styles.iconLight} onPress={() => pickMedia('video')}>
-                    <Ionicons name="videocam" size={16} color={FOREST.text} />
-                  </Pressable>
                   <TextInput
                     style={styles.composerInput}
                     placeholder={s.msgInput}
@@ -2896,8 +2942,8 @@ function App() {
                     multiline
                   />
                   <Pressable
-                    style={[styles.send, !input.trim() && !draftMedia && styles.off]}
-                    disabled={!input.trim() && !draftMedia}
+                    style={[styles.send, !input.trim() && styles.off]}
+                    disabled={!input.trim()}
                     onPress={() => {
                       void send();
                     }}
@@ -2905,125 +2951,65 @@ function App() {
                     <Ionicons name="arrow-up" size={16} color="#fff" />
                   </Pressable>
                 </View>
-                <Text style={styles.sub}>{s.safe}</Text>
               </View>
             </>
           ) : (
             <>
               <View style={styles.header}>
-                <Text style={styles.title}>{s.app}</Text>
-                <Pressable
-                  style={styles.iconDark}
-                  onPress={() => {
-                    setNameDraft(profile.name);
-                    setStatusDraft(profile.status);
-                    setProfilePhotoDraft(profile.avatarUri);
-                    setShowProfileModal(true);
-                  }}
-                >
+                <View style={styles.topIdentity}>
                   {profile.avatarUri ? (
-                    <Image source={{ uri: profile.avatarUri }} style={styles.headerAvatar} />
+                    <Image source={{ uri: profile.avatarUri }} style={styles.headerAvatarLarge} />
                   ) : (
-                    <Ionicons name="person-circle" size={18} color={FOREST.text} />
+                    <View style={styles.headerAvatarFallback}>
+                      <Text style={styles.headerAvatarFallbackText}>
+                        {(profile.name || s.me).slice(0, 1).toUpperCase()}
+                      </Text>
+                    </View>
                   )}
-                </Pressable>
+                  <View style={styles.topIdentityCopy}>
+                    <Text style={styles.headerName}>{profile.name || s.me}</Text>
+                    <Text style={styles.headerSection}>
+                      {tab === 'friends' ? s.tabsFriends : tab === 'chats' ? s.tabsChats : s.tabsProfile}
+                    </Text>
+                  </View>
+                </View>
+                {tab === 'friends' ? (
+                  <Pressable style={styles.iconDark} onPress={openFriendModal}>
+                    <Ionicons name="person-add" size={18} color={FOREST.text} />
+                  </Pressable>
+                ) : tab === 'chats' ? (
+                  <Pressable style={styles.iconDark} onPress={() => setShowGroupModal(true)}>
+                    <Ionicons name="add" size={20} color={FOREST.text} />
+                  </Pressable>
+                ) : (
+                  <Pressable
+                    style={styles.iconDark}
+                    onPress={() => {
+                      setNameDraft(profile.name);
+                      setStatusDraft(profile.status);
+                      setProfilePhotoDraft(profile.avatarUri);
+                      setShowProfileModal(true);
+                    }}
+                  >
+                    <Ionicons name="create-outline" size={18} color={FOREST.text} />
+                  </Pressable>
+                )}
               </View>
 
               <View style={styles.main}>
                 {tab === 'chats' ? (
                   <ScrollView contentContainerStyle={styles.list}>
-                    {renderNookHero({
-                      title: s.denChatsTitle,
-                      body: s.denChatsBody,
-                      iconName: 'moon-outline',
-                      footer: (
-                        <>
-                          {renderDenStat('people-outline', stats.friends, s.statsFriends)}
-                          {renderDenStat('chatbubble-ellipses-outline', stats.rooms, s.statsRooms)}
-                          {renderDenStat('star-outline', stats.favs, s.statsFavs)}
-                        </>
-                      ),
-                      actions: (
-                        <>
-                          <Pressable style={styles.heroBtn} onPress={() => setShowGroupModal(true)}>
-                            <Ionicons name="bonfire-outline" size={15} color={FOREST.text} />
-                            <Text style={styles.heroBtnText}>{s.denQuickNewChat}</Text>
-                          </Pressable>
-                          <Pressable style={styles.heroBtn} onPress={() => setTab('friends')}>
-                            <Ionicons name="people-outline" size={15} color={FOREST.text} />
-                            <Text style={styles.heroBtnText}>{s.denQuickFriends}</Text>
-                          </Pressable>
-                        </>
-                      ),
-                    })}
-                    <TextInput
-                      style={styles.field}
-                      placeholder={s.searchChats}
-                      placeholderTextColor={FOREST.placeholder}
-                      value={chatQuery}
-                      onChangeText={setChatQuery}
-                    />
                     {sortedRooms.length === 0 ? (
                       <View style={[styles.empty, styles.emptyCove]}>
-                        <Text style={styles.h1}>{s.denNoRoomsTitle}</Text>
-                        <Text style={styles.sub}>{s.denNoRoomsBody}</Text>
-                      </View>
-                    ) : filteredRooms.length === 0 ? (
-                      <View style={[styles.empty, styles.emptyCove]}>
-                        <Text style={styles.sub}>{s.noSearchRooms}</Text>
+                        <Text style={styles.h1}>{s.noRooms}</Text>
+                        <Text style={styles.sub}>{s.noRoomsBody}</Text>
                       </View>
                     ) : (
                       <>
-                        <Text style={styles.sectionTitle}>{s.denSectionRooms}</Text>
-                        {filteredRooms.map((r) => (
-                          <Pressable key={r.id} style={styles.roomItem} onPress={() => openRoom(r.id)}>
-                            <View style={styles.roomItemTop}>
-                              <View style={styles.listAvatar}>
-                                <Text style={styles.listAvatarText}>
-                                  {roomTitle(r).slice(0, 1).toUpperCase()}
-                                </Text>
-                              </View>
-                              <View style={styles.roomItemCopy}>
-                                <View style={styles.roomItemHead}>
-                                  <Text style={[styles.itemTitle, { flex: 1 }]}>{roomTitle(r)}</Text>
-                                  <Text style={styles.roomItemTime}>{roomTimeLabel(r.updatedAt)}</Text>
-                                </View>
-                                <Text style={styles.roomPreview} numberOfLines={2}>
-                                  {r.preview || roomMembers(r) || s.startChat}
-                                </Text>
-                              </View>
-                            </View>
-                            <View style={styles.roomItemFoot}>
-                              <View style={styles.moodChip}>
-                                <Ionicons
-                                  name={r.isGroup ? 'people-outline' : 'chatbubble-outline'}
-                                  size={13}
-                                  color={FOREST.text}
-                                />
-                                <Text style={styles.moodChipText}>
-                                  {r.isGroup ? (isKo ? '모임' : 'Group') : isKo ? '쉼터' : 'Quiet'}
-                                </Text>
-                              </View>
-                              <View style={styles.itemRight}>
-                                {r.unread > 0 ? (
-                                  <View style={styles.badge}>
-                                    <Text style={styles.badgeText}>{r.unread > 99 ? '99+' : r.unread}</Text>
-                                  </View>
-                                ) : null}
-                                <Pressable style={styles.iconLight} onPress={() => toggleFavorite(r.id)}>
-                                  <Ionicons
-                                    name={r.favorite ? 'star' : 'star-outline'}
-                                    size={16}
-                                    color={r.favorite ? '#FFD27A' : FOREST.text}
-                                  />
-                                </Pressable>
-                                <Pressable style={styles.iconLight} onPress={() => setRoomMenuId(r.id)}>
-                                  <Ionicons name="ellipsis-horizontal" size={16} color={FOREST.text} />
-                                </Pressable>
-                              </View>
-                            </View>
-                          </Pressable>
-                        ))}
+                        {favoriteRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '즐겨찾기' : 'Favorites'}</Text> : null}
+                        {favoriteRooms.map(renderRoomRow)}
+                        {otherRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '대화방' : 'Chats'}</Text> : null}
+                        {otherRooms.map(renderRoomRow)}
                       </>
                     )}
                   </ScrollView>
@@ -3031,29 +3017,6 @@ function App() {
 
                 {tab === 'friends' ? (
                   <ScrollView contentContainerStyle={styles.list}>
-                    {renderNookHero({
-                      title: s.denFriendsTitle,
-                      body: s.denFriendsBody,
-                      iconName: 'people-circle-outline',
-                      footer: (
-                        <>
-                          {renderDenStat('leaf-outline', friends.length, s.denSectionFriends)}
-                          {renderDenStat('mail-unread-outline', knockCount, s.denSectionRequests)}
-                        </>
-                      ),
-                      actions: (
-                        <>
-                          <Pressable style={styles.heroBtn} onPress={openFriendModal}>
-                            <Ionicons name="person-add-outline" size={15} color={FOREST.text} />
-                            <Text style={styles.heroBtnText}>{s.addFriend}</Text>
-                          </Pressable>
-                          <Pressable style={styles.heroBtn} onPress={() => setShowGroupModal(true)}>
-                            <Ionicons name="bonfire-outline" size={15} color={FOREST.text} />
-                            <Text style={styles.heroBtnText}>{s.newGroup}</Text>
-                          </Pressable>
-                        </>
-                      ),
-                    })}
                     {isFriendSyncing ? <Text style={styles.sub}>{s.friendLoading}</Text> : null}
                     {friendRequestsIncoming.length > 0 ? (
                       <>
@@ -3099,67 +3062,17 @@ function App() {
                         </ScrollView>
                       </>
                     ) : null}
-                    <TextInput
-                      style={styles.field}
-                      placeholder={s.searchFriends}
-                      placeholderTextColor={FOREST.placeholder}
-                      value={friendQuery}
-                      onChangeText={setFriendQuery}
-                    />
                     {friends.length === 0 ? (
                       <View style={[styles.empty, styles.emptyCove]}>
                         <Text style={styles.h1}>{s.noFriends}</Text>
-                        <Text style={styles.sub}>{s.denFriendHint}</Text>
-                      </View>
-                    ) : filteredFriends.length === 0 ? (
-                      <View style={[styles.empty, styles.emptyCove]}>
-                        <Text style={styles.sub}>{s.noSearchFriends}</Text>
+                        <Text style={styles.sub}>{s.addFriend}</Text>
                       </View>
                     ) : (
                       <>
-                        <Text style={styles.sectionTitle}>{s.denSectionFriends}</Text>
-                        {filteredFriends.map((f) => {
-                          const trustedBusy = friendActionKey === `trusted:${f.id}`;
-                          return (
-                            <View key={f.id} style={styles.friendItem}>
-                              <View style={styles.listAvatar}>
-                                <Text style={styles.listAvatarText}>
-                                  {f.name.slice(0, 1).toUpperCase()}
-                                </Text>
-                              </View>
-                              <View style={styles.friendItemCopy}>
-                                <Text style={styles.itemTitle}>{f.name}</Text>
-                                <Text style={styles.sub}>{f.status || s.startChat}</Text>
-                                <View style={styles.friendMetaRow}>
-                                  <View style={[styles.moodChip, f.trusted && styles.trustPill]}>
-                                    <Ionicons
-                                      name={f.trusted ? 'shield-checkmark' : 'leaf-outline'}
-                                      size={12}
-                                      color={FOREST.text}
-                                    />
-                                    <Text style={styles.moodChipText}>
-                                      {f.trusted ? (isKo ? '믿는 친구' : 'Trusted') : (isKo ? '함께 쉬는 친구' : 'Gentle company')}
-                                    </Text>
-                                  </View>
-                                </View>
-                              </View>
-                              <Pressable
-                                style={[styles.iconLight, (trustedBusy || !!friendActionKey) && styles.off]}
-                                disabled={!!friendActionKey}
-                                onPress={() => void toggleTrusted(f.id)}
-                              >
-                                <Ionicons
-                                  name={f.trusted ? 'shield-checkmark' : 'shield-outline'}
-                                  size={16}
-                                  color={FOREST.text}
-                                />
-                              </Pressable>
-                              <Pressable style={styles.iconLight} onPress={() => void startDirectRoom(f.id)}>
-                                <Ionicons name="chatbubble-ellipses" size={16} color={FOREST.text} />
-                              </Pressable>
-                            </View>
-                          );
-                        })}
+                        {favoriteFriends.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '즐겨찾기' : 'Favorites'}</Text> : null}
+                        {favoriteFriends.map(renderFriendRow)}
+                        {otherFriends.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '친구' : 'Friends'}</Text> : null}
+                        {otherFriends.map(renderFriendRow)}
                       </>
                     )}
                   </ScrollView>
@@ -3167,18 +3080,6 @@ function App() {
 
                 {tab === 'profile' ? (
                   <ScrollView contentContainerStyle={styles.list}>
-                    {renderNookHero({
-                      title: s.denProfileTitle,
-                      body: s.denProfileBody,
-                      iconName: 'home-outline',
-                      footer: (
-                        <>
-                          {renderDenStat('people-outline', stats.friends, s.statsFriends)}
-                          {renderDenStat('chatbubble-ellipses-outline', stats.rooms, s.statsRooms)}
-                          {renderDenStat('star-outline', stats.favs, s.statsFavs)}
-                        </>
-                      ),
-                    })}
                     <View style={styles.profileCabinCard}>
                       <View style={styles.profileHero}>
                         {profile.avatarUri ? (
@@ -3208,11 +3109,6 @@ function App() {
                         <Text style={styles.smallBtnText}>{s.profileEdit}</Text>
                       </Pressable>
                     </View>
-                    <View style={styles.row}>
-                      <View style={styles.stat}><Text style={styles.itemTitle}>{stats.friends}</Text><Text style={styles.sub}>{s.statsFriends}</Text></View>
-                      <View style={styles.stat}><Text style={styles.itemTitle}>{stats.rooms}</Text><Text style={styles.sub}>{s.statsRooms}</Text></View>
-                      <View style={styles.stat}><Text style={styles.itemTitle}>{stats.favs}</Text><Text style={styles.sub}>{s.statsFavs}</Text></View>
-                    </View>
                     <Pressable style={styles.logoutBtn} onPress={requestLogout}>
                       <Ionicons name="log-out-outline" size={16} color="#FFDADD" />
                       <Text style={styles.logoutText}>{s.logout}</Text>
@@ -3222,16 +3118,16 @@ function App() {
               </View>
 
               <View style={styles.tabs}>
-                <Pressable style={[styles.tab, tab === 'chats' && styles.tabOn]} onPress={() => setTab('chats')}>
-                  <Ionicons name="chatbubbles" size={18} color={tab === 'chats' ? FOREST.text : FOREST.textMuted} />
-                  <Text style={styles.tabText}>{s.tabsChats}</Text>
-                </Pressable>
                 <Pressable style={[styles.tab, tab === 'friends' && styles.tabOn]} onPress={() => setTab('friends')}>
                   <Ionicons name="people" size={18} color={tab === 'friends' ? FOREST.text : FOREST.textMuted} />
                   <Text style={styles.tabText}>{s.tabsFriends}</Text>
                 </Pressable>
+                <Pressable style={[styles.tab, tab === 'chats' && styles.tabOn]} onPress={() => setTab('chats')}>
+                  <Ionicons name="chatbubbles" size={18} color={tab === 'chats' ? FOREST.text : FOREST.textMuted} />
+                  <Text style={styles.tabText}>{s.tabsChats}</Text>
+                </Pressable>
                 <Pressable style={[styles.tab, tab === 'profile' && styles.tabOn]} onPress={() => setTab('profile')}>
-                  <Ionicons name="leaf" size={18} color={tab === 'profile' ? FOREST.text : FOREST.textMuted} />
+                  <Ionicons name="person" size={18} color={tab === 'profile' ? FOREST.text : FOREST.textMuted} />
                   <Text style={styles.tabText}>{s.tabsProfile}</Text>
                 </Pressable>
               </View>
@@ -3489,7 +3385,7 @@ const styles = StyleSheet.create({
     width: 250,
     height: 250,
     borderRadius: 125,
-    backgroundColor: 'rgba(180, 217, 141, 0.16)',
+    backgroundColor: 'rgba(255, 189, 214, 0.3)',
   },
   bgOrbMid: {
     position: 'absolute',
@@ -3498,7 +3394,7 @@ const styles = StyleSheet.create({
     width: 220,
     height: 220,
     borderRadius: 110,
-    backgroundColor: 'rgba(111, 151, 110, 0.18)',
+    backgroundColor: 'rgba(190, 231, 255, 0.32)',
   },
   bgOrbBottom: {
     position: 'absolute',
@@ -3507,11 +3403,11 @@ const styles = StyleSheet.create({
     width: 290,
     height: 290,
     borderRadius: 145,
-    backgroundColor: 'rgba(230, 197, 134, 0.18)',
+    backgroundColor: 'rgba(215, 255, 191, 0.3)',
   },
   firefly: {
     position: 'absolute',
-    shadowColor: '#FFE5A4',
+    shadowColor: '#FFD7EE',
     shadowOpacity: 0.55,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 0 },
@@ -3576,7 +3472,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   headerRetreat: {
-    backgroundColor: 'rgba(42, 65, 50, 0.88)',
+    backgroundColor: 'rgba(255,255,255,0.92)',
   },
   headerCopy: { flex: 1, gap: 2 },
   headerMeta: { color: FOREST.textMuted, fontSize: 12, fontWeight: '600' },
@@ -3589,6 +3485,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headerAvatar: { width: 30, height: 30, borderRadius: 15 },
+  headerAvatarLarge: { width: 42, height: 42, borderRadius: 21 },
+  headerAvatarFallback: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 214, 122, 0.36)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+  },
+  headerAvatarFallbackText: { color: FOREST.text, fontSize: 16, fontWeight: '800' },
+  topIdentity: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  topIdentityCopy: { gap: 2, flex: 1 },
+  headerName: { color: FOREST.text, fontSize: 18, fontWeight: '800' },
+  headerSection: { color: FOREST.textMuted, fontSize: 12, fontWeight: '700' },
   iconLight: {
     width: 34,
     height: 34,
@@ -3616,9 +3528,9 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderRadius: 24,
     padding: 0,
-    backgroundColor: 'rgba(34, 50, 39, 0.9)',
+    backgroundColor: 'rgba(255,255,255,0.88)',
     borderWidth: 1,
-    borderColor: 'rgba(199, 222, 180, 0.16)',
+    borderColor: FOREST.border,
   },
   denGlow: {
     position: 'absolute',
@@ -3627,7 +3539,7 @@ const styles = StyleSheet.create({
     width: 160,
     height: 160,
     borderRadius: 80,
-    backgroundColor: 'rgba(242, 202, 127, 0.1)',
+    backgroundColor: 'rgba(255, 193, 210, 0.26)',
   },
   denHeroSurface: {
     minHeight: 124,
@@ -3642,7 +3554,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(250, 233, 183, 0.12)',
+    backgroundColor: 'rgba(139, 149, 255, 0.12)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
   },
@@ -3655,7 +3567,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingVertical: 7,
     paddingHorizontal: 10,
-    backgroundColor: 'rgba(14, 25, 20, 0.24)',
+    backgroundColor: 'rgba(139, 149, 255, 0.1)',
     borderWidth: 1,
     borderColor: 'rgba(203, 224, 184, 0.12)',
     flexDirection: 'row',
@@ -3672,7 +3584,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 7,
-    backgroundColor: 'rgba(13, 23, 18, 0.24)',
+    backgroundColor: 'rgba(139, 149, 255, 0.14)',
     borderWidth: 1,
     borderColor: 'rgba(204, 222, 184, 0.12)',
     flexDirection: 'row',
@@ -3696,7 +3608,7 @@ const styles = StyleSheet.create({
     minWidth: 170,
     borderRadius: 18,
     padding: 14,
-    backgroundColor: 'rgba(26, 40, 31, 0.58)',
+    backgroundColor: 'rgba(255,255,255,0.86)',
     borderWidth: 1,
     borderColor: FOREST.border,
     gap: 8,
@@ -3716,7 +3628,7 @@ const styles = StyleSheet.create({
   item: {
     borderRadius: 18,
     padding: 12,
-    backgroundColor: 'rgba(24, 37, 30, 0.48)',
+    backgroundColor: 'rgba(255,255,255,0.82)',
     borderWidth: 1,
     borderColor: FOREST.border,
     flexDirection: 'row',
@@ -3729,7 +3641,7 @@ const styles = StyleSheet.create({
   roomItem: {
     borderRadius: 20,
     padding: 14,
-    backgroundColor: 'rgba(24, 36, 30, 0.72)',
+    backgroundColor: 'rgba(255,255,255,0.92)',
     borderWidth: 1,
     borderColor: FOREST.border,
     gap: 12,
@@ -3743,7 +3655,7 @@ const styles = StyleSheet.create({
   friendItem: {
     borderRadius: 20,
     padding: 14,
-    backgroundColor: 'rgba(24, 36, 30, 0.72)',
+    backgroundColor: 'rgba(255,255,255,0.92)',
     borderWidth: 1,
     borderColor: FOREST.border,
     flexDirection: 'row',
@@ -3756,7 +3668,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    backgroundColor: 'rgba(230, 236, 213, 0.08)',
+    backgroundColor: 'rgba(139, 149, 255, 0.08)',
     borderWidth: 1,
     borderColor: 'rgba(201, 218, 185, 0.12)',
     flexDirection: 'row',
@@ -3765,14 +3677,14 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
   },
   moodChipText: { color: FOREST.textSoft, fontSize: 11, fontWeight: '700' },
-  trustPill: { backgroundColor: 'rgba(226, 208, 136, 0.12)' },
+  trustPill: { backgroundColor: 'rgba(255, 210, 122, 0.18)' },
   listAvatar: {
     width: 42,
     height: 42,
     borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(144, 183, 123, 0.3)',
+    backgroundColor: 'rgba(255, 214, 122, 0.36)',
     borderWidth: 1,
     borderColor: FOREST.border,
   },
@@ -3782,7 +3694,7 @@ const styles = StyleSheet.create({
     height: 84,
     borderRadius: 42,
     overflow: 'hidden',
-    backgroundColor: 'rgba(232,246,220,0.24)',
+    backgroundColor: 'rgba(210, 229, 255, 0.4)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -3792,7 +3704,7 @@ const styles = StyleSheet.create({
     height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(141,191,121,0.38)',
+    backgroundColor: 'rgba(255, 214, 122, 0.36)',
   },
   profileAvatarText: { color: FOREST.text, fontSize: 28, fontWeight: '800' },
   profileMeta: { flex: 1, gap: 3 },
@@ -3800,7 +3712,7 @@ const styles = StyleSheet.create({
   profileCabinCard: {
     borderRadius: 24,
     padding: 16,
-    backgroundColor: 'rgba(26, 39, 31, 0.76)',
+    backgroundColor: 'rgba(255,255,255,0.9)',
     borderWidth: 1,
     borderColor: FOREST.border,
     flexDirection: 'row',
@@ -3813,7 +3725,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     padding: 14,
     alignItems: 'center',
-    backgroundColor: 'rgba(26, 39, 31, 0.72)',
+    backgroundColor: 'rgba(255,255,255,0.84)',
     borderWidth: 1,
     borderColor: FOREST.border,
     gap: 3,
@@ -3823,7 +3735,7 @@ const styles = StyleSheet.create({
     minHeight: 46,
     paddingVertical: 10,
     paddingHorizontal: 13,
-    backgroundColor: 'rgba(138,45,45,0.28)',
+    backgroundColor: 'rgba(255, 122, 154, 0.18)',
     borderWidth: 1,
     borderColor: 'rgba(255,187,187,0.45)',
     alignItems: 'center',
@@ -3831,13 +3743,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
   },
-  logoutText: { color: '#FFE2E2', fontSize: 14, fontWeight: '800' },
+  logoutText: { color: '#D05E85', fontSize: 14, fontWeight: '800' },
   tabs: {
     marginHorizontal: 12,
     marginTop: 8,
     borderRadius: 22,
     padding: 7,
-    backgroundColor: 'rgba(26, 39, 31, 0.82)',
+    backgroundColor: 'rgba(255,255,255,0.92)',
     borderWidth: 1,
     borderColor: FOREST.border,
     flexDirection: 'row',
@@ -3853,7 +3765,7 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   tabOn: {
-    backgroundColor: 'rgba(135, 170, 114, 0.28)',
+    backgroundColor: 'rgba(139, 149, 255, 0.14)',
     borderWidth: 1,
     borderColor: FOREST.border,
   },
@@ -3884,18 +3796,18 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(146,175,137,0.22)',
   },
   msg: { color: '#1D3528', fontSize: 15, fontWeight: '600', lineHeight: 22 },
-  msgMine: { color: FOREST.text },
+  msgMine: { color: '#FFFFFF' },
   msgLink: { color: '#2D6EEA', textDecorationLine: 'underline', fontWeight: '700' },
-  msgLinkMine: { color: '#F0FFD8' },
+  msgLinkMine: { color: '#FFFFFF' },
   meta: { marginTop: 5, color: 'rgba(26,53,37,0.6)', fontSize: 11, fontWeight: '600' },
-  metaMine: { color: 'rgba(238,249,232,0.88)' },
+  metaMine: { color: 'rgba(255,255,255,0.82)' },
   system: { color: '#355B3A', fontSize: 12, fontWeight: '700' },
   media: { width: 196, height: 136, borderRadius: 12, backgroundColor: '#31563A' },
   video: { alignItems: 'center', justifyContent: 'center' },
   roomSceneCard: {
     borderRadius: 18,
     padding: 14,
-    backgroundColor: 'rgba(246, 213, 148, 0.1)',
+    backgroundColor: 'rgba(255,255,255,0.82)',
     borderWidth: 1,
     borderColor: 'rgba(240, 208, 162, 0.14)',
     flexDirection: 'row',
@@ -3908,7 +3820,7 @@ const styles = StyleSheet.create({
     borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(248, 214, 143, 0.1)',
+    backgroundColor: 'rgba(139, 149, 255, 0.08)',
   },
   roomSceneText: { color: FOREST.textSoft, fontSize: 12, lineHeight: 18 },
   roomDayChip: { alignItems: 'center', marginTop: 2 },
@@ -3920,14 +3832,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: 999,
-    backgroundColor: 'rgba(231, 236, 210, 0.08)',
+    backgroundColor: 'rgba(139, 149, 255, 0.08)',
   },
   composer: {
     marginHorizontal: 12,
     marginTop: 8,
     borderRadius: 22,
     padding: 12,
-    backgroundColor: 'rgba(28, 42, 34, 0.92)',
+    backgroundColor: 'rgba(255,255,255,0.96)',
     borderWidth: 1,
     borderColor: FOREST.border,
     gap: 8,
@@ -3954,7 +3866,7 @@ const styles = StyleSheet.create({
     color: FOREST.inputText,
     fontSize: 15,
     borderWidth: 1,
-    borderColor: 'rgba(157,189,147,0.55)',
+    borderColor: 'rgba(167, 177, 230, 0.24)',
   },
   composerInput: {
     flex: 1,
@@ -3967,7 +3879,7 @@ const styles = StyleSheet.create({
     color: FOREST.inputText,
     fontSize: 15,
     borderWidth: 1,
-    borderColor: 'rgba(157,189,147,0.55)',
+    borderColor: 'rgba(167, 177, 230, 0.24)',
   },
   send: {
     width: 44,
@@ -3994,7 +3906,7 @@ const styles = StyleSheet.create({
     padding: 18,
     alignItems: 'center',
     gap: 8,
-    backgroundColor: 'rgba(24, 37, 30, 0.5)',
+    backgroundColor: 'rgba(255,255,255,0.84)',
     borderWidth: 1,
     borderColor: FOREST.border,
   },
