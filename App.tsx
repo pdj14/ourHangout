@@ -825,6 +825,7 @@ function App() {
   const sessionRestoreStartedRef = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
   const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const roomGroupRef = useRef<Record<string, boolean>>({});
   const pushTokenRef = useRef('');
   const registeredPushTokenRef = useRef('');
   const notificationResponseSubRef = useRef<Notifications.EventSubscription | null>(null);
@@ -1005,6 +1006,14 @@ function App() {
     activeRoomRef.current = activeRoomId;
     foregroundNotificationRoomId = activeRoomId ?? '';
   }, [activeRoomId]);
+
+  useEffect(() => {
+    const next: Record<string, boolean> = {};
+    rooms.forEach((room) => {
+      next[room.id] = room.isGroup;
+    });
+    roomGroupRef.current = next;
+  }, [rooms]);
 
   useEffect(() => {
     foregroundAppState = AppState.currentState === 'active' ? 'active' : AppState.currentState === 'inactive' ? 'inactive' : 'background';
@@ -1476,9 +1485,22 @@ function App() {
           const roomId = typeof payload.data.roomId === 'string' ? payload.data.roomId : '';
           const messageId = typeof payload.data.messageId === 'string' ? payload.data.messageId : '';
           const delivery = typeof payload.data.delivery === 'string' ? (payload.data.delivery as Delivery) : null;
+          const deliveryAt = parseTimestamp(payload.data.at as string | number | undefined);
           if (roomId && messageId && delivery) {
+            const isGroupRoom = roomGroupRef.current[roomId] ?? true;
             setRoomMsgs(roomId, (prev) =>
-              prev.map((message) => (message.id === messageId ? { ...message, delivery } : message))
+              prev.map((message) => {
+                if (
+                  delivery === 'read' &&
+                  !isGroupRoom &&
+                  message.mine &&
+                  Number.isFinite(deliveryAt) &&
+                  message.at <= deliveryAt
+                ) {
+                  return { ...message, delivery: 'read', unreadCount: 0 };
+                }
+                return message.id === messageId ? { ...message, delivery } : message;
+              })
             );
             void syncRoomMessagesFromBackend(token, roomId).catch(() => null);
           }
