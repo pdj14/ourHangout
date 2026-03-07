@@ -820,6 +820,7 @@ function App() {
   const [roomMenuId, setRoomMenuId] = useState<string | null>(null);
   const [wsRetryTick, setWsRetryTick] = useState(0);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [directReadCutoffs, setDirectReadCutoffs] = useState<Record<string, number>>({});
 
   const scrollRef = useRef<ScrollView>(null);
   const cropOpenedAtRef = useRef(0);
@@ -1490,6 +1491,12 @@ function App() {
           const deliveryAt = parseTimestamp(payload.data.at as string | number | undefined);
           if (roomId && messageId && delivery) {
             const isGroupRoom = roomGroupRef.current[roomId] ?? true;
+            if (delivery === 'read' && !isGroupRoom && Number.isFinite(deliveryAt)) {
+              setDirectReadCutoffs((prev) => ({
+                ...prev,
+                [roomId]: Math.max(prev[roomId] ?? 0, deliveryAt),
+              }));
+            }
             setRoomMsgs(roomId, (prev) =>
               prev.map((message) => {
                 if (
@@ -3182,7 +3189,9 @@ function App() {
                               <View style={styles.receiptWrap}>
                                 {typeof m.unreadCount === 'number' && m.unreadCount > 0 ? (
                                   <Text style={styles.receiptBadge}>{m.unreadCount}</Text>
-                                ) : m.delivery === 'read' || m.unreadCount === 0 ? (
+                                ) : m.delivery === 'read' ||
+                                  m.unreadCount === 0 ||
+                                  (!activeRoom.isGroup && (directReadCutoffs[activeRoom.id] ?? 0) >= m.at) ? (
                                   <Text style={styles.receiptCheck}>✓</Text>
                                 ) : null}
                               </View>
@@ -3645,7 +3654,7 @@ function App() {
                     </Pressable>
                     <Pressable style={styles.item} onPress={() => void deleteRoom(roomMenuId)}>
                       <Text style={[styles.itemTitle, { color: '#FFD4DE' }]}>
-                        {roomMap.get(roomMenuId)?.isGroup ? s.leaveRoom : s.deleteRoom}
+                        {s.leaveRoom}
                       </Text>
                     </Pressable>
                   </>
