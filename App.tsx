@@ -65,6 +65,8 @@ type Message = {
   uri?: string;
   at: number;
   delivery?: Delivery;
+  unreadCount?: number;
+  readByNames?: string[];
 };
 
 type Friend = { id: string; name: string; status: string; trusted: boolean };
@@ -186,6 +188,8 @@ type BackendRoomMessage = {
   uri?: string;
   at?: string | number;
   delivery?: Delivery;
+  unreadCount?: number;
+  readByNames?: string[];
 };
 type BackendEnvelope<T> = {
   ok?: boolean;
@@ -1181,6 +1185,8 @@ function App() {
       ...(message.uri ? { uri: String(message.uri) } : {}),
       at: parseTimestamp(message.at),
       delivery: (message.delivery || 'sent') as Delivery,
+      ...(typeof message.unreadCount === 'number' ? { unreadCount: Math.max(0, Number(message.unreadCount)) } : {}),
+      ...(Array.isArray(message.readByNames) ? { readByNames: message.readByNames.map((name) => String(name)) } : {}),
     };
   };
 
@@ -1423,6 +1429,9 @@ function App() {
             setRoomMsgs(roomId, (prev) =>
               prev.map((message) => (message.id === messageId ? { ...message, delivery } : message))
             );
+            if (activeRoomRef.current === roomId) {
+              void syncRoomMessagesFromBackend(token, roomId).catch(() => null);
+            }
           }
           return;
         }
@@ -3091,12 +3100,30 @@ function App() {
                             </View>
                           ) : null}
                           {m.kind === 'system' ? <Text style={styles.system}>{m.text}</Text> : null}
-                          <Text style={[styles.meta, m.mine && styles.metaMine]}>
-                            {tLabel(m.at)}
-                            {m.mine && m.delivery
-                              ? ` · ${m.delivery === 'sending' ? s.sending : m.delivery === 'sent' ? s.sent : s.read}`
-                              : ''}
-                          </Text>
+                          <View style={styles.metaRow}>
+                            {m.mine ? (
+                              <View style={styles.receiptWrap}>
+                                {typeof m.unreadCount === 'number' && m.unreadCount > 0 ? (
+                                  <Text style={styles.receiptBadge}>{m.unreadCount}</Text>
+                                ) : m.delivery === 'read' ? (
+                                  <Text style={styles.receiptCheck}>✓</Text>
+                                ) : null}
+                              </View>
+                            ) : null}
+                            <Text style={[styles.meta, m.mine && styles.metaMine]}>
+                              {tLabel(m.at)}
+                              {m.mine && m.delivery
+                                ? ` · ${m.delivery === 'sending' ? s.sending : m.delivery === 'sent' ? s.sent : s.read}`
+                                : ''}
+                            </Text>
+                          </View>
+                          {m.mine && activeRoom.isGroup && m.readByNames?.length ? (
+                            <Text style={styles.readersText} numberOfLines={1}>
+                              {`${isKo ? '읽음' : 'Read'} ${m.readByNames.slice(0, 3).join(', ')}${
+                                m.readByNames.length > 3 ? ` +${m.readByNames.length - 3}` : ''
+                              }`}
+                            </Text>
+                          ) : null}
                         </View>
                       </View>
                     ))
@@ -3979,8 +4006,13 @@ const styles = StyleSheet.create({
   msgMine: { color: '#FFFFFF' },
   msgLink: { color: '#2D6EEA', textDecorationLine: 'underline', fontWeight: '700' },
   msgLinkMine: { color: '#FFFFFF' },
-  meta: { marginTop: 5, color: 'rgba(26,53,37,0.6)', fontSize: 11, fontWeight: '600' },
+  metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginTop: 5 },
+  meta: { color: 'rgba(26,53,37,0.6)', fontSize: 11, fontWeight: '600' },
   metaMine: { color: 'rgba(255,255,255,0.82)' },
+  receiptWrap: { minWidth: 12, alignItems: 'center', justifyContent: 'center' },
+  receiptBadge: { color: '#FFDB66', fontSize: 11, fontWeight: '900' },
+  receiptCheck: { color: '#FFFFFF', fontSize: 11, fontWeight: '900' },
+  readersText: { marginTop: 4, color: 'rgba(255,255,255,0.78)', fontSize: 10, fontWeight: '700', textAlign: 'right' },
   system: { color: '#355B3A', fontSize: 12, fontWeight: '700' },
   media: { width: 196, height: 136, borderRadius: 12, backgroundColor: '#31563A' },
   video: { alignItems: 'center', justifyContent: 'center' },
