@@ -1023,6 +1023,14 @@ function App() {
 
   useEffect(() => {
     const token = accessToken.trim();
+    if (!activeRoomId || !token || activeMsgs.length === 0) return;
+    const latest = activeMsgs[activeMsgs.length - 1];
+    if (!latest || latest.mine) return;
+    void markRoomAsRead(token, activeRoomId, latest.id);
+  }, [activeRoomId, activeMsgs.length, accessToken]);
+
+  useEffect(() => {
+    const token = accessToken.trim();
     if (!activeRoomId || !token) return;
     let cancelled = false;
     const run = async () => {
