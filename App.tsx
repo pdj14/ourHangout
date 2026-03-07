@@ -2,6 +2,7 @@
 import type { ComponentProps, ReactNode } from 'react';
 import {
   Alert,
+  AppState,
   Image,
   KeyboardAvoidingView,
   LayoutChangeEvent,
@@ -32,13 +33,20 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 WebBrowser.maybeCompleteAuthSession();
 
+let foregroundNotificationRoomId = '';
+let foregroundAppState: 'active' | 'background' | 'inactive' = 'active';
+
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+  handleNotification: async (notification) => {
+    const roomId = String(notification.request.content.data?.roomId || '');
+    const suppress = foregroundAppState === 'active' && roomId !== '' && roomId === foregroundNotificationRoomId;
+    return {
+      shouldShowBanner: !suppress,
+      shouldShowList: !suppress,
+      shouldPlaySound: !suppress,
+      shouldSetBadge: false,
+    };
+  },
 });
 
 type Stage = 'login' | 'setup_name' | 'setup_intro' | 'app';
@@ -609,6 +617,23 @@ const localeKey = (): Locale =>
 const uid = () => `${Date.now()}-${Math.round(Math.random() * 99999)}`;
 const tLabel = (ms: number) =>
   new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const decodeJwtPayload = (token: string): { sub?: string; email?: string } => {
+  const trimmed = token.trim();
+  if (!trimmed) return {};
+  const parts = trimmed.split('.');
+  if (parts.length < 2) return {};
+  try {
+    const normalized = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    const raw =
+      typeof atob === 'function'
+        ? atob(padded)
+        : Buffer.from(padded, 'base64').toString('utf8');
+    return JSON.parse(raw) as { sub?: string; email?: string };
+  } catch {
+    return {};
+  }
+};
 const roomTimeLabel = (ms: number) => {
   const target = new Date(ms);
   const now = new Date();
@@ -974,7 +999,17 @@ function App() {
 
   useEffect(() => {
     activeRoomRef.current = activeRoomId;
+    foregroundNotificationRoomId = activeRoomId ?? '';
   }, [activeRoomId]);
+
+  useEffect(() => {
+    foregroundAppState = AppState.currentState === 'active' ? 'active' : AppState.currentState === 'inactive' ? 'inactive' : 'background';
+    const sub = AppState.addEventListener('change', (nextState) => {
+      foregroundAppState =
+        nextState === 'active' ? 'active' : nextState === 'inactive' ? 'inactive' : 'background';
+    });
+    return () => sub.remove();
+  }, []);
 
   useEffect(() => {
     if (!activeRoomId) return;
@@ -1308,17 +1343,27 @@ function App() {
     token: string,
     fallbackUser?: BackendAuthUser
   ): Promise<{ hasProfileName: boolean }> => {
+    const tokenPayload = decodeJwtPayload(token);
     const me = await backendRequest<BackendProfile>('/v1/me', { method: 'GET' }, token).catch(
       () => null
     );
-    const nextUserId = (me?.id || fallbackUser?.id || MY_ID).trim();
-    const resolvedName = (me?.name || fallbackUser?.name || fallbackUser?.displayName || '').trim();
+    const nextUserId = (me?.id || fallbackUser?.id || tokenPayload.sub || MY_ID).trim();
+    const resolvedName = (
+      me?.name ||
+      fallbackUser?.name ||
+      fallbackUser?.displayName ||
+      me?.email ||
+      fallbackUser?.email ||
+      tokenPayload.email ||
+      profile.email ||
+      ''
+    ).trim();
     setCurrentUserId(nextUserId || MY_ID);
     setProfile((prev) => ({
       ...prev,
       name: resolvedName || prev.name || '',
       status: (me?.status || prev.status || '').trim(),
-      email: (me?.email || fallbackUser?.email || prev.email || '').trim(),
+      email: (me?.email || fallbackUser?.email || tokenPayload.email || prev.email || '').trim(),
       avatarUri: (me?.avatarUri || fallbackUser?.avatarUri || prev.avatarUri || '').trim(),
     }));
     setNameDraft(resolvedName);
@@ -1516,9 +1561,9 @@ function App() {
         const applySession = async (nextAccessToken: string, nextRefreshToken?: string, user?: BackendAuthUser) => {
           setAccessToken(nextAccessToken);
           setRefreshToken((nextRefreshToken || '').trim());
-          const synced = await syncInitialFromBackend(nextAccessToken, user);
+          await syncInitialFromBackend(nextAccessToken, user);
           if (cancelled) return;
-          setStage(synced.hasProfileName ? 'app' : 'setup_name');
+          setStage('app');
         };
 
         try {
@@ -1637,9 +1682,9 @@ function App() {
         });
         setAccessToken(nextAccessToken);
         setRefreshToken(nextRefreshToken);
-        const synced = await syncInitialFromBackend(nextAccessToken, authData.user);
+        await syncInitialFromBackend(nextAccessToken, authData.user);
         if (cancelled) return;
-        setStage(synced.hasProfileName ? 'app' : 'setup_name');
+        setStage('app');
       } catch (err) {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : '';
@@ -3275,9 +3320,15 @@ function App() {
             <Pressable style={styles.backdrop} onPress={() => setShowFriendModal(false)} />
             <KeyboardAvoidingView
               style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
-              behavior={kbBehavior}
+              behavior="padding"
+              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
             >
-              <View style={styles.sheet}>
+              <ScrollView
+                contentContainerStyle={styles.sheetScrollContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheet}>
                 <Text style={styles.h1}>{s.addFriend}</Text>
                 <TextInput
                   style={styles.field}
@@ -3357,7 +3408,8 @@ function App() {
                     );
                   })}
                 </ScrollView>
-              </View>
+                </View>
+              </ScrollView>
             </KeyboardAvoidingView>
           </View>
         </Modal>
@@ -4041,7 +4093,8 @@ const styles = StyleSheet.create({
   emptyCove: { paddingVertical: 24 },
   overlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end' },
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: FOREST.overlay },
-  sheetWrap: { width: '100%' },
+  sheetWrap: { width: '100%', flex: 1, justifyContent: 'flex-end' },
+  sheetScrollContent: { flexGrow: 1, justifyContent: 'flex-end' },
   sheet: {
     margin: 12,
     borderRadius: 18,
