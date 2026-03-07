@@ -1029,7 +1029,7 @@ function App() {
       try {
         await syncRoomMessagesFromBackend(token, activeRoomId);
         if (!cancelled) {
-          await backendRequest(`/v1/rooms/${activeRoomId}/read`, { method: 'POST' }, token).catch(() => null);
+          await markRoomAsRead(token, activeRoomId);
         }
       } catch {
         if (cancelled) return;
@@ -1217,6 +1217,36 @@ function App() {
     setTab('chats');
     setInput('');
     setDraftMedia(null);
+  };
+
+  const dismissPresentedNotificationsForRoom = async (roomId: string) => {
+    if (!roomId) return;
+    const presented = await Notifications.getPresentedNotificationsAsync().catch(() => []);
+    const targets = presented.filter(
+      (notification) => String(notification.request.content.data?.roomId || '') === roomId
+    );
+    await Promise.all(
+      targets.map((notification) =>
+        Notifications.dismissNotificationAsync(notification.request.identifier).catch(() => null)
+      )
+    );
+  };
+
+  const markRoomAsRead = async (token: string, roomId: string, lastReadMessageId?: string) => {
+    if (!token || !roomId) return;
+    await backendRequest(
+      `/v1/rooms/${roomId}/read`,
+      {
+        method: 'POST',
+        ...(lastReadMessageId ? { body: JSON.stringify({ lastReadMessageId }) } : {}),
+      },
+      token
+    ).catch(() => null);
+    setRooms((prev) => prev.map((room) => (room.id === roomId ? { ...room, unread: 0 } : room)));
+    await dismissPresentedNotificationsForRoom(roomId).catch(() => null);
+    if (activeRoomRef.current === roomId) {
+      await syncRoomMessagesFromBackend(token, roomId).catch(() => null);
+    }
   };
 
   const registerPushTokenWithBackend = async (pushToken: string, token: string) => {
@@ -1429,9 +1459,7 @@ function App() {
             setRoomMsgs(roomId, (prev) =>
               prev.map((message) => (message.id === messageId ? { ...message, delivery } : message))
             );
-            if (activeRoomRef.current === roomId) {
-              void syncRoomMessagesFromBackend(token, roomId).catch(() => null);
-            }
+            void syncRoomMessagesFromBackend(token, roomId).catch(() => null);
           }
           return;
         }
@@ -1441,6 +1469,9 @@ function App() {
           const unread = Number(payload.data.unread ?? Number.NaN);
           if (roomId && Number.isFinite(unread)) {
             setRooms((prev) => prev.map((room) => (room.id === roomId ? { ...room, unread } : room)));
+            if (unread === 0) {
+              void dismissPresentedNotificationsForRoom(roomId).catch(() => null);
+            }
           }
           return;
         }
@@ -1823,14 +1854,7 @@ function App() {
     }
 
     if (activeRoomRef.current === roomId && !mapped.mine) {
-      await backendRequest(
-        `/v1/rooms/${roomId}/read`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ lastReadMessageId: mapped.id }),
-        },
-        token
-      ).catch(() => null);
+      await markRoomAsRead(token, roomId, mapped.id);
     }
   };
 
