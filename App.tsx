@@ -819,6 +819,7 @@ function App() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [roomMenuId, setRoomMenuId] = useState<string | null>(null);
   const [wsRetryTick, setWsRetryTick] = useState(0);
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
   const cropOpenedAtRef = useRef(0);
@@ -826,6 +827,7 @@ function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roomGroupRef = useRef<Record<string, boolean>>({});
+  const sendLockRef = useRef(false);
   const pushTokenRef = useRef('');
   const registeredPushTokenRef = useRef('');
   const notificationResponseSubRef = useRef<Notifications.EventSubscription | null>(null);
@@ -2165,97 +2167,105 @@ function App() {
     if (!activeRoom) return;
     const text = input.trim();
     if (!text && !draftMedia) return;
+    if (sendLockRef.current) return;
 
+    sendLockRef.current = true;
+    setIsSendingMessage(true);
     const token = accessToken.trim();
-    if (token && text && !draftMedia) {
-      try {
-        const created = await backendRequest<BackendRoomMessage>(
-          `/v1/rooms/${activeRoom.id}/messages`,
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              clientMessageId: uid(),
-              kind: 'text',
-              text,
-            }),
-          },
-          token
-        );
-        const mapped = mapBackendMessage(created);
-        setRoomMsgs(activeRoom.id, (prev) => [...prev, mapped]);
-        touchRoom(activeRoom.id, mapped.text || '', false);
-        setInput('');
-        setDraftMedia(null);
-        return;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : '';
-        Alert.alert(msg || s.loginBackendSyncFailed);
-        return;
+    try {
+      if (token && text && !draftMedia) {
+        try {
+          const created = await backendRequest<BackendRoomMessage>(
+            `/v1/rooms/${activeRoom.id}/messages`,
+            {
+              method: 'POST',
+              body: JSON.stringify({
+                clientMessageId: uid(),
+                kind: 'text',
+                text,
+              }),
+            },
+            token
+          );
+          const mapped = mapBackendMessage(created);
+          setRoomMsgs(activeRoom.id, (prev) => [...prev, mapped]);
+          touchRoom(activeRoom.id, mapped.text || '', false);
+          setInput('');
+          setDraftMedia(null);
+          return;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : '';
+          Alert.alert(msg || s.loginBackendSyncFailed);
+          return;
+        }
       }
-    }
 
-    const out: Message[] = [];
-    if (text) {
-      out.push({
-        id: uid(),
-        roomId: activeRoom.id,
-        senderId: currentUserId,
-        senderName: profile.name || s.me,
-        mine: true,
-        kind: 'text',
-        text,
-        at: Date.now(),
-        delivery: 'sending',
-      });
-    }
-
-    if (draftMedia) {
-      out.push({
-        id: uid(),
-        roomId: activeRoom.id,
-        senderId: currentUserId,
-        senderName: profile.name || s.me,
-        mine: true,
-        kind: draftMedia.kind,
-        uri: draftMedia.uri,
-        at: Date.now(),
-        delivery: 'sending',
-      });
-    }
-
-    setRoomMsgs(activeRoom.id, (p) => [...p, ...out]);
-    const last = out[out.length - 1];
-    touchRoom(
-      activeRoom.id,
-      last?.kind === 'text' ? last.text || '' : last?.kind === 'image' ? s.imageLabel : s.videoLabel,
-      false
-    );
-
-    setInput('');
-    setDraftMedia(null);
-
-    out.forEach((m, i) => {
-      setTimeout(() => updateDelivery(activeRoom.id, m.id, 'sent'), 350 + i * 130);
-      setTimeout(() => updateDelivery(activeRoom.id, m.id, 'read'), 760 + i * 180);
-    });
-
-    const others = activeRoom.members.filter((m) => m !== currentUserId);
-    const replier = getFriend(others[Math.floor(Math.random() * others.length)] ?? '');
-    if (replier) {
-      setTimeout(() => {
-        const r: Message = {
+      const out: Message[] = [];
+      if (text) {
+        out.push({
           id: uid(),
           roomId: activeRoom.id,
-          senderId: replier.id,
-          senderName: replier.name,
-          mine: false,
+          senderId: currentUserId,
+          senderName: profile.name || s.me,
+          mine: true,
           kind: 'text',
-          text: randomReply(isKo),
+          text,
           at: Date.now(),
-        };
-        setRoomMsgs(activeRoom.id, (p) => [...p, r]);
-        touchRoom(activeRoom.id, r.text || '', true);
-      }, 1200);
+          delivery: 'sending',
+        });
+      }
+
+      if (draftMedia) {
+        out.push({
+          id: uid(),
+          roomId: activeRoom.id,
+          senderId: currentUserId,
+          senderName: profile.name || s.me,
+          mine: true,
+          kind: draftMedia.kind,
+          uri: draftMedia.uri,
+          at: Date.now(),
+          delivery: 'sending',
+        });
+      }
+
+      setRoomMsgs(activeRoom.id, (p) => [...p, ...out]);
+      const last = out[out.length - 1];
+      touchRoom(
+        activeRoom.id,
+        last?.kind === 'text' ? last.text || '' : last?.kind === 'image' ? s.imageLabel : s.videoLabel,
+        false
+      );
+
+      setInput('');
+      setDraftMedia(null);
+
+      out.forEach((m, i) => {
+        setTimeout(() => updateDelivery(activeRoom.id, m.id, 'sent'), 350 + i * 130);
+        setTimeout(() => updateDelivery(activeRoom.id, m.id, 'read'), 760 + i * 180);
+      });
+
+      const others = activeRoom.members.filter((m) => m !== currentUserId);
+      const replier = getFriend(others[Math.floor(Math.random() * others.length)] ?? '');
+      if (replier) {
+        setTimeout(() => {
+          const r: Message = {
+            id: uid(),
+            roomId: activeRoom.id,
+            senderId: replier.id,
+            senderName: replier.name,
+            mine: false,
+            kind: 'text',
+            text: randomReply(isKo),
+            at: Date.now(),
+          };
+          setRoomMsgs(activeRoom.id, (p) => [...p, r]);
+          touchRoom(activeRoom.id, r.text || '', true);
+        }, 1200);
+      }
+    } finally {
+      sendLockRef.current = false;
+      setIsSendingMessage(false);
     }
   };
 
@@ -3209,8 +3219,8 @@ function App() {
                     multiline
                   />
                   <Pressable
-                    style={[styles.send, !input.trim() && styles.off]}
-                    disabled={!input.trim()}
+                    style={[styles.send, (!input.trim() && !draftMedia) && styles.off, isSendingMessage && styles.off]}
+                    disabled={(!input.trim() && !draftMedia) || isSendingMessage}
                     onPress={() => {
                       void send();
                     }}
