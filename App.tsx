@@ -1209,8 +1209,19 @@ function App() {
   const openRoomFromExternalSignal = async (roomId: string) => {
     if (!roomId) return;
     const token = accessToken.trim();
+    let hasRoom = rooms.some((room) => room.id === roomId);
     if (token) {
-      await refreshRoomsFromBackend(token).catch(() => null);
+      const refreshedRooms = await refreshRoomsFromBackend(token).catch(() => null);
+      hasRoom = hasRoom || !!refreshedRooms?.some((room) => room.id === roomId);
+      if (!hasRoom) {
+        const backRoom = await backendRequest<BackendRoom>(`/v1/rooms/${roomId}`, { method: 'GET' }, token).catch(() => null);
+        if (backRoom?.id) {
+          const mapped = mapBackendRoom(backRoom, currentUserId);
+          hasRoom = true;
+          setRooms((prev) => [mapped, ...prev.filter((room) => room.id !== mapped.id)]);
+          setMessages((prev) => ({ ...prev, [mapped.id]: prev[mapped.id] ?? [] }));
+        }
+      }
       await syncRoomMessagesFromBackend(token, roomId).catch(() => null);
     }
     setActiveRoomId(roomId);
@@ -1314,52 +1325,54 @@ function App() {
   const refreshFriendsAndRequests = async (token: string) => {
     const [backFriendsRaw, requestsRaw] = await Promise.all([
       backendRequest<BackendFriend[] | BackendListData<BackendFriend>>('/v1/friends', { method: 'GET' }, token).catch(
-        () => []
+        () => null
       ),
-      backendRequest<BackendFriendRequestList>('/v1/friends/requests', { method: 'GET' }, token).catch(() => ({
-        incoming: [],
-        outgoing: [],
-      })),
+      backendRequest<BackendFriendRequestList>('/v1/friends/requests', { method: 'GET' }, token).catch(() => null),
     ]);
 
-    const backFriends = asListItems<BackendFriend>(backFriendsRaw);
-    if (Array.isArray(backFriends)) {
-      setFriends(
-        backFriends
-          .filter((f) => !!f?.id && !!f?.name)
-          .map((f) => ({
-            id: String(f.id),
-            name: String(f.name),
-            status: String(f.status || ''),
-            trusted: !!f.trusted,
-          }))
-      );
+    if (backFriendsRaw) {
+      const backFriends = asListItems<BackendFriend>(backFriendsRaw);
+      if (Array.isArray(backFriends)) {
+        setFriends(
+          backFriends
+            .filter((f) => !!f?.id && !!f?.name)
+            .map((f) => ({
+              id: String(f.id),
+              name: String(f.name),
+              status: String(f.status || ''),
+              trusted: !!f.trusted,
+            }))
+        );
+      }
     }
 
-    setFriendRequestsIncoming(mapFriendRequests(requestsRaw.incoming));
-    setFriendRequestsOutgoing(mapFriendRequests(requestsRaw.outgoing));
+    if (requestsRaw) {
+      setFriendRequestsIncoming(mapFriendRequests(requestsRaw.incoming));
+      setFriendRequestsOutgoing(mapFriendRequests(requestsRaw.outgoing));
+    }
   };
 
-  const refreshRoomsFromBackend = async (token: string, fallbackUserId?: string) => {
+  const refreshRoomsFromBackend = async (token: string, fallbackUserId?: string): Promise<Room[] | null> => {
     const backRoomsRaw = await backendRequest<BackendRoom[] | BackendListData<BackendRoom>>(
       '/v1/rooms',
       { method: 'GET' },
       token
-    ).catch(() => []);
+    ).catch(() => null);
+    if (!backRoomsRaw) return null;
     const backRooms = asListItems<BackendRoom>(backRoomsRaw);
-    if (Array.isArray(backRooms)) {
-      const mapped = backRooms
-        .filter((r) => !!r?.id)
-        .map((r) => mapBackendRoom(r, fallbackUserId));
-      setRooms(mapped);
-      setMessages((prev) => {
-        const next = { ...prev };
-        mapped.forEach((room) => {
-          if (!next[room.id]) next[room.id] = [];
-        });
-        return next;
+    if (!Array.isArray(backRooms)) return null;
+    const mapped = backRooms
+      .filter((r) => !!r?.id)
+      .map((r) => mapBackendRoom(r, fallbackUserId));
+    setRooms(mapped);
+    setMessages((prev) => {
+      const next = { ...prev };
+      mapped.forEach((room) => {
+        if (!next[room.id]) next[room.id] = [];
       });
-    }
+      return next;
+    });
+    return mapped;
   };
 
   const syncRoomMessagesFromBackend = async (token: string, roomId: string) => {
