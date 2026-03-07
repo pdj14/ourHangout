@@ -1046,7 +1046,7 @@ function App() {
     if (!activeRoomId || !token) return;
     const interval = setInterval(() => {
       void syncRoomMessagesFromBackend(token, activeRoomId).catch(() => null);
-    }, 1800);
+    }, 900);
     return () => clearInterval(interval);
   }, [activeRoomId, accessToken]);
 
