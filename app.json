@@ -37,7 +37,15 @@
     "plugins": [
       "expo-font",
       "expo-web-browser",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/android-icon-monochrome.png",
+          "color": "#8B95FF",
+          "defaultChannel": "messages"
+        }
+      ]
     ],
     "extra": {
       "googleAuth": {

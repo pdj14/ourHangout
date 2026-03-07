@@ -22,6 +22,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as Google from 'expo-auth-session/providers/google';
+import * as Device from 'expo-device';
+import * as Notifications from 'expo-notifications';
 import * as WebBrowser from 'expo-web-browser';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
@@ -29,6 +31,15 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 WebBrowser.maybeCompleteAuthSession();
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 type Stage = 'login' | 'setup_name' | 'setup_intro' | 'app';
 type Tab = 'chats' | 'friends' | 'profile';
@@ -785,6 +796,9 @@ function App() {
   const sessionRestoreStartedRef = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
   const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pushTokenRef = useRef('');
+  const registeredPushTokenRef = useRef('');
+  const notificationResponseSubRef = useRef<Notifications.EventSubscription | null>(null);
 
   const getFriend = (fid: string) => friends.find((f) => f.id === fid);
   const roomTitle = (room: Room) =>
@@ -1148,6 +1162,71 @@ function App() {
     return '';
   };
 
+  const pushPlatform: 'android' | 'ios' | 'web' =
+    Platform.OS === 'android' ? 'android' : Platform.OS === 'ios' ? 'ios' : 'web';
+
+  const openRoomFromExternalSignal = async (roomId: string) => {
+    if (!roomId) return;
+    const token = accessToken.trim();
+    if (token) {
+      await refreshRoomsFromBackend(token).catch(() => null);
+      await syncRoomMessagesFromBackend(token, roomId).catch(() => null);
+    }
+    setActiveRoomId(roomId);
+    setTab('chats');
+    setInput('');
+    setDraftMedia(null);
+  };
+
+  const registerPushTokenWithBackend = async (pushToken: string, token: string) => {
+    if (!pushToken || !token) return;
+    if (registeredPushTokenRef.current === pushToken) return;
+    await backendRequest(
+      '/v1/push-tokens',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          platform: pushPlatform,
+          pushToken,
+        }),
+      },
+      token
+    );
+    registeredPushTokenRef.current = pushToken;
+  };
+
+  const requestDevicePushToken = async (): Promise<string> => {
+    if (!Device.isDevice) return '';
+
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('messages', {
+        name: 'Messages',
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 250, 150, 250],
+        lightColor: '#8B95FF',
+      });
+    }
+
+    const existing = await Notifications.getPermissionsAsync();
+    let status = existing.status;
+    if (status !== 'granted') {
+      const requested = await Notifications.requestPermissionsAsync();
+      status = requested.status;
+    }
+    if (status !== 'granted') return '';
+
+    try {
+      const result = await Notifications.getDevicePushTokenAsync();
+      const pushToken = typeof result.data === 'string' ? result.data.trim() : '';
+      if (pushToken) {
+        pushTokenRef.current = pushToken;
+      }
+      return pushToken;
+    } catch {
+      return '';
+    }
+  };
+
   const mapFriendRequests = (value: BackendFriendRequest[] | undefined): FriendRequestItem[] => {
     if (!Array.isArray(value)) return [];
     return value
@@ -1362,6 +1441,43 @@ function App() {
       socket.close();
     };
   }, [accessToken, backendBaseUrl, backendState, wsRetryTick]);
+
+  useEffect(() => {
+    const token = accessToken.trim();
+    if (backendState !== 'ready' || !token) return;
+    let cancelled = false;
+
+    const run = async () => {
+      const nativeToken = pushTokenRef.current || (await requestDevicePushToken());
+      if (!nativeToken || cancelled) return;
+      await registerPushTokenWithBackend(nativeToken, token).catch(() => null);
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, backendState]);
+
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      const roomId = String(response.notification.request.content.data?.roomId || '');
+      if (!roomId) return;
+      void openRoomFromExternalSignal(roomId);
+    });
+    notificationResponseSubRef.current = subscription;
+
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      const roomId = String(response?.notification.request.content.data?.roomId || '');
+      if (!roomId) return;
+      void openRoomFromExternalSignal(roomId);
+    });
+
+    return () => {
+      notificationResponseSubRef.current?.remove();
+      notificationResponseSubRef.current = null;
+    };
+  }, [accessToken, backendState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2664,6 +2780,8 @@ function App() {
   const resetForLogout = () => {
     setAccessToken('');
     setRefreshToken('');
+    pushTokenRef.current = '';
+    registeredPushTokenRef.current = '';
     setCurrentUserId(MY_ID);
     setStage('login');
     setTab('chats');
@@ -2703,6 +2821,16 @@ function App() {
         onPress: () => {
           const run = async () => {
             try {
+              if (accessToken.trim() && pushTokenRef.current) {
+                await backendRequest(
+                  '/v1/push-tokens',
+                  {
+                    method: 'DELETE',
+                    body: JSON.stringify({ pushToken: pushTokenRef.current }),
+                  },
+                  accessToken.trim()
+                ).catch(() => null);
+              }
               await clearSessionInStorage();
             } finally {
               setIsSessionRestoring(false);

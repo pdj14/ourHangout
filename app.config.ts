@@ -25,9 +25,14 @@ const defaultBackend = defaultExtra.backend ?? {};
 
 const backendBaseUrl = pick(process.env.EXPO_PUBLIC_BACKEND_BASE_URL, defaultBackend.baseUrl)
   .replace(/\/+$/, '');
+const androidGoogleServicesFile = trim(process.env.ANDROID_GOOGLE_SERVICES_FILE);
 
 const config: ExpoConfig = {
   ...baseConfig,
+  android: {
+    ...baseConfig.android,
+    ...(androidGoogleServicesFile ? { googleServicesFile: androidGoogleServicesFile } : {})
+  },
   extra: {
     ...defaultExtra,
     googleAuth: {
