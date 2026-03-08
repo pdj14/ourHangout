@@ -3246,12 +3246,12 @@ function App() {
                           <View style={styles.metaRow}>
                             {m.mine ? (
                               <View style={styles.receiptWrap}>
-                                {typeof m.unreadCount === 'number' && m.unreadCount > 0 ? (
-                                  <Text style={styles.receiptBadge}>{m.unreadCount}</Text>
-                                ) : m.delivery === 'read' ||
-                                  m.unreadCount === 0 ||
-                                  (!activeRoom.isGroup && (directReadCutoffs[activeRoom.id] ?? 0) >= m.at) ? (
+                                {m.delivery === 'read' ||
+                                m.unreadCount === 0 ||
+                                (!activeRoom.isGroup && (directReadCutoffs[activeRoom.id] ?? 0) >= m.at) ? (
                                   <Text style={styles.receiptCheck}>✓</Text>
+                                ) : typeof m.unreadCount === 'number' && m.unreadCount > 0 ? (
+                                  <Text style={styles.receiptBadge}>{m.unreadCount}</Text>
                                 ) : null}
                               </View>
                             ) : null}
