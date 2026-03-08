@@ -1097,7 +1097,9 @@ function App() {
     if (!activeRoomId || !token || activeMsgs.length === 0) return;
     const latest = activeMsgs[activeMsgs.length - 1];
     if (!latest || latest.mine) return;
-    void markRoomAsRead(token, activeRoomId, latest.id);
+    if (latest.delivery !== 'read') {
+      void markRoomAsRead(token, activeRoomId, latest.id);
+    }
   }, [activeRoomId, activeMsgs.length, accessToken]);
 
   useEffect(() => {
@@ -1106,7 +1108,8 @@ function App() {
     let cancelled = false;
     const run = async () => {
       try {
-        await syncRoomMessagesFromBackend(token, activeRoomId);
+        const synced = await syncRoomMessagesFromBackend(token, activeRoomId);
+        await maybeMarkLatestIncomingMessageRead(token, activeRoomId, synced);
         if (!cancelled) {
           await markRoomAsRead(token, activeRoomId);
         }
@@ -1124,7 +1127,12 @@ function App() {
     const token = accessToken.trim();
     if (!activeRoomId || !token) return;
     const interval = setInterval(() => {
-      void syncRoomMessagesFromBackend(token, activeRoomId).catch(() => null);
+      void (async () => {
+        const synced = await syncRoomMessagesFromBackend(token, activeRoomId).catch(() => null);
+        if (synced) {
+          await maybeMarkLatestIncomingMessageRead(token, activeRoomId, synced).catch(() => null);
+        }
+      })();
     }, 900);
     return () => clearInterval(interval);
   }, [activeRoomId, accessToken]);
@@ -1339,6 +1347,17 @@ function App() {
     }
   };
 
+  const maybeMarkLatestIncomingMessageRead = async (
+    token: string,
+    roomId: string,
+    roomMessages?: Message[]
+  ) => {
+    const source = roomMessages ?? messages[roomId] ?? [];
+    const latest = source[source.length - 1];
+    if (!latest || latest.mine || latest.delivery === 'read') return;
+    await markRoomAsRead(token, roomId, latest.id);
+  };
+
   const registerPushTokenWithBackend = async (pushToken: string, token: string) => {
     if (!pushToken || !token) return;
     if (registeredPushTokenRef.current === pushToken) return;
@@ -1454,17 +1473,19 @@ function App() {
     return mapped;
   };
 
-  const syncRoomMessagesFromBackend = async (token: string, roomId: string) => {
+  const syncRoomMessagesFromBackend = async (token: string, roomId: string): Promise<Message[]> => {
     const raw = await backendRequest<BackendRoomMessage[] | BackendListData<BackendRoomMessage>>(
       `/v1/rooms/${roomId}/messages?limit=100`,
       { method: 'GET' },
       token
     );
     const items = asListItems<BackendRoomMessage>(raw).filter((item) => !!item?.id);
+    const mappedItems = items.map((item) => mapBackendMessage(item));
     setMessages((prev) => ({
       ...prev,
-      [roomId]: items.map((item) => mapBackendMessage(item)),
+      [roomId]: mappedItems,
     }));
+    return mappedItems;
   };
 
   const syncInitialFromBackend = async (
