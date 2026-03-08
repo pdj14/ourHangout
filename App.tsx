@@ -1599,7 +1599,7 @@ function App() {
         }
 
         if (payload.event === 'friend.updated') {
-          void refreshFriendsAndRequests(token);
+          void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token)]).catch(() => null);
         }
       } catch {
         // Ignore malformed websocket payloads and keep the socket alive.
@@ -1656,15 +1656,29 @@ function App() {
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
       const roomId = String(response.notification.request.content.data?.roomId || '');
-      if (!roomId) return;
-      void openRoomFromExternalSignal(roomId);
+      const token = accessToken.trim();
+      if (roomId) {
+        void openRoomFromExternalSignal(roomId);
+        return;
+      }
+      if (!token) return;
+      void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token)]).finally(() => {
+        setTab('friends');
+      });
     });
     notificationResponseSubRef.current = subscription;
 
     void Notifications.getLastNotificationResponseAsync().then((response) => {
       const roomId = String(response?.notification.request.content.data?.roomId || '');
-      if (!roomId) return;
-      void openRoomFromExternalSignal(roomId);
+      const token = accessToken.trim();
+      if (roomId) {
+        void openRoomFromExternalSignal(roomId);
+        return;
+      }
+      if (!response || !token) return;
+      void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token)]).finally(() => {
+        setTab('friends');
+      });
     });
 
     return () => {
