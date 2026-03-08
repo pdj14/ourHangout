@@ -172,21 +172,6 @@ type FriendLookupResult = {
   outgoingPending: boolean;
   incomingPending: boolean;
 };
-type BackendBot = {
-  id?: string;
-  botKey?: string;
-  name?: string;
-  description?: string;
-  userId?: string;
-  isActive?: boolean;
-};
-type BotSummary = {
-  id: string;
-  botKey: string;
-  name: string;
-  description: string;
-  userId: string;
-};
 type BackendRoom = {
   id?: string;
   title?: string;
@@ -449,9 +434,6 @@ const TEXT = {
     noSearchFriends: 'No friends match your search.',
     goFriends: 'Go to Friends',
     newGroup: 'New Group',
-    botsTitle: 'Assistant',
-    botStart: 'Chat with assistant',
-    botLoadFailed: 'Failed to load bot list.',
     addFriend: 'Add friend',
     friendName: 'Friend name',
     friendStatus: 'Status message',
@@ -591,9 +573,6 @@ const TEXT = {
     noSearchFriends: '검색 결과가 없어요.',
     goFriends: '친구로 이동',
     newGroup: '그룹 만들기',
-    botsTitle: '도우미',
-    botStart: '도우미와 대화',
-    botLoadFailed: '봇 목록을 불러오지 못했어요.',
     addFriend: '친구 추가',
     friendName: '친구 이름',
     friendStatus: '상태 메시지',
@@ -845,7 +824,6 @@ function App() {
   const [currentUserId, setCurrentUserId] = useState(MY_ID);
 
   const [friends, setFriends] = useState<Friend[]>([]);
-  const [bots, setBots] = useState<BotSummary[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
@@ -901,17 +879,14 @@ function App() {
   const notificationResponseSubRef = useRef<Notifications.EventSubscription | null>(null);
 
   const getFriend = (fid: string) => friends.find((f) => f.id === fid);
-  const getBot = (botUserId: string) => bots.find((bot) => bot.userId === botUserId);
   const roomTitle = (room: Room) =>
     room.isGroup
       ? room.title
-      : getFriend(room.members.find((m) => m !== currentUserId) ?? '')?.name ??
-        getBot(room.members.find((m) => m !== currentUserId) ?? '')?.name ??
-        room.title;
+      : getFriend(room.members.find((m) => m !== currentUserId) ?? '')?.name ?? room.title;
   const roomMembers = (room: Room) =>
     room.members
       .filter((m) => m !== currentUserId)
-      .map((m) => getFriend(m)?.name ?? getBot(m)?.name ?? '')
+      .map((m) => getFriend(m)?.name ?? '')
       .filter(Boolean)
       .join(', ');
 
@@ -1475,23 +1450,6 @@ function App() {
     }
   };
 
-  const refreshBotsFromBackend = async (token: string) => {
-    const raw = await backendRequest<BackendBot[] | BackendListData<BackendBot>>('/v1/bots', { method: 'GET' }, token).catch(
-      () => null
-    );
-    if (!raw) return;
-    const items = asListItems<BackendBot>(raw)
-      .filter((bot) => !!bot?.id && !!bot?.userId)
-      .map((bot) => ({
-        id: String(bot.id),
-        botKey: String(bot.botKey || ''),
-        name: String(bot.name || 'Assistant'),
-        description: String(bot.description || ''),
-        userId: String(bot.userId),
-      }));
-    setBots(items);
-  };
-
   const refreshRoomsFromBackend = async (token: string, fallbackUserId?: string): Promise<Room[] | null> => {
     const backRoomsRaw = await backendRequest<BackendRoom[] | BackendListData<BackendRoom>>(
       '/v1/rooms',
@@ -1562,7 +1520,7 @@ function App() {
 
     await syncLocaleWithBackend(token, me?.locale);
 
-    await Promise.all([refreshFriendsAndRequests(token), refreshBotsFromBackend(token)]);
+    await refreshFriendsAndRequests(token);
 
     await refreshRoomsFromBackend(token, nextUserId);
     return { hasProfileName: resolvedName.length > 0 };
@@ -2055,29 +2013,6 @@ function App() {
   const startDirectRoom = async (fid: string) => {
     const rid = await ensureDirectRoom(fid);
     openRoom(rid);
-  };
-
-  const startBotRoom = async (botId: string) => {
-    const token = accessToken.trim();
-    if (!token) return;
-    try {
-      const result = await backendRequest<{ bot?: BackendBot; room?: BackendRoom }>(
-        `/v1/bots/${botId}/rooms`,
-        { method: 'POST' },
-        token
-      );
-      const backRoom = result.room;
-      if (!backRoom?.id) {
-        throw new Error('missing bot room');
-      }
-      const mapped = mapBackendRoom(backRoom, currentUserId);
-      setRooms((prev) => [mapped, ...prev.filter((room) => room.id !== mapped.id)]);
-      setMessages((prev) => ({ ...prev, [mapped.id]: prev[mapped.id] ?? [] }));
-      openRoom(mapped.id);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : '';
-      Alert.alert(normalizeBackendErrorMessage(msg || s.botLoadFailed, isKo));
-    }
   };
 
   const openRoom = (rid: string) => {
@@ -2585,7 +2520,7 @@ function App() {
   const persistProfile = async (nextProfile: { name: string; status: string; avatarUri: string }) => {
     const token = accessToken.trim();
     if (!token) {
-    setProfile((p) => ({ ...p, ...nextProfile }));
+      setProfile((p) => ({ ...p, ...nextProfile }));
       return true;
     }
     const saved = await backendRequest<BackendProfile>(
@@ -3089,7 +3024,6 @@ function App() {
     setStatusDraft('');
     setProfilePhotoDraft('');
     setFriends([]);
-    setBots([]);
     setRooms([]);
     setMessages({});
     setChatQuery('');
@@ -3447,34 +3381,13 @@ function App() {
               <View style={styles.main}>
                 {tab === 'chats' ? (
                   <ScrollView contentContainerStyle={styles.list}>
-                    {sortedRooms.length === 0 && bots.length === 0 ? (
+                    {sortedRooms.length === 0 ? (
                       <View style={[styles.empty, styles.emptyCove]}>
                         <Text style={styles.h1}>{s.noRooms}</Text>
                         <Text style={styles.sub}>{s.noRoomsBody}</Text>
                       </View>
                     ) : (
                       <>
-                        {bots.length > 0 ? <Text style={styles.sectionTitle}>{s.botsTitle}</Text> : null}
-                        {bots.map((bot) => (
-                          <Pressable key={bot.id} style={styles.roomItem} onPress={() => void startBotRoom(bot.id)}>
-                            <View style={styles.listAvatar}>
-                              <Text style={styles.listAvatarText}>{bot.name.slice(0, 1).toUpperCase()}</Text>
-                            </View>
-                            <View style={styles.roomItemCopy}>
-                              <View style={styles.roomItemHead}>
-                                <Text style={[styles.itemTitle, { flex: 1 }]}>{bot.name}</Text>
-                              </View>
-                              <Text style={styles.roomPreview} numberOfLines={1}>
-                                {bot.description || s.botStart}
-                              </Text>
-                            </View>
-                            <View style={styles.itemRight}>
-                              <Pressable style={styles.iconLight} onPress={() => void startBotRoom(bot.id)}>
-                                <Ionicons name="chatbubble-ellipses" size={16} color={FOREST.text} />
-                              </Pressable>
-                            </View>
-                          </Pressable>
-                        ))}
                         {favoriteRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '즐겨찾기' : 'Favorites'}</Text> : null}
                         {favoriteRooms.map(renderRoomRow)}
                         {otherRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '대화방' : 'Chats'}</Text> : null}
