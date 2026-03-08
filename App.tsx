@@ -1558,13 +1558,7 @@ function App() {
             }
             setRoomMsgs(roomId, (prev) =>
               prev.map((message) => {
-                if (
-                  delivery === 'read' &&
-                  !isGroupRoom &&
-                  message.mine &&
-                  Number.isFinite(deliveryAt) &&
-                  message.at <= deliveryAt
-                ) {
+                if (delivery === 'read' && !isGroupRoom && message.mine) {
                   return { ...message, delivery: 'read', unreadCount: 0 };
                 }
                 return message.id === messageId ? { ...message, delivery } : message;
