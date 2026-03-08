@@ -22,7 +22,6 @@ import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import * as Google from 'expo-auth-session/providers/google';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import * as WebBrowser from 'expo-web-browser';
@@ -30,8 +29,12 @@ import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
-WebBrowser.maybeCompleteAuthSession();
+import {
+  GoogleSignin,
+  isErrorWithCode,
+  isSuccessResponse,
+  statusCodes,
+} from '@react-native-google-signin/google-signin';
 
 let foregroundNotificationRoomId = '';
 let foregroundAppState: 'active' | 'background' | 'inactive' = 'active';
@@ -783,13 +786,6 @@ function App() {
   }, []);
   const pickValue = (primary?: string, fallback?: string): string =>
     (primary || '').trim() || (fallback || '').trim();
-  const toGoogleNativeRedirectUri = (clientId?: string): string => {
-    const trimmed = (clientId || '').trim();
-    const suffix = '.apps.googleusercontent.com';
-    if (!trimmed || !trimmed.endsWith(suffix)) return '';
-    const guid = trimmed.slice(0, -suffix.length);
-    return guid ? `com.googleusercontent.apps.${guid}:/oauthredirect` : '';
-  };
   const g = {
     androidClientId: pickValue(
       extra.googleAuth?.androidClientId,
@@ -798,7 +794,6 @@ function App() {
     iosClientId: pickValue(extra.googleAuth?.iosClientId, runtimeEnv.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID),
     webClientId: pickValue(extra.googleAuth?.webClientId, runtimeEnv.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID),
   };
-  const androidGoogleClientId = pickValue(g.androidClientId, g.webClientId);
   const backendBaseUrl = pickValue(
     extra.backend?.baseUrl,
     runtimeEnv.EXPO_PUBLIC_BACKEND_BASE_URL
@@ -806,21 +801,9 @@ function App() {
     .replace(/\/+$/, '') || 'http://wowjini0228.synology.me:7083';
 
   const hasGoogle = !!Platform.select({
-    android: androidGoogleClientId,
+    android: g.webClientId,
     ios: g.iosClientId || g.webClientId,
     default: g.webClientId,
-  });
-  const googleRedirectUri =
-    Platform.OS === 'android'
-      ? toGoogleNativeRedirectUri(androidGoogleClientId) || undefined
-      : undefined;
-
-  const [googleReq, googleRes, googlePrompt] = Google.useAuthRequest({
-    androidClientId: androidGoogleClientId,
-    iosClientId: g.iosClientId,
-    webClientId: g.webClientId,
-    redirectUri: googleRedirectUri,
-    scopes: ['openid', 'profile', 'email'],
   });
 
   const [stage, setStage] = useState<Stage>('login');
@@ -1792,76 +1775,36 @@ function App() {
   }, [accessToken, refreshToken, isSessionRestoring]);
 
   useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      if (!googleRes) return;
-      if (googleRes.type === 'error') {
-        const maybeErr = (googleRes as { error?: { message?: string } }).error;
-        const msg = (maybeErr?.message || '').trim();
-        if (!cancelled) setLoginErr(msg ? `${s.loginFailed} (${msg})` : s.loginFailed);
-        return;
-      }
-      if (googleRes.type !== 'success') return;
-      const gParams = (googleRes.params as Record<string, string | undefined> | undefined) ?? {};
-      const gAccessToken =
-        googleRes.authentication?.accessToken || gParams.access_token || gParams.accessToken || '';
-      const gIdToken =
-        (googleRes.authentication as { idToken?: string } | undefined)?.idToken ||
-        gParams.id_token ||
-        gParams.idToken ||
-        '';
-      if (!gIdToken.trim()) {
-        if (!cancelled) setLoginErr(s.loginFailed);
-        return;
-      }
-      try {
-        const postGoogleAuth = async (idToken: string, accessToken: string) => {
-          const payload: {
-            idToken?: string;
-            accessToken?: string;
-            device: { platform: string; appVersion: string; deviceId: string };
-          } = {
-            device: {
-              platform: Platform.OS,
-              appVersion: Constants.expoConfig?.version || '1.0.0',
-              deviceId: String(Constants.deviceName || Constants.sessionId || 'unknown'),
-            },
-          };
-          const trimmedIdToken = idToken.trim();
-          const trimmedAccessToken = accessToken.trim();
-          if (trimmedIdToken) payload.idToken = trimmedIdToken;
-          if (trimmedAccessToken) payload.accessToken = trimmedAccessToken;
-          return backendRequest<BackendAuthData>('/v1/auth/google', {
-            method: 'POST',
-            body: JSON.stringify(payload),
-          });
-        };
+    if (!hasGoogle) return;
+    GoogleSignin.configure({
+      webClientId: g.webClientId,
+      ...(g.iosClientId ? { iosClientId: g.iosClientId } : {}),
+      scopes: ['openid', 'profile', 'email'],
+      offlineAccess: false,
+    });
+  }, [g.iosClientId, g.webClientId, hasGoogle]);
 
-        const authData = await postGoogleAuth(gIdToken, gAccessToken);
-        if (cancelled) return;
-        const nextAccessToken = (authData.accessToken || authData.tokens?.accessToken || '').trim();
-        const nextRefreshToken = (authData.refreshToken || authData.tokens?.refreshToken || '').trim();
-        if (!nextAccessToken) throw new Error('missing access token');
-        await writeSessionToStorage({
-          accessToken: nextAccessToken,
-          ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {})
-        });
-        setAccessToken(nextAccessToken);
-        setRefreshToken(nextRefreshToken);
-        await syncInitialFromBackend(nextAccessToken, authData.user);
-        if (cancelled) return;
-        setStage('app');
-      } catch (err) {
-        if (cancelled) return;
-        const msg = err instanceof Error ? err.message : '';
-        setLoginErr(msg ? `${s.loginBackendAuthFailed} (${msg})` : s.loginBackendAuthFailed);
-      }
+  const postGoogleAuth = async (idToken: string, accessToken: string) => {
+    const payload: {
+      idToken?: string;
+      accessToken?: string;
+      device: { platform: string; appVersion: string; deviceId: string };
+    } = {
+      device: {
+        platform: Platform.OS,
+        appVersion: Constants.expoConfig?.version || '1.0.0',
+        deviceId: String(Constants.deviceName || Constants.sessionId || 'unknown'),
+      },
     };
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, [googleRes, s.loginBackendAuthFailed, s.loginFailed]);
+    const trimmedIdToken = idToken.trim();
+    const trimmedAccessToken = accessToken.trim();
+    if (trimmedIdToken) payload.idToken = trimmedIdToken;
+    if (trimmedAccessToken) payload.accessToken = trimmedAccessToken;
+    return backendRequest<BackendAuthData>('/v1/auth/google', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  };
 
   const setRoomMsgs = (rid: string, updater: (prev: Message[]) => Message[]) =>
     setMessages((p) => ({ ...p, [rid]: updater(p[rid] ?? []) }));
@@ -2480,7 +2423,7 @@ function App() {
 
   const startGoogle = async () => {
     setLoginErr('');
-    if (!hasGoogle || !googleReq) {
+    if (!hasGoogle) {
       setLoginErr(s.loginHintMissing);
       return;
     }
@@ -2492,20 +2435,49 @@ function App() {
       return;
     }
     try {
-      const res = await googlePrompt();
-      if (res.type === 'success') return;
-      if (res.type === 'cancel') {
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      const signInResponse = await GoogleSignin.signIn();
+      if (!isSuccessResponse(signInResponse)) {
         setLoginErr(s.loginCanceled);
         return;
       }
-      if (res.type === 'dismiss') {
-        setLoginErr(s.loginDismissed);
+      const tokens = await GoogleSignin.getTokens().catch(() => ({ idToken: '', accessToken: '' }));
+      const idToken = (signInResponse.data.idToken || tokens.idToken || '').trim();
+      const accessToken = (tokens.accessToken || '').trim();
+      if (!idToken) {
+        setLoginErr(s.loginFailed);
         return;
       }
-      const maybeErr = (res as { error?: { message?: string } }).error;
-      const msg = (maybeErr?.message || '').trim();
-      setLoginErr(msg ? `${s.loginFailed} (${msg})` : s.loginFailed);
+
+      const authData = await postGoogleAuth(idToken, accessToken);
+      const nextAccessToken = (authData.accessToken || authData.tokens?.accessToken || '').trim();
+      const nextRefreshToken = (authData.refreshToken || authData.tokens?.refreshToken || '').trim();
+      if (!nextAccessToken) throw new Error('missing access token');
+      await writeSessionToStorage({
+        accessToken: nextAccessToken,
+        ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {})
+      });
+      setAccessToken(nextAccessToken);
+      setRefreshToken(nextRefreshToken);
+      await syncInitialFromBackend(nextAccessToken, authData.user);
+      setStage('app');
     } catch (err) {
+      if (isErrorWithCode(err)) {
+        if (err.code === statusCodes.SIGN_IN_CANCELLED) {
+          setLoginErr(s.loginCanceled);
+          return;
+        }
+        if (err.code === statusCodes.IN_PROGRESS) {
+          return;
+        }
+        if (err.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+          const msg = isKo
+            ? '이 기기에서는 Google Play 서비스를 사용할 수 없어 로그인할 수 없어요.'
+            : 'Google Play services are not available on this device.';
+          setLoginErr(msg);
+          return;
+        }
+      }
       const msg = err instanceof Error ? err.message : '';
       setLoginErr(msg ? `${s.loginFailed} (${msg})` : s.loginFailed);
     }
@@ -3043,6 +3015,7 @@ function App() {
                   accessToken.trim()
                 ).catch(() => null);
               }
+              await GoogleSignin.signOut().catch(() => null);
               await clearSessionInStorage();
             } finally {
               setIsSessionRestoring(false);
