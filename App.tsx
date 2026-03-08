@@ -3239,11 +3239,11 @@ function App() {
                 </Pressable>
                 <View style={styles.headerCopy}>
                   <Text style={styles.title}>{roomTitle(activeRoom)}</Text>
-                  <Text style={styles.headerMeta}>
-                    {activeRoom.isGroup
-                      ? `${s.denRoomGroup} · ${activeRoomCompanions} ${isKo ? '명과 함께' : 'companions nearby'}`
-                      : s.denRoomDirect}
-                  </Text>
+                  {activeRoom.isGroup ? (
+                    <Text style={styles.headerMeta}>
+                      {`${activeRoomCompanions} ${isKo ? '명과 함께' : 'companions nearby'}`}
+                    </Text>
+                  ) : null}
                 </View>
                 <Pressable style={styles.iconDark} onPress={() => setRoomMenuId(activeRoom.id)}>
                   <Ionicons name="ellipsis-horizontal" size={18} color={FOREST.text} />
