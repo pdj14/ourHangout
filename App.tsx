@@ -84,7 +84,7 @@ type Room = {
   preview: string;
   updatedAt: number;
 };
-type Profile = { name: string; status: string; email: string; avatarUri: string };
+type Profile = { name: string; status: string; email: string; avatarUri: string; localeTag: string };
 type DraftMedia = { kind: 'image' | 'video'; uri: string };
 type CropTarget = 'profile' | 'chat';
 type ProfilePhotoCrop = {
@@ -108,6 +108,7 @@ type BackendAuthUser = {
   displayName?: string;
   email?: string;
   avatarUri?: string;
+  locale?: string;
 };
 type BackendAuthTokens = {
   accessToken?: string;
@@ -128,6 +129,7 @@ type BackendProfile = {
   status?: string;
   email?: string;
   avatarUri?: string;
+  locale?: string;
 };
 type BackendFriend = {
   id?: string;
@@ -764,6 +766,7 @@ function App() {
   const locale = useMemo(localeKey, []);
   const s = TEXT[locale];
   const isKo = locale === 'ko';
+  const appLocaleTag = isKo ? 'ko-KR' : 'en-US';
   const insets = useSafeAreaInsets();
 
   const extra = useMemo(() => {
@@ -808,7 +811,7 @@ function App() {
 
   const [stage, setStage] = useState<Stage>('login');
   const [tab, setTab] = useState<Tab>('friends');
-  const [profile, setProfile] = useState<Profile>({ name: '', status: '', email: '', avatarUri: '' });
+  const [profile, setProfile] = useState<Profile>({ name: '', status: '', email: '', avatarUri: '', localeTag: appLocaleTag });
   const [nameDraft, setNameDraft] = useState('');
   const [statusDraft, setStatusDraft] = useState('');
   const [profilePhotoDraft, setProfilePhotoDraft] = useState('');
@@ -1330,6 +1333,20 @@ function App() {
     }
   };
 
+  const syncLocaleWithBackend = async (token: string, currentLocale?: string) => {
+    const nextLocale = appLocaleTag;
+    if ((currentLocale || '').trim() === nextLocale) return;
+    await backendRequest(
+      '/v1/me',
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ locale: nextLocale }),
+      },
+      token
+    ).catch(() => null);
+    setProfile((prev) => ({ ...prev, localeTag: nextLocale }));
+  };
+
   const maybeMarkLatestIncomingMessageRead = async (
     token: string,
     roomId: string,
@@ -1497,8 +1514,11 @@ function App() {
       status: (me?.status || prev.status || '').trim(),
       email: (me?.email || fallbackUser?.email || tokenPayload.email || prev.email || '').trim(),
       avatarUri: (me?.avatarUri || fallbackUser?.avatarUri || prev.avatarUri || '').trim(),
+      localeTag: (me?.locale || prev.localeTag || appLocaleTag).trim() || appLocaleTag,
     }));
     setNameDraft(resolvedName);
+
+    await syncLocaleWithBackend(token, me?.locale);
 
     await refreshFriendsAndRequests(token);
 
@@ -2575,6 +2595,21 @@ function App() {
     );
   };
 
+  const renderSystemText = (value: string) => {
+    if (value.startsWith('__sys__:member_left:')) {
+      const encodedName = value.slice('__sys__:member_left:'.length);
+      const displayName = decodeURIComponent(encodedName || '').trim();
+      return displayName
+        ? isKo
+          ? `${displayName}님이 방을 나갔어요.`
+          : `${displayName} left the room.`
+        : isKo
+        ? '누군가 방을 나갔어요.'
+        : 'Someone left the room.';
+    }
+    return value;
+  };
+
   const applyProfilePhotoCrop = async () => {
     const crop = profileCropRef.current;
     if (!crop || isApplyingPhoto) return;
@@ -2984,7 +3019,7 @@ function App() {
     setStage('login');
     setTab('chats');
     setActiveRoomId(null);
-    setProfile({ name: '', status: '', email: '', avatarUri: '' });
+    setProfile({ name: '', status: '', email: '', avatarUri: '', localeTag: appLocaleTag });
     setNameDraft('');
     setStatusDraft('');
     setProfilePhotoDraft('');
@@ -3244,7 +3279,7 @@ function App() {
                               <Ionicons name="play-circle" size={34} color="#E7F4FF" />
                             </View>
                           ) : null}
-                          {m.kind === 'system' ? <Text style={styles.system}>{m.text}</Text> : null}
+                          {m.kind === 'system' ? <Text style={styles.system}>{renderSystemText(m.text || '')}</Text> : null}
                           <View style={styles.metaRow}>
                             {m.mine ? (
                               <View style={styles.receiptWrap}>
