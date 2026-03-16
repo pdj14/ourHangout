@@ -19,11 +19,11 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { ResizeMode, Video } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import * as WebBrowser from 'expo-web-browser';
@@ -369,6 +369,11 @@ const cropGeometry = (imageWidth: number, imageHeight: number, scale: number) =>
 };
 const canUseSecureStore = Platform.OS !== 'web';
 const normalizeBackendBaseUrl = (value?: string | null): string => (value || '').trim().replace(/\/+$/, '');
+const isLocalAssetUri = (value?: string | null): boolean => {
+  const normalized = (value || '').trim();
+  if (!normalized) return false;
+  return /^(file|content):\/\//i.test(normalized) || normalized.startsWith('/');
+};
 const parsePersistedSession = (raw: string | null | undefined): PersistedSession | null => {
   if (!raw) return null;
   try {
@@ -798,6 +803,22 @@ const roomTimeLabel = (ms: number) => {
   }
   return target.toLocaleDateString([], { month: 'short', day: 'numeric' });
 };
+function InAppVideoPlayer({ uri }: { uri: string }) {
+  const player = useVideoPlayer(uri, (videoPlayer) => {
+    videoPlayer.loop = false;
+    videoPlayer.muted = false;
+  });
+
+  return (
+    <VideoView
+      player={player}
+      style={styles.viewerMedia}
+      contentFit="contain"
+      nativeControls
+      fullscreenOptions={{ enable: true }}
+    />
+  );
+}
 const splitLinkParts = (value: string): Array<{ text: string; url?: string }> => {
   const out: Array<{ text: string; url?: string }> = [];
   let cursor = 0;
@@ -983,6 +1004,44 @@ function App() {
   const registeredPushTokenRef = useRef('');
   const notificationResponseSubRef = useRef<Notifications.EventSubscription | null>(null);
   const backendBaseUrl = normalizeBackendBaseUrl(backendOverrideUrl) || defaultBackendBaseUrl;
+  const backendOrigin = useMemo(() => {
+    try {
+      return new URL(backendBaseUrl).origin;
+    } catch {
+      return '';
+    }
+  }, [backendBaseUrl]);
+
+  const resolveBackendUrl = (
+    value: string | null | undefined,
+    pathPrefixes: string[],
+    preferBasePath = false
+  ): string => {
+    const normalized = (value || '').trim();
+    if (!normalized || !backendOrigin) return normalized;
+
+    try {
+      const parsed = new URL(normalized);
+      if (!pathPrefixes.some((prefix) => parsed.pathname.startsWith(prefix))) {
+        return normalized;
+      }
+      if (parsed.origin === backendOrigin) {
+        return normalized;
+      }
+      return `${backendOrigin}${parsed.pathname}${parsed.search}${parsed.hash}`;
+    } catch {
+      if (!pathPrefixes.some((prefix) => normalized.startsWith(prefix))) {
+        return normalized;
+      }
+      return `${preferBasePath ? backendBaseUrl : backendOrigin}${normalized}`;
+    }
+  };
+
+  const resolveBackendMediaUrl = (value?: string | null): string =>
+    resolveBackendUrl(value, ['/v1/media/files/']);
+
+  const resolveBackendApiUrl = (value?: string | null): string =>
+    resolveBackendUrl(value, ['/v1/'], true);
 
   const getFriend = (fid: string) => friends.find((f) => f.id === fid);
   const getBot = (botUserId: string) => bots.find((bot) => bot.userId === botUserId);
@@ -992,6 +1051,7 @@ function App() {
     const peerId = room.members.find((member) => member !== currentUserId) ?? '';
     return getFriend(peerId)?.avatarUri || '';
   };
+  const messageAvatarUri = (message: Message) => getFriend(message.senderId)?.avatarUri || '';
   const roomTitle = (room: Room) =>
     room.isGroup
       ? room.title
@@ -1487,7 +1547,7 @@ function App() {
       mine: !!senderId && senderId === currentUserId,
       kind: (message.kind || 'text') as MsgKind,
       ...(message.text ? { text: String(message.text) } : {}),
-      ...(message.uri ? { uri: String(message.uri) } : {}),
+      ...(message.uri ? { uri: resolveBackendMediaUrl(String(message.uri)) } : {}),
       at: parseTimestamp(message.at),
       delivery: (message.delivery || 'sent') as Delivery,
       ...(typeof message.unreadCount === 'number' ? { unreadCount: Math.max(0, Number(message.unreadCount)) } : {}),
@@ -1521,7 +1581,7 @@ function App() {
       token
     );
 
-    const uploadUrl = String(issued.uploadUrl || '').trim();
+    const uploadUrl = resolveBackendApiUrl(String(issued.uploadUrl || ''));
     const fileUrl = String(issued.fileUrl || '').trim();
     if (!uploadUrl || !fileUrl) {
       throw new Error('Media upload URL was not issued.');
@@ -1551,9 +1611,66 @@ function App() {
       token
     );
 
-    const completedUrl = String(completed.fileUrl || fileUrl).trim();
+    const completedUrl = resolveBackendMediaUrl(String(completed.fileUrl || fileUrl));
     if (!completedUrl) {
       throw new Error('Media upload did not return a file URL.');
+    }
+
+    return completedUrl;
+  };
+
+  const uploadProfilePhotoToBackend = async (token: string, localUri: string): Promise<string> => {
+    const fileInfo = await FileSystem.getInfoAsync(localUri);
+    if (!fileInfo.exists || fileInfo.isDirectory) {
+      throw new Error('Failed to read local profile photo.');
+    }
+
+    const mimeType = inferMediaMimeType(localUri, 'image', 'image/jpeg');
+    const issued = await backendRequest<BackendMediaUploadTicket>(
+      '/v1/me/avatar/upload-url',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          mimeType,
+          size: fileInfo.size,
+        }),
+      },
+      token
+    );
+
+    const uploadUrl = resolveBackendApiUrl(String(issued.uploadUrl || ''));
+    const fileUrl = String(issued.fileUrl || '').trim();
+    if (!uploadUrl || !fileUrl) {
+      throw new Error('Avatar upload URL was not issued.');
+    }
+
+    const uploadResult = await FileSystem.uploadAsync(uploadUrl, localUri, {
+      httpMethod: 'PUT',
+      uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': mimeType,
+      },
+    });
+    if (uploadResult.status < 200 || uploadResult.status >= 300) {
+      throw new Error(`Avatar upload failed (${uploadResult.status}).`);
+    }
+
+    const completed = await backendRequest<BackendCompletedMedia>(
+      '/v1/media/complete',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          fileUrl,
+          kind: 'avatar',
+        }),
+      },
+      token
+    );
+
+    const completedUrl = resolveBackendMediaUrl(String(completed.fileUrl || fileUrl));
+    if (!completedUrl) {
+      throw new Error('Avatar upload did not return a file URL.');
     }
 
     return completedUrl;
@@ -1738,7 +1855,7 @@ function App() {
               id: String(f.id),
               name: String(f.name),
               status: String(f.status || ''),
-              avatarUri: String(f.avatarUri || ''),
+              avatarUri: resolveBackendMediaUrl(String(f.avatarUri || '')),
               trusted: !!f.trusted,
             }))
         );
@@ -1831,7 +1948,7 @@ function App() {
       name: resolvedName || prev.name || '',
       status: (me?.status || prev.status || '').trim(),
       email: (me?.email || fallbackUser?.email || tokenPayload.email || prev.email || '').trim(),
-      avatarUri: (me?.avatarUri || fallbackUser?.avatarUri || prev.avatarUri || '').trim(),
+      avatarUri: resolveBackendMediaUrl(me?.avatarUri || fallbackUser?.avatarUri || prev.avatarUri || ''),
       localeTag: (me?.locale || prev.localeTag || appLocaleTag).trim() || appLocaleTag,
     }));
     setNameDraft(resolvedName);
@@ -2438,7 +2555,7 @@ function App() {
           name: String(item.name),
           status: String(item.status || ''),
           email: String(item.email),
-          avatarUri: String(item.avatarUri || ''),
+          avatarUri: resolveBackendMediaUrl(String(item.avatarUri || '')),
           isFriend: !!item.isFriend,
           outgoingPending: !!item.outgoingPending,
           incomingPending: !!item.incomingPending,
@@ -2971,7 +3088,7 @@ function App() {
   const persistProfile = async (nextProfile: { name: string; status: string; avatarUri: string }) => {
     const token = accessToken.trim();
     if (!token) {
-    setProfile((p) => ({ ...p, ...nextProfile }));
+      setProfile((p) => ({ ...p, ...nextProfile }));
       return true;
     }
     const saved = await backendRequest<BackendProfile>(
@@ -2987,23 +3104,29 @@ function App() {
       name: String(saved.name || nextProfile.name),
       status: String(saved.status || nextProfile.status),
       email: String(saved.email || p.email),
-      avatarUri: String(saved.avatarUri || nextProfile.avatarUri),
+      avatarUri: resolveBackendMediaUrl(String(saved.avatarUri || nextProfile.avatarUri)),
     }));
     setNameDraft(String(saved.name || nextProfile.name));
     setStatusDraft(String(saved.status || nextProfile.status));
-    setProfilePhotoDraft(String(saved.avatarUri || nextProfile.avatarUri));
+    setProfilePhotoDraft(resolveBackendMediaUrl(String(saved.avatarUri || nextProfile.avatarUri)));
     return true;
   };
 
   const saveProfile = async () => {
     const n = nameDraft.trim();
     if (!n) return;
-    const nextProfile = {
-      name: n,
-      status: statusDraft.trim(),
-      avatarUri: profilePhotoDraft.trim(),
-    };
     try {
+      const token = accessToken.trim();
+      const draftAvatarUri = profilePhotoDraft.trim();
+      const nextAvatarUri =
+        token && draftAvatarUri && isLocalAssetUri(draftAvatarUri)
+          ? await uploadProfilePhotoToBackend(token, draftAvatarUri)
+          : resolveBackendMediaUrl(draftAvatarUri);
+      const nextProfile = {
+        name: n,
+        status: statusDraft.trim(),
+        avatarUri: nextAvatarUri,
+      };
       await persistProfile(nextProfile);
       setShowProfileModal(false);
     } catch (err) {
@@ -3696,15 +3819,15 @@ function App() {
                 onPress={() => {
                   if (isName) {
                     setProfile((p) => ({ ...p, name: nameDraft.trim() }));
-                    setStatusDraft((prev) => prev || profile.status || s.defaultStatus);
+                    setStatusDraft((prev) => prev || profile.status || '');
                     setProfilePhotoDraft((prev) => prev || profile.avatarUri || '');
                     setStage('setup_intro');
                     return;
                   }
                   const nextProfile = {
                     name: nameDraft.trim() || profile.name,
-                    status: statusDraft.trim() || profile.status || s.defaultStatus,
-                    avatarUri: profilePhotoDraft.trim() || profile.avatarUri,
+                    status: statusDraft.trim(),
+                    avatarUri: profilePhotoDraft.trim(),
                   };
                   const run = async () => {
                     try {
@@ -3784,10 +3907,29 @@ function App() {
                               <Text style={styles.roomDayChipText}>{messageDayLabel(m.at)}</Text>
                             </View>
                           ) : null}
-                          <View style={[styles.bubbleRow, m.mine ? styles.mineRow : styles.otherRow]}>
-                        {!m.mine && m.kind !== 'system' ? (
-                          <Text style={styles.roomSender}>{m.senderName}</Text>
-                        ) : null}
+                          <View
+                            style={[
+                              styles.bubbleRow,
+                              m.mine ? styles.mineRow : styles.otherRow,
+                              !m.mine && m.kind !== 'system' ? styles.otherRowWithAvatar : null,
+                            ]}
+                          >
+                            {!m.mine && m.kind !== 'system' ? (
+                              <View style={styles.messageAvatarDock}>
+                                {messageAvatarUri(m) ? (
+                                  <Image source={{ uri: messageAvatarUri(m) }} style={styles.messageAvatar} />
+                                ) : (
+                                  <View style={styles.messageAvatarFallback}>
+                                    <Text style={styles.messageAvatarText}>
+                                      {(m.senderName || '?').slice(0, 1).toUpperCase()}
+                                    </Text>
+                                  </View>
+                                )}
+                              </View>
+                            ) : null}
+                            {!m.mine && m.kind !== 'system' ? (
+                              <Text style={styles.roomSender}>{m.senderName}</Text>
+                            ) : null}
                         <View style={[styles.bubble, m.mine ? styles.mineBubble : styles.otherBubble]}>
                           {m.kind === 'text' ? renderMessageText(m.text || '', m.mine) : null}
                           {m.kind === 'image' && m.uri ? (
@@ -3796,15 +3938,11 @@ function App() {
                             </Pressable>
                           ) : null}
                           {m.kind === 'video' && m.uri ? (
-                            <Pressable onPress={() => void openMediaExternally(m.uri || '')}>
-                              <Video
-                                source={{ uri: m.uri }}
-                                style={[styles.media, styles.video]}
-                                useNativeControls
-                                resizeMode={ResizeMode.COVER}
-                                shouldPlay={false}
-                                isLooping={false}
-                              />
+                            <Pressable onPress={() => setMediaViewer({ kind: 'video', uri: m.uri || '' })}>
+                              <View style={[styles.media, styles.videoCard]}>
+                                <Ionicons name="videocam-outline" size={28} color="#E7F4FF" />
+                                <Text style={styles.videoCardText}>{isKo ? '동영상 크게 보기' : 'Open video viewer'}</Text>
+                              </View>
                             </Pressable>
                           ) : null}
                           {m.kind === 'system' ? <Text style={styles.system}>{renderSystemText(m.text || '')}</Text> : null}
@@ -4387,12 +4525,7 @@ function App() {
               {mediaViewer?.kind === 'image' ? (
                 <Image source={{ uri: mediaViewer.uri }} style={styles.viewerMedia} resizeMode="contain" />
               ) : mediaViewer?.kind === 'video' ? (
-                <View style={[styles.viewerMedia, styles.viewerPlaceholder]}>
-                  <Ionicons name="videocam-outline" size={42} color="#E7F4FF" />
-                  <Text style={styles.viewerHint}>
-                    {isKo ? '동영상은 다른 앱에서 여는 방식이 더 안정적이에요.' : 'Videos open more reliably in an external app.'}
-                  </Text>
-                </View>
+                <InAppVideoPlayer uri={mediaViewer.uri} />
               ) : null}
               <View style={styles.viewerActions}>
                 <Pressable style={styles.smallBtn} onPress={() => setMediaViewer(null)}>
@@ -4901,6 +5034,20 @@ const styles = StyleSheet.create({
   bubbleRow: { width: '100%' },
   mineRow: { alignItems: 'flex-end' },
   otherRow: { alignItems: 'flex-start' },
+  otherRowWithAvatar: { paddingLeft: 34 },
+  messageAvatarDock: { position: 'absolute', left: 0, top: 0 },
+  messageAvatar: { width: 26, height: 26, borderRadius: 13 },
+  messageAvatarFallback: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 214, 122, 0.36)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+  },
+  messageAvatarText: { color: FOREST.text, fontSize: 11, fontWeight: '800' },
   bubble: {
     maxWidth: '88%',
     borderRadius: 20,
@@ -4912,7 +5059,7 @@ const styles = StyleSheet.create({
   },
   roomSender: {
     marginBottom: 4,
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
     color: FOREST.textMuted,
     fontSize: 11,
     fontWeight: '700',
@@ -4937,6 +5084,14 @@ const styles = StyleSheet.create({
   system: { color: '#355B3A', fontSize: 12, fontWeight: '700' },
   media: { width: 196, height: 136, borderRadius: 12, backgroundColor: '#31563A' },
   video: { alignItems: 'center', justifyContent: 'center' },
+  videoCard: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    backgroundColor: '#2E5237',
+  },
+  videoCardText: { color: '#E7F4FF', fontSize: 12, fontWeight: '700', textAlign: 'center' },
   roomSceneCard: {
     borderRadius: 18,
     padding: 14,
