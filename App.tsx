@@ -1561,6 +1561,9 @@ function App() {
     return message.text || '';
   };
 
+  const shouldIncreaseRoomUnread = (message: Pick<Message, 'mine' | 'kind'>) =>
+    !message.mine && message.kind !== 'system';
+
   const uploadDraftMediaToBackend = async (token: string, media: DraftMedia): Promise<string> => {
     const fileInfo = await FileSystem.getInfoAsync(media.uri);
     if (!fileInfo.exists || fileInfo.isDirectory) {
@@ -1688,6 +1691,8 @@ function App() {
 
   const openRoomFromExternalSignal = async (roomId: string) => {
     if (!roomId) return;
+    activeRoomRef.current = roomId;
+    foregroundNotificationRoomId = roomId;
     const token = accessToken.trim();
     let hasRoom = rooms.some((room) => room.id === roomId);
     if (token) {
@@ -2386,7 +2391,10 @@ function App() {
               ...room,
               preview: previewFromMessage(mapped),
               updatedAt: Math.max(room.updatedAt, mapped.at),
-              unread: inserted && !mapped.mine && activeRoomRef.current !== roomId ? room.unread + 1 : room.unread,
+              unread:
+                inserted && shouldIncreaseRoomUnread(mapped) && activeRoomRef.current !== roomId
+                  ? room.unread + 1
+                  : room.unread,
             }
           : room
       );
@@ -2479,6 +2487,8 @@ function App() {
   };
 
   const openRoom = (rid: string) => {
+    activeRoomRef.current = rid;
+    foregroundNotificationRoomId = rid;
     setActiveRoomId(rid);
     setTab('chats');
     setInput('');
@@ -2492,6 +2502,8 @@ function App() {
   };
   const closeActiveRoom = async () => {
     const rid = activeRoomRef.current;
+    activeRoomRef.current = null;
+    foregroundNotificationRoomId = '';
     const token = accessToken.trim();
     if (rid && token && appVisibility === 'active') {
       await markRoomAsRead(token, rid).catch(() => null);
