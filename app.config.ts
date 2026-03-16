@@ -22,6 +22,10 @@ const pick = (envValue: string | undefined, fallback?: string): string =>
 const defaultExtra = (baseConfig.extra ?? {}) as AppExtra;
 const defaultGoogle = defaultExtra.googleAuth ?? {};
 const defaultBackend = defaultExtra.backend ?? {};
+const plugins = Array.isArray(baseConfig.plugins) ? [...baseConfig.plugins] : [];
+if (!plugins.includes('expo-video')) {
+  plugins.push('expo-video');
+}
 
 const backendBaseUrl = pick(process.env.EXPO_PUBLIC_BACKEND_BASE_URL, defaultBackend.baseUrl)
   .replace(/\/+$/, '');
@@ -29,6 +33,7 @@ const androidGoogleServicesFile = trim(process.env.ANDROID_GOOGLE_SERVICES_FILE)
 
 const config: ExpoConfig = {
   ...baseConfig,
+  plugins,
   android: {
     ...baseConfig.android,
     ...(androidGoogleServicesFile ? { googleServicesFile: androidGoogleServicesFile } : {})

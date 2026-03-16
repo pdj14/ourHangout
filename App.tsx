@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentProps, ReactNode } from 'react';
 import {
   Alert,
@@ -22,6 +22,8 @@ import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system/legacy';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import * as WebBrowser from 'expo-web-browser';
@@ -72,7 +74,7 @@ type Message = {
   readByNames?: string[];
 };
 
-type Friend = { id: string; name: string; status: string; trusted: boolean };
+type Friend = { id: string; name: string; status: string; avatarUri: string; trusted: boolean };
 type Room = {
   id: string;
   title: string;
@@ -85,7 +87,8 @@ type Room = {
   updatedAt: number;
 };
 type Profile = { name: string; status: string; email: string; avatarUri: string; localeTag: string };
-type DraftMedia = { kind: 'image' | 'video'; uri: string };
+type DraftMedia = { kind: 'image' | 'video'; uri: string; mimeType: string };
+type MediaViewer = { kind: 'image' | 'video'; uri: string };
 type CropTarget = 'profile' | 'chat';
 type ProfilePhotoCrop = {
   uri: string;
@@ -135,6 +138,7 @@ type BackendFriend = {
   id?: string;
   name?: string;
   status?: string;
+  avatarUri?: string;
   trusted?: boolean;
 };
 type BackendFriendSearchUser = {
@@ -168,6 +172,7 @@ type FriendLookupResult = {
   name: string;
   status: string;
   email: string;
+  avatarUri: string;
   isFriend: boolean;
   outgoingPending: boolean;
   incomingPending: boolean;
@@ -206,6 +211,20 @@ type BackendEnvelope<T> = {
 type BackendListData<T> = {
   items?: T[];
   nextCursor?: string;
+};
+type BackendMediaUploadTicket = {
+  uploadUrl?: string;
+  fileUrl?: string;
+  expiresInSec?: number;
+};
+type BackendCompletedMedia = {
+  fileUrl?: string;
+  kind?: 'image' | 'video' | 'avatar';
+  status?: 'completed';
+};
+type BackendRoomRead = {
+  unread?: number;
+  lastReadMessageId?: string;
 };
 type AppExtra = {
   googleAuth?: { androidClientId?: string; iosClientId?: string; webClientId?: string };
@@ -280,6 +299,9 @@ const normalizeBackendErrorMessage = (message: string, isKo: boolean): string =>
   return normalized;
 };
 const SESSION_STORAGE_KEY = 'ourhangout.session.v1';
+const BACKEND_OVERRIDE_STORAGE_KEY = 'ourhangout.backend-override.v1';
+const HIDDEN_SERVER_MENU_TAP_COUNT = 5;
+const HIDDEN_SERVER_MENU_TAP_WINDOW_MS = 1200;
 const FOREST_GLOWS: Array<{
   top?: number;
   bottom?: number;
@@ -331,6 +353,12 @@ const cropGeometry = (imageWidth: number, imageHeight: number, scale: number) =>
   return { renderWidth, renderHeight, overflowX, overflowY };
 };
 const canUseSecureStore = Platform.OS !== 'web';
+const normalizeBackendBaseUrl = (value?: string | null): string => (value || '').trim().replace(/\/+$/, '');
+const isLocalAssetUri = (value?: string | null): boolean => {
+  const normalized = (value || '').trim();
+  if (!normalized) return false;
+  return /^(file|content):\/\//i.test(normalized) || normalized.startsWith('/');
+};
 const parsePersistedSession = (raw: string | null | undefined): PersistedSession | null => {
   if (!raw) return null;
   try {
@@ -392,6 +420,35 @@ const clearSessionInStorage = async (): Promise<void> => {
     await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
   } catch {
     // Ignore cleanup failure.
+  }
+};
+const readBackendOverrideFromStorage = async (): Promise<string> => {
+  try {
+    return normalizeBackendBaseUrl(await AsyncStorage.getItem(BACKEND_OVERRIDE_STORAGE_KEY));
+  } catch {
+    return '';
+  }
+};
+const writeBackendOverrideToStorage = async (value: string): Promise<void> => {
+  const normalized = normalizeBackendBaseUrl(value);
+  try {
+    if (normalized) {
+      await AsyncStorage.setItem(BACKEND_OVERRIDE_STORAGE_KEY, normalized);
+    } else {
+      await AsyncStorage.removeItem(BACKEND_OVERRIDE_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore override persistence failure.
+  }
+};
+const buildDevBackendBaseUrl = (prodBaseUrl: string): string => {
+  const normalized = normalizeBackendBaseUrl(prodBaseUrl);
+  try {
+    const next = new URL(normalized);
+    next.port = '7084';
+    return normalizeBackendBaseUrl(next.toString());
+  } catch {
+    return 'http://wowjini0228.synology.me:7084';
   }
 };
 
@@ -500,6 +557,8 @@ const TEXT = {
     statsRooms: 'Rooms',
     statsFavs: 'Favorites',
     roomSetting: 'Room settings',
+    editRoomTitle: 'Rename group',
+    roomTitlePlaceholder: 'Group room title',
     favoriteOn: 'Add favorite',
     favoriteOff: 'Remove favorite',
     muteOn: 'Mute room',
@@ -639,6 +698,8 @@ const TEXT = {
     statsRooms: '방 수',
     statsFavs: '즐겨찾기',
     roomSetting: '방 설정',
+    editRoomTitle: '그룹 이름 변경',
+    roomTitlePlaceholder: '그룹방 이름',
     favoriteOn: '즐겨찾기 추가',
     favoriteOff: '즐겨찾기 해제',
     muteOn: '알림 끄기',
@@ -685,6 +746,17 @@ const localeKey = (): Locale =>
 const uid = () => `${Date.now()}-${Math.round(Math.random() * 99999)}`;
 const tLabel = (ms: number) =>
   new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const dayKey = (ms: number) => {
+  const target = new Date(ms);
+  return `${target.getFullYear()}-${target.getMonth()}-${target.getDate()}`;
+};
+const messageDayLabel = (ms: number) =>
+  new Date(ms).toLocaleDateString([], {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'short',
+  });
 const decodeJwtPayload = (token: string): { sub?: string; email?: string } => {
   const trimmed = token.trim();
   if (!trimmed) return {};
@@ -710,6 +782,22 @@ const roomTimeLabel = (ms: number) => {
   }
   return target.toLocaleDateString([], { month: 'short', day: 'numeric' });
 };
+function InAppVideoPlayer({ uri }: { uri: string }) {
+  const player = useVideoPlayer(uri, (videoPlayer) => {
+    videoPlayer.loop = false;
+    videoPlayer.muted = false;
+  });
+
+  return (
+    <VideoView
+      player={player}
+      style={styles.viewerMedia}
+      contentFit="contain"
+      nativeControls
+      fullscreenOptions={{ enable: true }}
+    />
+  );
+}
 const splitLinkParts = (value: string): Array<{ text: string; url?: string }> => {
   const out: Array<{ text: string; url?: string }> = [];
   let cursor = 0;
@@ -797,11 +885,11 @@ function App() {
     iosClientId: pickValue(extra.googleAuth?.iosClientId, runtimeEnv.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID),
     webClientId: pickValue(extra.googleAuth?.webClientId, runtimeEnv.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID),
   };
-  const backendBaseUrl = pickValue(
+  const defaultBackendBaseUrl = normalizeBackendBaseUrl(pickValue(
     extra.backend?.baseUrl,
     runtimeEnv.EXPO_PUBLIC_BACKEND_BASE_URL
-  )
-    .replace(/\/+$/, '') || 'http://wowjini0228.synology.me:7083';
+  )) || 'http://wowjini0228.synology.me:7083';
+  const devBackendBaseUrl = useMemo(() => buildDevBackendBaseUrl(defaultBackendBaseUrl), [defaultBackendBaseUrl]);
 
   const hasGoogle = !!Platform.select({
     android: g.webClientId,
@@ -818,10 +906,21 @@ function App() {
   const [loginErr, setLoginErr] = useState('');
   const [backendState, setBackendState] = useState<'checking' | 'ready' | 'error'>('checking');
   const [backendStateMsg, setBackendStateMsg] = useState('');
+  const [backendOverrideUrl, setBackendOverrideUrl] = useState('');
+  const [isBackendConfigReady, setIsBackendConfigReady] = useState(false);
+  const [showServerMenu, setShowServerMenu] = useState(false);
+  const [serverMenuDraft, setServerMenuDraft] = useState('');
   const [accessToken, setAccessToken] = useState('');
   const [refreshToken, setRefreshToken] = useState('');
   const [isSessionRestoring, setIsSessionRestoring] = useState(true);
   const [currentUserId, setCurrentUserId] = useState(MY_ID);
+  const [appVisibility, setAppVisibility] = useState<'active' | 'background' | 'inactive'>(
+    AppState.currentState === 'active'
+      ? 'active'
+      : AppState.currentState === 'inactive'
+        ? 'inactive'
+        : 'background'
+  );
 
   const [friends, setFriends] = useState<Friend[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -862,6 +961,9 @@ function App() {
   const [groupNameDraft, setGroupNameDraft] = useState('');
   const [groupPick, setGroupPick] = useState<string[]>([]);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showRoomTitleModal, setShowRoomTitleModal] = useState(false);
+  const [roomTitleDraft, setRoomTitleDraft] = useState('');
+  const [mediaViewer, setMediaViewer] = useState<MediaViewer | null>(null);
   const [roomMenuId, setRoomMenuId] = useState<string | null>(null);
   const [wsRetryTick, setWsRetryTick] = useState(0);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
@@ -870,6 +972,8 @@ function App() {
   const scrollRef = useRef<ScrollView>(null);
   const cropOpenedAtRef = useRef(0);
   const sessionRestoreStartedRef = useRef(false);
+  const hiddenServerTapCountRef = useRef(0);
+  const hiddenServerTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roomGroupRef = useRef<Record<string, boolean>>({});
@@ -877,8 +981,55 @@ function App() {
   const pushTokenRef = useRef('');
   const registeredPushTokenRef = useRef('');
   const notificationResponseSubRef = useRef<Notifications.EventSubscription | null>(null);
+  const backendBaseUrl = normalizeBackendBaseUrl(backendOverrideUrl) || defaultBackendBaseUrl;
+  const backendOrigin = useMemo(() => {
+    try {
+      return new URL(backendBaseUrl).origin;
+    } catch {
+      return '';
+    }
+  }, [backendBaseUrl]);
+
+  const resolveBackendUrl = (
+    value: string | null | undefined,
+    pathPrefixes: string[],
+    preferBasePath = false
+  ): string => {
+    const normalized = (value || '').trim();
+    if (!normalized || !backendOrigin) return normalized;
+
+    try {
+      const parsed = new URL(normalized);
+      if (!pathPrefixes.some((prefix) => parsed.pathname.startsWith(prefix))) {
+        return normalized;
+      }
+      if (parsed.origin === backendOrigin) {
+        return normalized;
+      }
+      return `${backendOrigin}${parsed.pathname}${parsed.search}${parsed.hash}`;
+    } catch {
+      if (!pathPrefixes.some((prefix) => normalized.startsWith(prefix))) {
+        return normalized;
+      }
+      return `${preferBasePath ? backendBaseUrl : backendOrigin}${normalized}`;
+    }
+  };
+
+  const resolveBackendMediaUrl = (value?: string | null): string =>
+    resolveBackendUrl(value, ['/v1/media/files/']);
+
+  const resolveBackendApiUrl = (value?: string | null): string =>
+    resolveBackendUrl(value, ['/v1/'], true);
 
   const getFriend = (fid: string) => friends.find((f) => f.id === fid);
+  const getBot = (botUserId: string) => bots.find((bot) => bot.userId === botUserId);
+  const isOpenClawAssistantBotUser = (botUserId: string) => getBot(botUserId)?.botKey === 'openclaw-assistant';
+  const roomAvatarUri = (room: Room) => {
+    if (room.isGroup) return '';
+    const peerId = room.members.find((member) => member !== currentUserId) ?? '';
+    return getFriend(peerId)?.avatarUri || '';
+  };
+  const messageAvatarUri = (message: Message) => getFriend(message.senderId)?.avatarUri || '';
   const roomTitle = (room: Room) =>
     room.isGroup
       ? room.title
@@ -886,16 +1037,47 @@ function App() {
   const roomMembers = (room: Room) =>
     room.members
       .filter((m) => m !== currentUserId)
-      .map((m) => getFriend(m)?.name ?? '')
-      .filter(Boolean)
-      .join(', ');
+      .map((m) => getFriend(m)?.name ?? getBot(m)?.name ?? '')
+        .filter(Boolean)
+        .join(', ');
+  const openServerMenu = () => {
+    setServerMenuDraft(backendBaseUrl);
+    setShowServerMenu(true);
+  };
+  const shouldAutoMarkRoomRead = (roomId: string) =>
+    !!roomId && appVisibility === 'active' && activeRoomRef.current === roomId;
+  const registerHiddenServerMenuTap = () => {
+    if (hiddenServerTapTimerRef.current) {
+      clearTimeout(hiddenServerTapTimerRef.current);
+    }
+    hiddenServerTapCountRef.current += 1;
+    if (hiddenServerTapCountRef.current >= HIDDEN_SERVER_MENU_TAP_COUNT) {
+      hiddenServerTapCountRef.current = 0;
+      hiddenServerTapTimerRef.current = null;
+      openServerMenu();
+      return;
+    }
+    hiddenServerTapTimerRef.current = setTimeout(() => {
+      hiddenServerTapCountRef.current = 0;
+      hiddenServerTapTimerRef.current = null;
+    }, HIDDEN_SERVER_MENU_TAP_WINDOW_MS);
+  };
 
+  const visibleBots = useMemo(
+    () => bots.filter((bot) => bot.botKey !== 'openclaw-assistant'),
+    [bots]
+  );
   const sortedRooms = useMemo(
     () =>
-      [...rooms].sort((a, b) =>
-        a.favorite === b.favorite ? b.updatedAt - a.updatedAt : a.favorite ? -1 : 1
-      ),
-    [rooms]
+      rooms
+        .filter((room) => {
+          const peerId = room.members.find((member) => member !== currentUserId) ?? '';
+          return !isOpenClawAssistantBotUser(peerId);
+        })
+        .sort((a, b) =>
+          a.favorite === b.favorite ? b.updatedAt - a.updatedAt : a.favorite ? -1 : 1
+        ),
+    [rooms, bots, currentUserId]
   );
 
   const filteredRooms = useMemo(() => {
@@ -948,6 +1130,26 @@ function App() {
   const roomMap = useMemo(() => new Map(rooms.map((r) => [r.id, r])), [rooms]);
   const knockCount = friendRequestsIncoming.length + friendRequestsOutgoing.length;
   const activeRoomCompanions = activeRoom?.members.filter((m) => m !== currentUserId).length ?? 0;
+  const topAvatarUri = tab === 'chats' && activeRoom ? roomAvatarUri(activeRoom) : profile.avatarUri;
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      const stored = await readBackendOverrideFromStorage();
+      if (cancelled) return;
+      setBackendOverrideUrl(stored);
+      setServerMenuDraft(stored || defaultBackendBaseUrl);
+      setIsBackendConfigReady(true);
+    };
+    void run();
+    return () => {
+      cancelled = true;
+      if (hiddenServerTapTimerRef.current) {
+        clearTimeout(hiddenServerTapTimerRef.current);
+        hiddenServerTapTimerRef.current = null;
+      }
+    };
+  }, [defaultBackendBaseUrl]);
 
   const renderNookHero = ({
     title,
@@ -995,7 +1197,11 @@ function App() {
   const renderRoomRow = (room: Room) => (
     <Pressable key={room.id} style={styles.roomItem} onPress={() => openRoom(room.id)}>
       <View style={styles.listAvatar}>
-        <Text style={styles.listAvatarText}>{roomTitle(room).slice(0, 1).toUpperCase()}</Text>
+        {roomAvatarUri(room) ? (
+          <Image source={{ uri: roomAvatarUri(room) }} style={styles.listAvatarImage} />
+        ) : (
+          <Text style={styles.listAvatarText}>{roomTitle(room).slice(0, 1).toUpperCase()}</Text>
+        )}
       </View>
       <View style={styles.roomItemCopy}>
         <View style={styles.roomItemHead}>
@@ -1028,11 +1234,15 @@ function App() {
     return (
       <View key={friend.id} style={styles.friendItem}>
         <View style={styles.listAvatar}>
-          <Text style={styles.listAvatarText}>{friend.name.slice(0, 1).toUpperCase()}</Text>
+          {friend.avatarUri ? (
+            <Image source={{ uri: friend.avatarUri }} style={styles.listAvatarImage} />
+          ) : (
+            <Text style={styles.listAvatarText}>{friend.name.slice(0, 1).toUpperCase()}</Text>
+          )}
         </View>
         <View style={styles.friendItemCopy}>
           <Text style={styles.itemTitle}>{friend.name}</Text>
-          <Text style={styles.roomPreview} numberOfLines={1}>
+          <Text style={styles.friendStatusText} numberOfLines={1}>
             {friend.status || s.startChat}
           </Text>
         </View>
@@ -1068,9 +1278,25 @@ function App() {
     const sub = AppState.addEventListener('change', (nextState) => {
       foregroundAppState =
         nextState === 'active' ? 'active' : nextState === 'inactive' ? 'inactive' : 'background';
+      setAppVisibility(foregroundAppState);
     });
     return () => sub.remove();
   }, []);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'active') return;
+      if (isSessionRestoring) return;
+      if (backendState !== 'ready') return;
+      const token = accessToken.trim();
+      if (!token) return;
+      void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token)]).catch(() => null);
+      if (activeRoomRef.current) {
+        void syncRoomMessagesFromBackend(token, activeRoomRef.current).catch(() => null);
+      }
+    });
+    return () => sub.remove();
+  }, [accessToken, backendState, isSessionRestoring]);
 
   useEffect(() => {
     if (!activeRoomId) return;
@@ -1079,18 +1305,35 @@ function App() {
   }, [activeRoomId, activeMsgs.length]);
 
   useEffect(() => {
+    const totalUnread = rooms.reduce((sum, room) => sum + Math.max(0, room.unread), 0);
+    void syncAppBadgeCount(totalUnread);
+  }, [rooms]);
+
+  useEffect(() => {
+    if (tab !== 'chats') return;
+    if (activeRoomId) return;
+    if (isSessionRestoring) return;
+    if (backendState !== 'ready') return;
+    const token = accessToken.trim();
+    if (!token) return;
+    void refreshRoomsFromBackend(token).catch(() => null);
+  }, [tab, activeRoomId, accessToken, backendState, isSessionRestoring]);
+
+  useEffect(() => {
     const token = accessToken.trim();
     if (!activeRoomId || !token || activeMsgs.length === 0) return;
+    if (!shouldAutoMarkRoomRead(activeRoomId)) return;
     const latest = activeMsgs[activeMsgs.length - 1];
     if (!latest || latest.mine) return;
     if (latest.delivery !== 'read') {
       void markRoomAsRead(token, activeRoomId, latest.id);
     }
-  }, [activeRoomId, activeMsgs.length, accessToken]);
+  }, [activeRoomId, activeMsgs.length, accessToken, appVisibility]);
 
   useEffect(() => {
     const token = accessToken.trim();
     if (!activeRoomId || !token) return;
+    if (!shouldAutoMarkRoomRead(activeRoomId)) return;
     let cancelled = false;
     const run = async () => {
       try {
@@ -1107,21 +1350,24 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeRoomId, accessToken]);
+  }, [activeRoomId, accessToken, appVisibility]);
 
   useEffect(() => {
     const token = accessToken.trim();
     if (!activeRoomId || !token) return;
+    if (appVisibility !== 'active') return;
     const interval = setInterval(() => {
       void (async () => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) return;
+        if (!shouldAutoMarkRoomRead(activeRoomId)) return;
         const synced = await syncRoomMessagesFromBackend(token, activeRoomId).catch(() => null);
         if (synced) {
           await maybeMarkLatestIncomingMessageRead(token, activeRoomId, synced).catch(() => null);
         }
       })();
-    }, 900);
+    }, 10000);
     return () => clearInterval(interval);
-  }, [activeRoomId, accessToken]);
+  }, [activeRoomId, accessToken, appVisibility]);
 
   const unwrapEnvelope = <T,>(raw: unknown): T => {
     if (!raw || typeof raw !== 'object') return {} as T;
@@ -1138,13 +1384,17 @@ function App() {
     init?: RequestInit,
     token?: string
   ): Promise<T> => {
+    const isAbsoluteUrl = /^https?:\/\//i.test(path);
+    const normalizedPath = isAbsoluteUrl ? new URL(path).pathname : path;
+    const requestUrl = isAbsoluteUrl ? path : `${backendBaseUrl}${path}`;
+
     const perform = async (resolvedToken?: string) => {
       const headers: Record<string, string> = {
         ...(init?.headers as Record<string, string> | undefined),
       };
-      if (!headers['Content-Type'] && init?.body) headers['Content-Type'] = 'application/json';
+      if (!headers['Content-Type'] && typeof init?.body === 'string') headers['Content-Type'] = 'application/json';
       if (resolvedToken) headers.Authorization = `Bearer ${resolvedToken}`;
-      const res = await fetch(`${backendBaseUrl}${path}`, { ...(init || {}), headers });
+      const res = await fetch(requestUrl, { ...(init || {}), headers });
       const txt = await res.text();
       let json: unknown = null;
       if (txt) {
@@ -1158,9 +1408,9 @@ function App() {
     };
 
     const shouldAttemptRefresh =
-      path !== '/v1/auth/refresh' &&
-      path !== '/v1/auth/google' &&
-      path !== '/health' &&
+      normalizedPath !== '/v1/auth/refresh' &&
+      normalizedPath !== '/v1/auth/google' &&
+      normalizedPath !== '/health' &&
       !!refreshToken.trim();
 
     let resolvedToken = token;
@@ -1222,6 +1472,24 @@ function App() {
     return Number.isFinite(ms) ? ms : Date.now();
   };
 
+  const inferMediaMimeType = (
+    uri: string,
+    kind: 'image' | 'video',
+    fallback?: string | null
+  ): string => {
+    const normalizedFallback = (fallback || '').trim().toLowerCase();
+    if (normalizedFallback) return normalizedFallback;
+    const lowerUri = uri.toLowerCase();
+    if (kind === 'image') {
+      if (lowerUri.endsWith('.png')) return 'image/png';
+      if (lowerUri.endsWith('.webp')) return 'image/webp';
+      return 'image/jpeg';
+    }
+    if (lowerUri.endsWith('.webm')) return 'video/webm';
+    if (lowerUri.endsWith('.mov')) return 'video/quicktime';
+    return 'video/mp4';
+  };
+
   const asListItems = <T,>(value: unknown): T[] => {
     if (Array.isArray(value)) return value as T[];
     if (value && typeof value === 'object' && Array.isArray((value as BackendListData<T>).items)) {
@@ -1255,7 +1523,7 @@ function App() {
       mine: !!senderId && senderId === currentUserId,
       kind: (message.kind || 'text') as MsgKind,
       ...(message.text ? { text: String(message.text) } : {}),
-      ...(message.uri ? { uri: String(message.uri) } : {}),
+      ...(message.uri ? { uri: resolveBackendMediaUrl(String(message.uri)) } : {}),
       at: parseTimestamp(message.at),
       delivery: (message.delivery || 'sent') as Delivery,
       ...(typeof message.unreadCount === 'number' ? { unreadCount: Math.max(0, Number(message.unreadCount)) } : {}),
@@ -1267,6 +1535,124 @@ function App() {
     if (message.kind === 'image') return s.imageLabel;
     if (message.kind === 'video') return s.videoLabel;
     return message.text || '';
+  };
+
+  const shouldIncreaseRoomUnread = (message: Pick<Message, 'mine' | 'kind'>) =>
+    !message.mine && message.kind !== 'system';
+
+  const uploadDraftMediaToBackend = async (token: string, media: DraftMedia): Promise<string> => {
+    const fileInfo = await FileSystem.getInfoAsync(media.uri);
+    if (!fileInfo.exists || fileInfo.isDirectory) {
+      throw new Error('Failed to read local media file.');
+    }
+
+    const mimeType = inferMediaMimeType(media.uri, media.kind, media.mimeType);
+    const issued = await backendRequest<BackendMediaUploadTicket>(
+      '/v1/media/upload-url',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: media.kind,
+          mimeType,
+          size: fileInfo.size,
+        }),
+      },
+      token
+    );
+
+    const uploadUrl = resolveBackendApiUrl(String(issued.uploadUrl || ''));
+    const fileUrl = String(issued.fileUrl || '').trim();
+    if (!uploadUrl || !fileUrl) {
+      throw new Error('Media upload URL was not issued.');
+    }
+
+    const uploadResult = await FileSystem.uploadAsync(uploadUrl, media.uri, {
+      httpMethod: 'PUT',
+      uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': mimeType,
+      },
+    });
+    if (uploadResult.status < 200 || uploadResult.status >= 300) {
+      throw new Error(`Media upload failed (${uploadResult.status}).`);
+    }
+
+    const completed = await backendRequest<BackendCompletedMedia>(
+      '/v1/media/complete',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          fileUrl,
+          kind: media.kind,
+        }),
+      },
+      token
+    );
+
+    const completedUrl = resolveBackendMediaUrl(String(completed.fileUrl || fileUrl));
+    if (!completedUrl) {
+      throw new Error('Media upload did not return a file URL.');
+    }
+
+    return completedUrl;
+  };
+
+  const uploadProfilePhotoToBackend = async (token: string, localUri: string): Promise<string> => {
+    const fileInfo = await FileSystem.getInfoAsync(localUri);
+    if (!fileInfo.exists || fileInfo.isDirectory) {
+      throw new Error('Failed to read local profile photo.');
+    }
+
+    const mimeType = inferMediaMimeType(localUri, 'image', 'image/jpeg');
+    const issued = await backendRequest<BackendMediaUploadTicket>(
+      '/v1/me/avatar/upload-url',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          mimeType,
+          size: fileInfo.size,
+        }),
+      },
+      token
+    );
+
+    const uploadUrl = resolveBackendApiUrl(String(issued.uploadUrl || ''));
+    const fileUrl = String(issued.fileUrl || '').trim();
+    if (!uploadUrl || !fileUrl) {
+      throw new Error('Avatar upload URL was not issued.');
+    }
+
+    const uploadResult = await FileSystem.uploadAsync(uploadUrl, localUri, {
+      httpMethod: 'PUT',
+      uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': mimeType,
+      },
+    });
+    if (uploadResult.status < 200 || uploadResult.status >= 300) {
+      throw new Error(`Avatar upload failed (${uploadResult.status}).`);
+    }
+
+    const completed = await backendRequest<BackendCompletedMedia>(
+      '/v1/media/complete',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          fileUrl,
+          kind: 'avatar',
+        }),
+      },
+      token
+    );
+
+    const completedUrl = resolveBackendMediaUrl(String(completed.fileUrl || fileUrl));
+    if (!completedUrl) {
+      throw new Error('Avatar upload did not return a file URL.');
+    }
+
+    return completedUrl;
   };
 
   const requireAccessToken = (): string => {
@@ -1281,6 +1667,8 @@ function App() {
 
   const openRoomFromExternalSignal = async (roomId: string) => {
     if (!roomId) return;
+    activeRoomRef.current = roomId;
+    foregroundNotificationRoomId = roomId;
     const token = accessToken.trim();
     let hasRoom = rooms.some((room) => room.id === roomId);
     if (token) {
@@ -1296,6 +1684,9 @@ function App() {
         }
       }
       await syncRoomMessagesFromBackend(token, roomId).catch(() => null);
+      if (appVisibility === 'active') {
+        await markRoomAsRead(token, roomId).catch(() => null);
+      }
     }
     setActiveRoomId(roomId);
     setTab('chats');
@@ -1315,10 +1706,16 @@ function App() {
       )
     );
   };
+  const syncAppBadgeCount = async (totalUnread: number) => {
+    await Notifications.setBadgeCountAsync(Math.max(0, totalUnread)).catch(() => null);
+    if (totalUnread === 0) {
+      await Notifications.dismissAllNotificationsAsync().catch(() => null);
+    }
+  };
 
   const markRoomAsRead = async (token: string, roomId: string, lastReadMessageId?: string) => {
     if (!token || !roomId) return;
-    await backendRequest(
+    const result = await backendRequest<BackendRoomRead>(
       `/v1/rooms/${roomId}/read`,
       {
         method: 'POST',
@@ -1326,7 +1723,8 @@ function App() {
       },
       token
     ).catch(() => null);
-    setRooms((prev) => prev.map((room) => (room.id === roomId ? { ...room, unread: 0 } : room)));
+    const unread = Math.max(0, Number(result?.unread ?? 0));
+    setRooms((prev) => prev.map((room) => (room.id === roomId ? { ...room, unread } : room)));
     await dismissPresentedNotificationsForRoom(roomId).catch(() => null);
     if (activeRoomRef.current === roomId) {
       await syncRoomMessagesFromBackend(token, roomId).catch(() => null);
@@ -1438,6 +1836,7 @@ function App() {
               id: String(f.id),
               name: String(f.name),
               status: String(f.status || ''),
+              avatarUri: resolveBackendMediaUrl(String(f.avatarUri || '')),
               trusted: !!f.trusted,
             }))
         );
@@ -1513,7 +1912,7 @@ function App() {
       name: resolvedName || prev.name || '',
       status: (me?.status || prev.status || '').trim(),
       email: (me?.email || fallbackUser?.email || tokenPayload.email || prev.email || '').trim(),
-      avatarUri: (me?.avatarUri || fallbackUser?.avatarUri || prev.avatarUri || '').trim(),
+      avatarUri: resolveBackendMediaUrl(me?.avatarUri || fallbackUser?.avatarUri || prev.avatarUri || ''),
       localeTag: (me?.locale || prev.localeTag || appLocaleTag).trim() || appLocaleTag,
     }));
     setNameDraft(resolvedName);
@@ -1708,6 +2107,7 @@ function App() {
   }, [accessToken, backendState]);
 
   useEffect(() => {
+    if (!isBackendConfigReady) return;
     let cancelled = false;
     const run = async () => {
       setBackendState('checking');
@@ -1722,15 +2122,19 @@ function App() {
         const msg = err instanceof Error ? err.message : '';
         setBackendState('error');
         setBackendStateMsg(msg ? `${s.loginServerError} (${msg})` : s.loginServerError);
+        if (!sessionRestoreStartedRef.current) {
+          setIsSessionRestoring(false);
+        }
       }
     };
     run();
     return () => {
       cancelled = true;
     };
-  }, [backendBaseUrl, s.loginServerError, s.loginServerReady]);
+  }, [backendBaseUrl, isBackendConfigReady, s.loginServerError, s.loginServerReady]);
 
   useEffect(() => {
+    if (!isBackendConfigReady) return;
     if (backendState !== 'ready') return;
     if (sessionRestoreStartedRef.current) return;
     sessionRestoreStartedRef.current = true;
@@ -1783,7 +2187,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [backendState]);
+  }, [backendState, isBackendConfigReady]);
 
   useEffect(() => {
     if (isSessionRestoring) return;
@@ -1946,7 +2350,10 @@ function App() {
               ...room,
               preview: previewFromMessage(mapped),
               updatedAt: Math.max(room.updatedAt, mapped.at),
-              unread: inserted && !mapped.mine && activeRoomRef.current !== roomId ? room.unread + 1 : room.unread,
+              unread:
+                inserted && shouldIncreaseRoomUnread(mapped) && activeRoomRef.current !== roomId
+                  ? room.unread + 1
+                  : room.unread,
             }
           : room
       );
@@ -1956,7 +2363,7 @@ function App() {
       void refreshRoomsFromBackend(token);
     }
 
-    if (activeRoomRef.current === roomId && !mapped.mine) {
+    if (shouldAutoMarkRoomRead(roomId) && !mapped.mine) {
       await markRoomAsRead(token, roomId, mapped.id);
     }
   };
@@ -2016,11 +2423,29 @@ function App() {
   };
 
   const openRoom = (rid: string) => {
+    activeRoomRef.current = rid;
+    foregroundNotificationRoomId = rid;
     setActiveRoomId(rid);
     setTab('chats');
     setInput('');
     setDraftMedia(null);
     setRooms((p) => p.map((r) => (r.id === rid ? { ...r, unread: 0 } : r)));
+    void dismissPresentedNotificationsForRoom(rid).catch(() => null);
+    const token = accessToken.trim();
+    if (token && appVisibility === 'active') {
+      void markRoomAsRead(token, rid).catch(() => null);
+    }
+  };
+  const closeActiveRoom = async () => {
+    const rid = activeRoomRef.current;
+    activeRoomRef.current = null;
+    foregroundNotificationRoomId = '';
+    const token = accessToken.trim();
+    if (rid && token && appVisibility === 'active') {
+      await markRoomAsRead(token, rid).catch(() => null);
+      await refreshRoomsFromBackend(token).catch(() => null);
+    }
+    setActiveRoomId(null);
   };
 
   const refreshFriendTabData = async () => {
@@ -2078,6 +2503,7 @@ function App() {
           name: String(item.name),
           status: String(item.status || ''),
           email: String(item.email),
+          avatarUri: resolveBackendMediaUrl(String(item.avatarUri || '')),
           isFriend: !!item.isFriend,
           outgoingPending: !!item.outgoingPending,
           incomingPending: !!item.incomingPending,
@@ -2231,27 +2657,55 @@ function App() {
     setIsSendingMessage(true);
     const token = accessToken.trim();
     try {
-      if (token && text && !draftMedia) {
+      if (token) {
+        let textSent = false;
+        let mediaSent = false;
         try {
-          const created = await backendRequest<BackendRoomMessage>(
-            `/v1/rooms/${activeRoom.id}/messages`,
-            {
-              method: 'POST',
-              body: JSON.stringify({
-                clientMessageId: uid(),
-                kind: 'text',
-                text,
-              }),
-            },
-            token
-          );
-          const mapped = mapBackendMessage(created);
-          setRoomMsgs(activeRoom.id, (prev) => [...prev, mapped]);
-          touchRoom(activeRoom.id, mapped.text || '', false);
-          setInput('');
-          setDraftMedia(null);
+          if (text) {
+            const createdText = await backendRequest<BackendRoomMessage>(
+              `/v1/rooms/${activeRoom.id}/messages`,
+              {
+                method: 'POST',
+                body: JSON.stringify({
+                  clientMessageId: uid(),
+                  kind: 'text',
+                  text,
+                }),
+              },
+              token
+            );
+            const mappedText = mapBackendMessage(createdText);
+            setRoomMsgs(activeRoom.id, (prev) => [...prev, mappedText]);
+            touchRoom(activeRoom.id, mappedText.text || '', false);
+            textSent = true;
+          }
+
+          if (draftMedia) {
+            const uploadedUri = await uploadDraftMediaToBackend(token, draftMedia);
+            const createdMedia = await backendRequest<BackendRoomMessage>(
+              `/v1/rooms/${activeRoom.id}/messages`,
+              {
+                method: 'POST',
+                body: JSON.stringify({
+                  clientMessageId: uid(),
+                  kind: draftMedia.kind,
+                  uri: uploadedUri,
+                }),
+              },
+              token
+            );
+            const mappedMedia = mapBackendMessage(createdMedia);
+            setRoomMsgs(activeRoom.id, (prev) => [...prev, mappedMedia]);
+            touchRoom(activeRoom.id, previewFromMessage(mappedMedia), false);
+            mediaSent = true;
+          }
+
+          if (textSent) setInput('');
+          if (mediaSent) setDraftMedia(null);
           return;
         } catch (err) {
+          if (textSent) setInput('');
+          if (mediaSent) setDraftMedia(null);
           const msg = err instanceof Error ? err.message : '';
           Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
           return;
@@ -2327,6 +2781,72 @@ function App() {
     }
   };
 
+  const applyPickedMediaAsset = async (
+    asset: { uri?: string; type?: string | null; mimeType?: string | null },
+    kind: 'image' | 'video'
+  ) => {
+    if (!asset.uri) return;
+    if (asset.type === 'video' || kind === 'video') {
+      setDraftMedia({
+        kind: 'video',
+        uri: asset.uri,
+        mimeType: inferMediaMimeType(asset.uri, 'video', asset.mimeType),
+      });
+      return;
+    }
+    await openImageCrop(asset.uri, 'chat');
+  };
+
+  const openMediaExternally = async (uri: string) => {
+    if (!uri) return;
+    try {
+      const supported = await Linking.canOpenURL(uri);
+      if (!supported) {
+        Alert.alert(s.linkUnavailableTitle, s.linkUnavailableBody);
+        return;
+      }
+      await Linking.openURL(uri);
+    } catch {
+      Alert.alert(s.linkFailedTitle, s.linkFailedBody);
+    }
+  };
+
+  const captureMedia = async (kind: 'image' | 'video') => {
+    if (!activeRoomId) return;
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert(
+        isKo ? '카메라 권한이 필요해요' : 'Camera permission required',
+        isKo ? '사진이나 동영상을 찍어 보내려면 카메라 권한을 허용해 주세요.' : 'Allow camera access to capture media for chat.'
+      );
+      return;
+    }
+    try {
+      const r = await ImagePicker.launchCameraAsync({
+        mediaTypes: [kind === 'image' ? 'images' : 'videos'],
+        allowsEditing: false,
+        quality: 0.9,
+        videoMaxDuration: 120,
+      });
+      if (r.canceled || !r.assets.length) return;
+      await applyPickedMediaAsset(r.assets[0], kind);
+    } catch {
+      Alert.alert(s.mediaPickFailed);
+    }
+  };
+
+  const openCaptureMenu = () => {
+    Alert.alert(
+      isKo ? '카메라로 보내기' : 'Capture Media',
+      isKo ? '사진 또는 동영상을 촬영해서 보낼 수 있어요.' : 'Capture a photo or video to send.',
+      [
+        { text: isKo ? '사진 찍기' : 'Take Photo', onPress: () => void captureMedia('image') },
+        { text: isKo ? '동영상 찍기' : 'Record Video', onPress: () => void captureMedia('video') },
+        { text: s.cancel, style: 'cancel' },
+      ]
+    );
+  };
+
   const pickMedia = async (kind: 'image' | 'video') => {
     if (!activeRoomId) return;
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -2342,12 +2862,8 @@ function App() {
         quality: 0.9,
         videoMaxDuration: 120,
       });
-      if (r.canceled || !r.assets.length || !r.assets[0].uri) return;
-      if (r.assets[0].type === 'video' || kind === 'video') {
-        setDraftMedia({ kind: 'video', uri: r.assets[0].uri });
-        return;
-      }
-      await openImageCrop(r.assets[0].uri, 'chat');
+      if (r.canceled || !r.assets.length) return;
+      await applyPickedMediaAsset(r.assets[0], kind);
     } catch {
       Alert.alert(s.mediaPickFailed);
     }
@@ -2536,23 +3052,29 @@ function App() {
       name: String(saved.name || nextProfile.name),
       status: String(saved.status || nextProfile.status),
       email: String(saved.email || p.email),
-      avatarUri: String(saved.avatarUri || nextProfile.avatarUri),
+      avatarUri: resolveBackendMediaUrl(String(saved.avatarUri || nextProfile.avatarUri)),
     }));
     setNameDraft(String(saved.name || nextProfile.name));
     setStatusDraft(String(saved.status || nextProfile.status));
-    setProfilePhotoDraft(String(saved.avatarUri || nextProfile.avatarUri));
+    setProfilePhotoDraft(resolveBackendMediaUrl(String(saved.avatarUri || nextProfile.avatarUri)));
     return true;
   };
 
   const saveProfile = async () => {
     const n = nameDraft.trim();
     if (!n) return;
-    const nextProfile = {
-      name: n,
-      status: statusDraft.trim(),
-      avatarUri: profilePhotoDraft.trim(),
-    };
     try {
+      const token = accessToken.trim();
+      const draftAvatarUri = profilePhotoDraft.trim();
+      const nextAvatarUri =
+        token && draftAvatarUri && isLocalAssetUri(draftAvatarUri)
+          ? await uploadProfilePhotoToBackend(token, draftAvatarUri)
+          : resolveBackendMediaUrl(draftAvatarUri);
+      const nextProfile = {
+        name: n,
+        status: statusDraft.trim(),
+        avatarUri: nextAvatarUri,
+      };
       await persistProfile(nextProfile);
       setShowProfileModal(false);
     } catch (err) {
@@ -2643,7 +3165,7 @@ function App() {
         }
       );
       if (cropTarget === 'chat') {
-        setDraftMedia({ kind: 'image', uri: out.uri });
+        setDraftMedia({ kind: 'image', uri: out.uri, mimeType: 'image/jpeg' });
       } else {
         setProfilePhotoDraft(out.uri);
       }
@@ -2909,18 +3431,21 @@ function App() {
     </Modal>
   );
 
-  const updateRoomPrefs = async (rid: string, patch: { favorite?: boolean; muted?: boolean }) => {
+  const updateRoomPrefs = async (rid: string, patch: { favorite?: boolean; muted?: boolean; title?: string }) => {
     const token = accessToken.trim();
     const room = rooms.find((item) => item.id === rid);
     if (!room) return;
     const nextFavorite = patch.favorite ?? room.favorite;
     const nextMuted = patch.muted ?? room.muted;
+    const nextTitle = patch.title?.trim() || room.title;
     if (!token) {
-      setRooms((p) => p.map((r) => (r.id === rid ? { ...r, favorite: nextFavorite, muted: nextMuted } : r)));
+      setRooms((p) =>
+        p.map((r) => (r.id === rid ? { ...r, favorite: nextFavorite, muted: nextMuted, title: nextTitle } : r))
+      );
       return;
     }
     try {
-      const updated = await backendRequest<{ favorite?: boolean; muted?: boolean }>(
+      const updated = await backendRequest<{ favorite?: boolean; muted?: boolean; title?: string }>(
         `/v1/rooms/${rid}/settings`,
         {
           method: 'PATCH',
@@ -2935,6 +3460,7 @@ function App() {
                 ...r,
                 favorite: updated.favorite ?? nextFavorite,
                 muted: updated.muted ?? nextMuted,
+                title: updated.title ?? nextTitle,
               }
             : r
         )
@@ -2955,6 +3481,21 @@ function App() {
     const room = rooms.find((item) => item.id === rid);
     if (!room) return;
     void updateRoomPrefs(rid, { muted: !room.muted });
+  };
+  const openRoomTitleEditor = (rid: string) => {
+    const room = rooms.find((item) => item.id === rid);
+    if (!room || !room.isGroup) return;
+    setRoomTitleDraft(room.title);
+    setShowRoomTitleModal(true);
+    setRoomMenuId(null);
+  };
+  const saveRoomTitle = async () => {
+    const rid = roomMenuId || activeRoom?.id || '';
+    if (!rid) return;
+    const nextTitle = roomTitleDraft.trim();
+    if (!nextTitle) return;
+    await updateRoomPrefs(rid, { title: nextTitle });
+    setShowRoomTitleModal(false);
   };
   const toggleTrusted = async (fid: string) => {
     const token = requireAccessToken();
@@ -3045,6 +3586,40 @@ function App() {
     setLoginErr('');
   };
 
+  const switchBackendServer = async (nextUrl: string) => {
+    const normalized = normalizeBackendBaseUrl(nextUrl);
+    if (!normalized) {
+      Alert.alert(isKo ? '서버 주소를 입력해 주세요.' : 'Enter a server URL.');
+      return;
+    }
+
+    const nextOverride = normalized === defaultBackendBaseUrl ? '' : normalized;
+    try {
+      await writeBackendOverrideToStorage(nextOverride);
+      await clearSessionInStorage();
+    } finally {
+      if (hiddenServerTapTimerRef.current) {
+        clearTimeout(hiddenServerTapTimerRef.current);
+        hiddenServerTapTimerRef.current = null;
+      }
+      hiddenServerTapCountRef.current = 0;
+      sessionRestoreStartedRef.current = false;
+      if (wsReconnectTimerRef.current) {
+        clearTimeout(wsReconnectTimerRef.current);
+        wsReconnectTimerRef.current = null;
+      }
+      wsRef.current?.close();
+      wsRef.current = null;
+      setBackendOverrideUrl(nextOverride);
+      setBackendState('checking');
+      setBackendStateMsg('');
+      setShowServerMenu(false);
+      setServerMenuDraft(normalized);
+      setIsSessionRestoring(true);
+      resetForLogout();
+    }
+  };
+
   const requestLogout = () => {
     Alert.alert(s.logoutTitle, s.logoutBody, [
       { text: s.cancel, style: 'cancel' },
@@ -3113,7 +3688,9 @@ function App() {
         <LinearGradient colors={[FOREST.gradientTop, FOREST.gradientMid, FOREST.gradientBottom]} style={styles.fill}>
           <ForestBackdrop />
           <View style={styles.centerCard}>
-            <Text style={styles.brand}>{s.app}</Text>
+            <Pressable onPress={registerHiddenServerMenuTap}>
+              <Text style={styles.brand}>{s.app}</Text>
+            </Pressable>
             <Text style={styles.h1}>{s.login}</Text>
             <Text style={styles.sub}>{s.loginBody}</Text>
             <Pressable
@@ -3189,15 +3766,15 @@ function App() {
                 onPress={() => {
                   if (isName) {
                     setProfile((p) => ({ ...p, name: nameDraft.trim() }));
-                    setStatusDraft((prev) => prev || profile.status || s.defaultStatus);
+                    setStatusDraft((prev) => prev || profile.status || '');
                     setProfilePhotoDraft((prev) => prev || profile.avatarUri || '');
                     setStage('setup_intro');
                     return;
                   }
                   const nextProfile = {
                     name: nameDraft.trim() || profile.name,
-                    status: statusDraft.trim() || profile.status || s.defaultStatus,
-                    avatarUri: profilePhotoDraft.trim() || profile.avatarUri,
+                    status: statusDraft.trim(),
+                    avatarUri: profilePhotoDraft.trim(),
                   };
                   const run = async () => {
                     try {
@@ -3234,9 +3811,16 @@ function App() {
           {activeRoom ? (
             <>
               <View style={[styles.header, styles.headerRetreat]}>
-                <Pressable style={styles.iconDark} onPress={() => setActiveRoomId(null)}>
+                <Pressable style={styles.iconDark} onPress={() => void closeActiveRoom()}>
                   <Ionicons name="chevron-back" size={18} color={FOREST.text} />
                 </Pressable>
+                {roomAvatarUri(activeRoom) ? (
+                  <Image source={{ uri: roomAvatarUri(activeRoom) }} style={styles.headerAvatar} />
+                ) : (
+                  <View style={[styles.headerAvatar, styles.headerAvatarFallbackSmall]}>
+                    <Text style={styles.headerAvatarSmallText}>{roomTitle(activeRoom).slice(0, 1).toUpperCase()}</Text>
+                  </View>
+                )}
                 <View style={styles.headerCopy}>
                   <Text style={styles.title}>{roomTitle(activeRoom)}</Text>
                   {activeRoom.isGroup ? (
@@ -3252,11 +3836,6 @@ function App() {
 
               <View style={styles.main}>
                 <ScrollView ref={scrollRef} contentContainerStyle={styles.list}>
-                  <View style={styles.roomDayChip}>
-                    <Text style={styles.roomDayChipText}>
-                      {new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}
-                    </Text>
-                  </View>
                   {activeMsgs.length === 0 ? (
                     <View style={[styles.empty, styles.emptyCove]}>
                       <Text style={styles.h1}>{s.noMsg}</Text>
@@ -3266,18 +3845,52 @@ function App() {
                       </Pressable>
                     </View>
                   ) : (
-                    activeMsgs.map((m) => (
-                      <View key={m.id} style={[styles.bubbleRow, m.mine ? styles.mineRow : styles.otherRow]}>
-                        {!m.mine && m.kind !== 'system' ? (
-                          <Text style={styles.roomSender}>{m.senderName}</Text>
-                        ) : null}
+                    activeMsgs.map((m, index) => {
+                      const showDayChip = index === 0 || dayKey(activeMsgs[index - 1].at) !== dayKey(m.at);
+                      return (
+                        <Fragment key={m.id}>
+                          {showDayChip ? (
+                            <View style={styles.roomDayChip}>
+                              <Text style={styles.roomDayChipText}>{messageDayLabel(m.at)}</Text>
+                            </View>
+                          ) : null}
+                          <View
+                            style={[
+                              styles.bubbleRow,
+                              m.mine ? styles.mineRow : styles.otherRow,
+                              !m.mine && m.kind !== 'system' ? styles.otherRowWithAvatar : null,
+                            ]}
+                          >
+                            {!m.mine && m.kind !== 'system' ? (
+                              <View style={styles.messageAvatarDock}>
+                                {messageAvatarUri(m) ? (
+                                  <Image source={{ uri: messageAvatarUri(m) }} style={styles.messageAvatar} />
+                                ) : (
+                                  <View style={styles.messageAvatarFallback}>
+                                    <Text style={styles.messageAvatarText}>
+                                      {(m.senderName || '?').slice(0, 1).toUpperCase()}
+                                    </Text>
+                                  </View>
+                                )}
+                              </View>
+                            ) : null}
+                            {!m.mine && m.kind !== 'system' ? (
+                              <Text style={styles.roomSender}>{m.senderName}</Text>
+                            ) : null}
                         <View style={[styles.bubble, m.mine ? styles.mineBubble : styles.otherBubble]}>
                           {m.kind === 'text' ? renderMessageText(m.text || '', m.mine) : null}
-                          {m.kind === 'image' ? <Image source={{ uri: m.uri }} style={styles.media} /> : null}
-                          {m.kind === 'video' ? (
-                            <View style={[styles.media, styles.video]}>
-                              <Ionicons name="play-circle" size={34} color="#E7F4FF" />
-                            </View>
+                          {m.kind === 'image' && m.uri ? (
+                            <Pressable onPress={() => setMediaViewer({ kind: 'image', uri: m.uri || '' })}>
+                              <Image source={{ uri: m.uri }} style={styles.media} />
+                            </Pressable>
+                          ) : null}
+                          {m.kind === 'video' && m.uri ? (
+                            <Pressable onPress={() => setMediaViewer({ kind: 'video', uri: m.uri || '' })}>
+                              <View style={[styles.media, styles.videoCard]}>
+                                <Ionicons name="videocam-outline" size={28} color="#E7F4FF" />
+                                <Text style={styles.videoCardText}>{isKo ? '동영상 크게 보기' : 'Open video viewer'}</Text>
+                              </View>
+                            </Pressable>
                           ) : null}
                           {m.kind === 'system' ? <Text style={styles.system}>{renderSystemText(m.text || '')}</Text> : null}
                           <View style={styles.metaRow}>
@@ -3306,15 +3919,55 @@ function App() {
                               }`}
                             </Text>
                           ) : null}
-                        </View>
-                      </View>
-                    ))
+                            </View>
+                          </View>
+                        </Fragment>
+                      );
+                    })
                   )}
                 </ScrollView>
               </View>
 
               <View style={styles.composer}>
+                {draftMedia ? (
+                  <View style={[styles.draft, styles.draftNest]}>
+                    <View style={styles.draftCopy}>
+                      <Text style={styles.itemTitle}>
+                        {draftMedia.kind === 'image' ? s.imageSelected : s.videoSelected}
+                      </Text>
+                      <Text style={styles.composerHint}>{s.mediaHint}</Text>
+                    </View>
+                    <Pressable style={styles.iconLight} onPress={() => setDraftMedia(null)}>
+                      <Ionicons name="close" size={16} color={FOREST.text} />
+                    </Pressable>
+                  </View>
+                ) : null}
                 <View style={styles.row}>
+                  <Pressable
+                    style={[styles.attachBtn, isSendingMessage && styles.off]}
+                    disabled={isSendingMessage}
+                    onPress={openCaptureMenu}
+                  >
+                    <Ionicons name="camera-outline" size={18} color={FOREST.text} />
+                  </Pressable>
+                  <Pressable
+                    style={[styles.attachBtn, isSendingMessage && styles.off]}
+                    disabled={isSendingMessage}
+                    onPress={() => {
+                      void pickMedia('image');
+                    }}
+                  >
+                    <Ionicons name="image-outline" size={18} color={FOREST.text} />
+                  </Pressable>
+                  <Pressable
+                    style={[styles.attachBtn, isSendingMessage && styles.off]}
+                    disabled={isSendingMessage}
+                    onPress={() => {
+                      void pickMedia('video');
+                    }}
+                  >
+                    <Ionicons name="videocam-outline" size={18} color={FOREST.text} />
+                  </Pressable>
                   <TextInput
                     style={styles.composerInput}
                     placeholder={s.msgInput}
@@ -3339,8 +3992,8 @@ function App() {
             <>
               <View style={styles.header}>
                 <View style={styles.topIdentity}>
-                  {profile.avatarUri ? (
-                    <Image source={{ uri: profile.avatarUri }} style={styles.headerAvatarLarge} />
+                  {topAvatarUri ? (
+                    <Image source={{ uri: topAvatarUri }} style={styles.headerAvatarLarge} />
                   ) : (
                     <View style={styles.headerAvatarFallback}>
                       <Text style={styles.headerAvatarFallbackText}>
@@ -3381,13 +4034,34 @@ function App() {
               <View style={styles.main}>
                 {tab === 'chats' ? (
                   <ScrollView contentContainerStyle={styles.list}>
-                    {sortedRooms.length === 0 ? (
+                    {sortedRooms.length === 0 && visibleBots.length === 0 ? (
                       <View style={[styles.empty, styles.emptyCove]}>
                         <Text style={styles.h1}>{s.noRooms}</Text>
                         <Text style={styles.sub}>{s.noRoomsBody}</Text>
                       </View>
                     ) : (
                       <>
+                        {visibleBots.length > 0 ? <Text style={styles.sectionTitle}>{s.botsTitle}</Text> : null}
+                        {visibleBots.map((bot) => (
+                          <Pressable key={bot.id} style={styles.roomItem} onPress={() => void startBotRoom(bot.id)}>
+                            <View style={styles.listAvatar}>
+                              <Text style={styles.listAvatarText}>{bot.name.slice(0, 1).toUpperCase()}</Text>
+                            </View>
+                            <View style={styles.roomItemCopy}>
+                              <View style={styles.roomItemHead}>
+                                <Text style={[styles.itemTitle, { flex: 1 }]}>{bot.name}</Text>
+                              </View>
+                              <Text style={styles.roomPreview} numberOfLines={1}>
+                                {bot.description || s.botStart}
+                              </Text>
+                            </View>
+                            <View style={styles.itemRight}>
+                              <Pressable style={styles.iconLight} onPress={() => void startBotRoom(bot.id)}>
+                                <Ionicons name="chatbubble-ellipses" size={16} color={FOREST.text} />
+                              </Pressable>
+                            </View>
+                          </Pressable>
+                        ))}
                         {favoriteRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '즐겨찾기' : 'Favorites'}</Text> : null}
                         {favoriteRooms.map(renderRoomRow)}
                         {otherRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '대화방' : 'Chats'}</Text> : null}
@@ -3446,8 +4120,13 @@ function App() {
                     ) : null}
                     {friends.length === 0 ? (
                       <View style={[styles.empty, styles.emptyCove]}>
-                        <Text style={styles.h1}>{s.noFriends}</Text>
+                        <Pressable onPress={openFriendModal}>
+                          <Text style={[styles.h1, { textDecorationLine: 'underline' }]}>{s.noFriends}</Text>
+                        </Pressable>
                         <Text style={styles.sub}>{s.addFriend}</Text>
+                        <Pressable style={styles.smallBtn} onPress={openFriendModal}>
+                          <Text style={styles.smallBtnText}>{s.addFriend}</Text>
+                        </Pressable>
                       </View>
                     ) : (
                       <>
@@ -3462,7 +4141,7 @@ function App() {
 
                 {tab === 'profile' ? (
                   <ScrollView contentContainerStyle={styles.list}>
-                    <View style={styles.profileCabinCard}>
+                    <Pressable style={styles.profileCabinCard} onLongPress={openServerMenu} delayLongPress={900}>
                       <View style={styles.profileHero}>
                         {profile.avatarUri ? (
                           <Image source={{ uri: profile.avatarUri }} style={styles.profileAvatar} />
@@ -3490,7 +4169,7 @@ function App() {
                       >
                         <Text style={styles.smallBtnText}>{s.profileEdit}</Text>
                       </Pressable>
-                    </View>
+                    </Pressable>
                     <Pressable style={styles.logoutBtn} onPress={requestLogout}>
                       <Ionicons name="log-out-outline" size={16} color="#FFDADD" />
                       <Text style={styles.logoutText}>{s.logout}</Text>
@@ -3598,7 +4277,11 @@ function App() {
                     return (
                       <View key={item.id} style={styles.item}>
                         <View style={styles.listAvatar}>
-                          <Text style={styles.listAvatarText}>{item.name.slice(0, 1).toUpperCase()}</Text>
+                          {item.avatarUri ? (
+                            <Image source={{ uri: item.avatarUri }} style={styles.listAvatarImage} />
+                          ) : (
+                            <Text style={styles.listAvatarText}>{item.name.slice(0, 1).toUpperCase()}</Text>
+                          )}
                         </View>
                         <View style={{ flex: 1 }}>
                           <Text style={styles.itemTitle}>{item.name}</Text>
@@ -3725,6 +4408,127 @@ function App() {
         </Modal>
 
         <Modal
+          visible={showServerMenu}
+          transparent
+          animationType="fade"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={() => setShowServerMenu(false)}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={() => setShowServerMenu(false)} />
+            <KeyboardAvoidingView
+              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
+              behavior={kbBehavior}
+            >
+              <View style={styles.sheet}>
+                <Text style={styles.h1}>{isKo ? '숨김 서버 메뉴' : 'Hidden Server Menu'}</Text>
+                <Text style={styles.sub}>{isKo ? '현재 앱이 연결할 서버 주소예요.' : 'This app will talk to the server below.'}</Text>
+                <Text style={styles.itemTitle}>{backendBaseUrl}</Text>
+                <Text style={styles.sub}>
+                  {isKo ? '서버를 바꾸면 저장된 로그인 세션과 캐시가 정리돼요.' : 'Switching servers clears the saved login session and local cache.'}
+                </Text>
+                <Pressable style={styles.item} onPress={() => void switchBackendServer(defaultBackendBaseUrl)}>
+                  <Text style={styles.itemTitle}>{isKo ? '운영 서버 사용' : 'Use Prod Server'}</Text>
+                  <Text style={styles.sub}>{defaultBackendBaseUrl}</Text>
+                </Pressable>
+                <Pressable style={styles.item} onPress={() => void switchBackendServer(devBackendBaseUrl)}>
+                  <Text style={styles.itemTitle}>{isKo ? '개발 서버 사용 (7084)' : 'Use Dev Server (7084)'}</Text>
+                  <Text style={styles.sub}>{devBackendBaseUrl}</Text>
+                </Pressable>
+                <TextInput
+                  style={styles.field}
+                  value={serverMenuDraft}
+                  onChangeText={setServerMenuDraft}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder={isKo ? '직접 서버 URL 입력' : 'Enter custom server URL'}
+                  placeholderTextColor={FOREST.placeholder}
+                />
+                <View style={styles.row}>
+                  <Pressable style={styles.smallBtn} onPress={() => setShowServerMenu(false)}>
+                    <Text style={styles.smallBtnText}>{isKo ? '닫기' : 'Close'}</Text>
+                  </Pressable>
+                  <Pressable style={styles.smallBtn} onPress={() => void switchBackendServer(serverMenuDraft)}>
+                    <Text style={styles.smallBtnText}>{isKo ? '이 주소로 적용' : 'Apply URL'}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={!!mediaViewer}
+          transparent
+          animationType="fade"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={() => setMediaViewer(null)}
+        >
+          <View style={styles.viewerOverlay}>
+            <Pressable style={styles.backdrop} onPress={() => setMediaViewer(null)} />
+            <View style={styles.viewerStage}>
+              {mediaViewer?.kind === 'image' ? (
+                <Image source={{ uri: mediaViewer.uri }} style={styles.viewerMedia} resizeMode="contain" />
+              ) : mediaViewer?.kind === 'video' ? (
+                <InAppVideoPlayer uri={mediaViewer.uri} />
+              ) : null}
+              <View style={styles.viewerActions}>
+                <Pressable style={styles.smallBtn} onPress={() => setMediaViewer(null)}>
+                  <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                </Pressable>
+                {mediaViewer ? (
+                  <Pressable style={styles.smallBtn} onPress={() => void openMediaExternally(mediaViewer.uri)}>
+                    <Text style={styles.smallBtnText}>{isKo ? '다른 앱으로 열기' : 'Open Externally'}</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={showRoomTitleModal}
+          transparent
+          animationType="slide"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={() => setShowRoomTitleModal(false)}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={() => setShowRoomTitleModal(false)} />
+            <KeyboardAvoidingView
+              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
+              behavior={kbBehavior}
+            >
+              <View style={styles.sheet}>
+                <Text style={styles.h1}>{s.editRoomTitle}</Text>
+                <TextInput
+                  style={styles.field}
+                  value={roomTitleDraft}
+                  onChangeText={setRoomTitleDraft}
+                  placeholder={s.roomTitlePlaceholder}
+                  placeholderTextColor={FOREST.placeholder}
+                />
+                <View style={styles.row}>
+                  <Pressable style={styles.smallBtn} onPress={() => setShowRoomTitleModal(false)}>
+                    <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.smallBtn, !roomTitleDraft.trim() && styles.off]}
+                    disabled={!roomTitleDraft.trim()}
+                    onPress={() => void saveRoomTitle()}
+                  >
+                    <Text style={styles.smallBtnText}>{s.save}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
+        <Modal
           visible={!!roomMenuId}
           transparent
           animationType="fade"
@@ -3739,6 +4543,11 @@ function App() {
                 <Text style={styles.h1}>{s.roomSetting}</Text>
                 {roomMenuId ? (
                   <>
+                    {roomMap.get(roomMenuId)?.isGroup ? (
+                      <Pressable style={styles.item} onPress={() => openRoomTitleEditor(roomMenuId)}>
+                        <Text style={styles.itemTitle}>{s.editRoomTitle}</Text>
+                      </Pressable>
+                    ) : null}
                     <Pressable style={styles.item} onPress={() => toggleFavorite(roomMenuId)}>
                       <Text style={styles.itemTitle}>{roomMap.get(roomMenuId)?.favorite ? s.favoriteOff : s.favoriteOn}</Text>
                     </Pressable>
@@ -3875,6 +4684,13 @@ const styles = StyleSheet.create({
   },
   headerAvatar: { width: 30, height: 30, borderRadius: 15 },
   headerAvatarLarge: { width: 42, height: 42, borderRadius: 21 },
+  headerAvatarFallbackSmall: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 214, 122, 0.36)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+  },
   headerAvatarFallback: {
     width: 42,
     height: 42,
@@ -3886,6 +4702,7 @@ const styles = StyleSheet.create({
     borderColor: FOREST.border,
   },
   headerAvatarFallbackText: { color: FOREST.text, fontSize: 16, fontWeight: '800' },
+  headerAvatarSmallText: { color: FOREST.text, fontSize: 12, fontWeight: '800' },
   topIdentity: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
   topIdentityCopy: { gap: 2, flex: 1 },
   headerName: { color: FOREST.text, fontSize: 18, fontWeight: '800' },
@@ -4052,6 +4869,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   friendItemCopy: { flex: 1, gap: 6 },
+  friendStatusText: { color: FOREST.textMuted, fontSize: 12, lineHeight: 18 },
   friendMetaRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   moodChip: {
     borderRadius: 999,
@@ -4077,6 +4895,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FOREST.border,
   },
+  listAvatarImage: { width: '100%', height: '100%', borderRadius: 21 },
   listAvatarText: { color: FOREST.text, fontSize: 16, fontWeight: '800' },
   profileHero: {
     width: 84,
@@ -4162,6 +4981,20 @@ const styles = StyleSheet.create({
   bubbleRow: { width: '100%' },
   mineRow: { alignItems: 'flex-end' },
   otherRow: { alignItems: 'flex-start' },
+  otherRowWithAvatar: { paddingLeft: 34 },
+  messageAvatarDock: { position: 'absolute', left: 0, top: 0 },
+  messageAvatar: { width: 26, height: 26, borderRadius: 13 },
+  messageAvatarFallback: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 214, 122, 0.36)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+  },
+  messageAvatarText: { color: FOREST.text, fontSize: 11, fontWeight: '800' },
   bubble: {
     maxWidth: '88%',
     borderRadius: 20,
@@ -4173,7 +5006,7 @@ const styles = StyleSheet.create({
   },
   roomSender: {
     marginBottom: 4,
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
     color: FOREST.textMuted,
     fontSize: 11,
     fontWeight: '700',
@@ -4198,6 +5031,14 @@ const styles = StyleSheet.create({
   system: { color: '#355B3A', fontSize: 12, fontWeight: '700' },
   media: { width: 196, height: 136, borderRadius: 12, backgroundColor: '#31563A' },
   video: { alignItems: 'center', justifyContent: 'center' },
+  videoCard: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    backgroundColor: '#2E5237',
+  },
+  videoCardText: { color: '#E7F4FF', fontSize: 12, fontWeight: '700', textAlign: 'center' },
   roomSceneCard: {
     borderRadius: 18,
     padding: 14,
@@ -4228,6 +5069,37 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: 'rgba(139, 149, 255, 0.08)',
   },
+  viewerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 12,
+  },
+  viewerStage: {
+    width: '100%',
+    maxWidth: 520,
+    gap: 12,
+    alignItems: 'center',
+  },
+  viewerMedia: {
+    width: '100%',
+    height: 520,
+    borderRadius: 18,
+    backgroundColor: 'rgba(11,25,16,0.92)',
+  },
+  viewerPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingHorizontal: 24,
+  },
+  viewerHint: { color: 'rgba(255,255,255,0.82)', fontSize: 13, fontWeight: '600', textAlign: 'center' },
+  viewerActions: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
   composer: {
     marginHorizontal: 12,
     marginTop: 8,
@@ -4250,6 +5122,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   draftNest: { backgroundColor: 'rgba(229,246,220,0.14)' },
+  draftCopy: { flex: 1, gap: 2 },
   field: {
     width: '100%',
     minHeight: 48,
@@ -4274,6 +5147,16 @@ const styles = StyleSheet.create({
     fontSize: 15,
     borderWidth: 1,
     borderColor: 'rgba(167, 177, 230, 0.24)',
+  },
+  attachBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(139, 149, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
   },
   send: {
     width: 44,
