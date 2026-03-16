@@ -254,6 +254,7 @@ const MY_ID = 'me';
 const URL_REGEX = /https?:\/\/\S+/gi;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const PROFILE_CROP_BOX = 260;
+const PROFILE_PHOTO_MAX_OUTPUT = 2048;
 
 const normalizeBackendErrorMessage = (message: string, isKo: boolean): string => {
   const normalized = message.trim();
@@ -2306,19 +2307,7 @@ function App() {
   };
 
   const normalizeImageForCrop = async (uri: string) => {
-    try {
-      const normalized = await ImageManipulator.manipulateAsync(
-        uri,
-        [{ rotate: 0 }],
-        {
-          compress: 1,
-          format: ImageManipulator.SaveFormat.JPEG,
-        }
-      );
-      return normalized.uri || uri;
-    } catch {
-      return uri;
-    }
+    return uri;
   };
 
   const beginPinch = (crop: ProfilePhotoCrop, touches: TouchPoint[]) => {
@@ -2858,7 +2847,11 @@ function App() {
       });
       return;
     }
-    await openImageCrop(asset.uri, 'chat');
+    setDraftMedia({
+      kind: 'image',
+      uri: asset.uri,
+      mimeType: inferMediaMimeType(asset.uri, 'image', asset.mimeType),
+    });
   };
 
   const openMediaExternally = async (uri: string) => {
@@ -2889,7 +2882,7 @@ function App() {
       const r = await ImagePicker.launchCameraAsync({
         mediaTypes: [kind === 'image' ? 'images' : 'videos'],
         allowsEditing: false,
-        quality: 0.9,
+        quality: 1,
         videoMaxDuration: 120,
       });
       if (r.canceled || !r.assets.length) return;
@@ -2923,7 +2916,7 @@ function App() {
         mediaTypes: [kind === 'image' ? 'images' : 'videos'],
         allowsEditing: false,
         legacy: Platform.OS === 'android',
-        quality: 0.9,
+        quality: 1,
         videoMaxDuration: 120,
       });
       if (r.canceled || !r.assets.length) return;
@@ -3026,7 +3019,7 @@ function App() {
         mediaTypes: ['images'],
         allowsEditing: false,
         legacy: Platform.OS === 'android',
-        quality: 0.9,
+        quality: 1,
       });
       if (r.canceled || !r.assets.length || !r.assets[0].uri) return;
       await openImageCrop(r.assets[0].uri, 'profile');
@@ -3202,29 +3195,33 @@ function App() {
     setIsApplyingPhoto(true);
     try {
       const viewport = cropViewportLayoutRef.current;
-      const renderWidth = Math.max(1, Math.round(crop.renderWidth));
-      const renderHeight = Math.max(1, Math.round(crop.renderHeight));
-      const resized = await ImageManipulator.manipulateAsync(
-        crop.uri,
-        [{ resize: { width: renderWidth, height: renderHeight } }],
-        { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
-      );
-
       const viewportW = Math.max(1, Math.round(viewport.width));
       const viewportH = Math.max(1, Math.round(viewport.height));
-      const side = Math.max(1, Math.min(viewportW, viewportH, renderWidth, renderHeight));
-      const maxOriginX = Math.max(0, renderWidth - side);
-      const maxOriginY = Math.max(0, renderHeight - side);
-      const originX = clamp(Math.round(-crop.offsetX), 0, maxOriginX);
-      const originY = clamp(Math.round(-crop.offsetY), 0, maxOriginY);
+      const viewportSide = Math.max(1, Math.min(viewportW, viewportH));
+      const cropSide = Math.max(
+        1,
+        Math.min(
+          Math.round(viewportSide / crop.scale),
+          Math.round(crop.imageWidth),
+          Math.round(crop.imageHeight)
+        )
+      );
+      const maxOriginX = Math.max(0, Math.round(crop.imageWidth) - cropSide);
+      const maxOriginY = Math.max(0, Math.round(crop.imageHeight) - cropSide);
+      const originX = clamp(Math.round(-crop.offsetX / crop.scale), 0, maxOriginX);
+      const originY = clamp(Math.round(-crop.offsetY / crop.scale), 0, maxOriginY);
+      const profileOutputSize = Math.max(1, Math.min(PROFILE_PHOTO_MAX_OUTPUT, cropSide));
+      const actions: ImageManipulator.Action[] = [
+        { crop: { originX, originY, width: cropSide, height: cropSide } },
+      ];
+      if (cropTarget !== 'chat' && cropSide > profileOutputSize) {
+        actions.push({ resize: { width: profileOutputSize, height: profileOutputSize } });
+      }
       const out = await ImageManipulator.manipulateAsync(
-        resized.uri,
-        [
-          { crop: { originX, originY, width: side, height: side } },
-          { resize: { width: 640, height: 640 } },
-        ],
+        crop.uri,
+        actions,
         {
-          compress: 0.9,
+          compress: 1,
           format: ImageManipulator.SaveFormat.JPEG,
         }
       );
