@@ -26,6 +26,9 @@ const plugins = Array.isArray(baseConfig.plugins) ? [...baseConfig.plugins] : []
 if (!plugins.includes('expo-video')) {
   plugins.push('expo-video');
 }
+if (!plugins.includes('expo-media-library')) {
+  plugins.push('expo-media-library');
+}
 
 const backendBaseUrl = pick(process.env.EXPO_PUBLIC_BACKEND_BASE_URL, defaultBackend.baseUrl)
   .replace(/\/+$/, '');

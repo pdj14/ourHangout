@@ -23,6 +23,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as MediaLibrary from 'expo-media-library';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
@@ -89,6 +90,7 @@ type Room = {
 type Profile = { name: string; status: string; email: string; avatarUri: string; localeTag: string };
 type DraftMedia = { kind: 'image' | 'video'; uri: string; mimeType: string };
 type MediaViewer = { kind: 'image' | 'video'; uri: string };
+type AvatarViewer = { uri: string; title: string };
 type CropTarget = 'profile' | 'chat';
 type ProfilePhotoCrop = {
   uri: string;
@@ -248,6 +250,9 @@ type AppExtra = {
 type PersistedSession = {
   accessToken: string;
   refreshToken?: string;
+};
+type BackendSyncOptions = {
+  strict?: boolean;
 };
 
 const MY_ID = 'me';
@@ -465,6 +470,17 @@ const buildDevBackendBaseUrl = (prodBaseUrl: string): string => {
     return normalizeBackendBaseUrl(next.toString());
   } catch {
     return 'http://wowjini0228.synology.me:7084';
+  }
+};
+const logSessionTrace = (event: string, details?: Record<string, unknown>) => {
+  try {
+    if (details) {
+      console.info(`[session] ${event}`, JSON.stringify(details));
+      return;
+    }
+    console.info(`[session] ${event}`);
+  } catch {
+    console.info(`[session] ${event}`);
   }
 };
 
@@ -987,6 +1003,8 @@ function App() {
   const [showRoomTitleModal, setShowRoomTitleModal] = useState(false);
   const [roomTitleDraft, setRoomTitleDraft] = useState('');
   const [mediaViewer, setMediaViewer] = useState<MediaViewer | null>(null);
+  const [avatarViewer, setAvatarViewer] = useState<AvatarViewer | null>(null);
+  const [isSavingMedia, setIsSavingMedia] = useState(false);
   const [roomMenuId, setRoomMenuId] = useState<string | null>(null);
   const [wsRetryTick, setWsRetryTick] = useState(0);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
@@ -1001,6 +1019,8 @@ function App() {
   const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roomGroupRef = useRef<Record<string, boolean>>({});
   const sendLockRef = useRef(false);
+  const refreshTokenRef = useRef('');
+  const roomReadCutoffRef = useRef<Record<string, number>>({});
   const pushTokenRef = useRef('');
   const registeredPushTokenRef = useRef('');
   const notificationResponseSubRef = useRef<Notifications.EventSubscription | null>(null);
@@ -1012,6 +1032,13 @@ function App() {
       return '';
     }
   }, [backendBaseUrl]);
+  const setSessionTokens = (nextAccessToken: string, nextRefreshToken?: string) => {
+    const normalizedAccessToken = nextAccessToken.trim();
+    const normalizedRefreshToken = (nextRefreshToken || '').trim();
+    refreshTokenRef.current = normalizedRefreshToken;
+    setAccessToken(normalizedAccessToken);
+    setRefreshToken(normalizedRefreshToken);
+  };
 
   const resolveBackendUrl = (
     value: string | null | undefined,
@@ -1065,12 +1092,46 @@ function App() {
       .map((m) => getFriend(m)?.name ?? getBot(m)?.name ?? '')
         .filter(Boolean)
         .join(', ');
+  const openAvatarViewer = (uri: string, title: string) => {
+    const normalizedUri = uri.trim();
+    if (!normalizedUri) return;
+    setAvatarViewer({
+      uri: normalizedUri,
+      title: title.trim(),
+    });
+  };
   const openServerMenu = () => {
     setServerMenuDraft(backendBaseUrl);
     setShowServerMenu(true);
   };
   const shouldAutoMarkRoomRead = (roomId: string) =>
     !!roomId && appVisibility === 'active' && activeRoomRef.current === roomId;
+  const latestReadableMessage = (roomMessages?: Message[]): Message | null => {
+    if (!Array.isArray(roomMessages) || roomMessages.length === 0) return null;
+    for (let index = roomMessages.length - 1; index >= 0; index -= 1) {
+      const candidate = roomMessages[index];
+      if (candidate?.id && candidate.kind !== 'system') {
+        return candidate;
+      }
+    }
+    return null;
+  };
+  const latestReadableMessageId = (roomMessages?: Message[]): string => latestReadableMessage(roomMessages)?.id || '';
+  const rememberRoomReadCutoff = (roomId: string, roomMessages?: Message[]) => {
+    if (!roomId) return;
+    const latestMessage = latestReadableMessage(roomMessages);
+    const fallbackUpdatedAt = roomMap.get(roomId)?.updatedAt ?? 0;
+    const nextCutoff = Math.max(latestMessage?.at ?? 0, fallbackUpdatedAt);
+    if (!nextCutoff) return;
+    roomReadCutoffRef.current[roomId] = Math.max(roomReadCutoffRef.current[roomId] ?? 0, nextCutoff);
+  };
+  const shouldSuppressRoomUnread = (roomId: string, unread: number, roomUpdatedAt?: number) => {
+    if (unread <= 0) return false;
+    const cutoff = roomReadCutoffRef.current[roomId] ?? 0;
+    if (!cutoff) return false;
+    const updatedAt = roomUpdatedAt ?? roomMap.get(roomId)?.updatedAt ?? 0;
+    return updatedAt > 0 && updatedAt <= cutoff;
+  };
   const registerHiddenServerMenuTap = () => {
     if (hiddenServerTapTimerRef.current) {
       clearTimeout(hiddenServerTapTimerRef.current);
@@ -1221,13 +1282,20 @@ function App() {
 
   const renderRoomRow = (room: Room) => (
     <Pressable key={room.id} style={styles.roomItem} onPress={() => openRoom(room.id)}>
-      <View style={styles.listAvatar}>
+      <Pressable
+        style={styles.listAvatar}
+        disabled={!roomAvatarUri(room)}
+        onPress={(event) => {
+          event.stopPropagation();
+          openAvatarViewer(roomAvatarUri(room), roomTitle(room));
+        }}
+      >
         {roomAvatarUri(room) ? (
           <Image source={{ uri: roomAvatarUri(room) }} style={styles.listAvatarImage} />
         ) : (
           <Text style={styles.listAvatarText}>{roomTitle(room).slice(0, 1).toUpperCase()}</Text>
         )}
-      </View>
+      </Pressable>
       <View style={styles.roomItemCopy}>
         <View style={styles.roomItemHead}>
           <Text style={[styles.itemTitle, { flex: 1 }]}>{roomTitle(room)}</Text>
@@ -1258,13 +1326,17 @@ function App() {
     const trustedBusy = friendActionKey === `trusted:${friend.id}`;
     return (
       <View key={friend.id} style={styles.friendItem}>
-        <View style={styles.listAvatar}>
+        <Pressable
+          style={styles.listAvatar}
+          disabled={!friend.avatarUri}
+          onPress={() => openAvatarViewer(friend.avatarUri, friend.name)}
+        >
           {friend.avatarUri ? (
             <Image source={{ uri: friend.avatarUri }} style={styles.listAvatarImage} />
           ) : (
             <Text style={styles.listAvatarText}>{friend.name.slice(0, 1).toUpperCase()}</Text>
           )}
-        </View>
+        </Pressable>
         <View style={styles.friendItemCopy}>
           <Text style={styles.itemTitle}>{friend.name}</Text>
           <Text style={styles.friendStatusText} numberOfLines={1}>
@@ -1317,7 +1389,7 @@ function App() {
       if (!token) return;
       void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token)]).catch(() => null);
       if (activeRoomRef.current) {
-        void syncRoomMessagesFromBackend(token, activeRoomRef.current).catch(() => null);
+        void syncRoomReadState(token, activeRoomRef.current, { refreshMessages: true }).catch(() => null);
       }
     });
     return () => sub.remove();
@@ -1333,6 +1405,10 @@ function App() {
     const totalUnread = rooms.reduce((sum, room) => sum + Math.max(0, room.unread), 0);
     void syncAppBadgeCount(totalUnread);
   }, [rooms]);
+
+  useEffect(() => {
+    refreshTokenRef.current = refreshToken.trim();
+  }, [refreshToken]);
 
   useEffect(() => {
     if (tab !== 'chats') return;
@@ -1351,7 +1427,7 @@ function App() {
     const latest = activeMsgs[activeMsgs.length - 1];
     if (!latest || latest.mine) return;
     if (latest.delivery !== 'read') {
-      void markRoomAsRead(token, activeRoomId, latest.id);
+      void syncRoomReadState(token, activeRoomId).catch(() => null);
     }
   }, [activeRoomId, activeMsgs.length, accessToken, appVisibility]);
 
@@ -1362,11 +1438,7 @@ function App() {
     let cancelled = false;
     const run = async () => {
       try {
-        const synced = await syncRoomMessagesFromBackend(token, activeRoomId);
-        await maybeMarkLatestIncomingMessageRead(token, activeRoomId, synced);
-        if (!cancelled) {
-          await markRoomAsRead(token, activeRoomId);
-        }
+        await syncRoomReadState(token, activeRoomId, { refreshMessages: true });
       } catch {
         if (cancelled) return;
       }
@@ -1432,16 +1504,20 @@ function App() {
       return { res, json };
     };
 
-    const shouldAttemptRefresh =
-      normalizedPath !== '/v1/auth/refresh' &&
-      normalizedPath !== '/v1/auth/google' &&
-      normalizedPath !== '/health' &&
-      !!refreshToken.trim();
-
     let resolvedToken = token;
     let response = await perform(resolvedToken);
 
-    if (response.res.status === 401 && shouldAttemptRefresh) {
+    if (
+      response.res.status === 401 &&
+      normalizedPath !== '/v1/auth/refresh' &&
+      normalizedPath !== '/v1/auth/google' &&
+      normalizedPath !== '/health'
+    ) {
+      const currentRefreshToken = refreshTokenRef.current.trim();
+      if (!currentRefreshToken) {
+        const body = (response.json || {}) as BackendEnvelope<unknown>;
+        throw new Error(body.error?.message || body.message || `HTTP ${response.res.status}`);
+      }
       try {
         const refreshResponse = await perform(undefined);
         void refreshResponse;
@@ -1452,7 +1528,7 @@ function App() {
         const refreshed = await fetch(`${backendBaseUrl}/v1/auth/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken: refreshToken.trim() }),
+          body: JSON.stringify({ refreshToken: currentRefreshToken }),
         });
         const refreshText = await refreshed.text();
         let refreshJson: unknown = null;
@@ -1467,10 +1543,9 @@ function App() {
           const refreshData = unwrapEnvelope<BackendAuthData>(refreshJson || {});
           const nextAccessToken = (refreshData.accessToken || refreshData.tokens?.accessToken || '').trim();
           const nextRefreshToken =
-            (refreshData.refreshToken || refreshData.tokens?.refreshToken || refreshToken).trim();
+            (refreshData.refreshToken || refreshData.tokens?.refreshToken || currentRefreshToken).trim();
           if (nextAccessToken) {
-            setAccessToken(nextAccessToken);
-            setRefreshToken(nextRefreshToken);
+            setSessionTokens(nextAccessToken, nextRefreshToken);
             await writeSessionToStorage({
               accessToken: nextAccessToken,
               ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {}),
@@ -1738,8 +1813,8 @@ function App() {
     }
   };
 
-  const markRoomAsRead = async (token: string, roomId: string, lastReadMessageId?: string) => {
-    if (!token || !roomId) return;
+  const markRoomAsRead = async (token: string, roomId: string, lastReadMessageId?: string): Promise<number | null> => {
+    if (!token || !roomId) return null;
     const result = await backendRequest<BackendRoomRead>(
       `/v1/rooms/${roomId}/read`,
       {
@@ -1754,6 +1829,33 @@ function App() {
     if (activeRoomRef.current === roomId) {
       await syncRoomMessagesFromBackend(token, roomId).catch(() => null);
     }
+    return unread;
+  };
+
+  const syncRoomReadState = async (
+    token: string,
+    roomId: string,
+    options?: { refreshMessages?: boolean }
+  ): Promise<number | null> => {
+    if (!token || !roomId) return null;
+    let roomMessages = messages[roomId] ?? [];
+    if (options?.refreshMessages || roomMessages.length === 0) {
+      const syncedMessages = await syncRoomMessagesFromBackend(token, roomId).catch(() => null);
+      if (syncedMessages) {
+        roomMessages = syncedMessages;
+      }
+    }
+
+    const lastReadMessageId = latestReadableMessageId(roomMessages);
+    const unread = await markRoomAsRead(token, roomId, lastReadMessageId || undefined).catch(() => null);
+    if (unread !== null) {
+      rememberRoomReadCutoff(roomId, roomMessages);
+      const latestMessage = latestReadableMessage(roomMessages);
+      const fallbackUpdatedAt = Math.max(latestMessage?.at ?? 0, roomMap.get(roomId)?.updatedAt ?? 0);
+      const nextUnread = shouldSuppressRoomUnread(roomId, unread, fallbackUpdatedAt) ? 0 : unread;
+      setRooms((prev) => prev.map((room) => (room.id === roomId ? { ...room, unread: nextUnread } : room)));
+    }
+    return unread;
   };
 
   const syncLocaleWithBackend = async (token: string, currentLocale?: string) => {
@@ -1843,13 +1945,19 @@ function App() {
       .sort((a, b) => b.createdAt - a.createdAt);
   };
 
-  const refreshFriendsAndRequests = async (token: string) => {
-    const [backFriendsRaw, requestsRaw] = await Promise.all([
-      backendRequest<BackendFriend[] | BackendListData<BackendFriend>>('/v1/friends', { method: 'GET' }, token).catch(
-        () => null
-      ),
-      backendRequest<BackendFriendRequestList>('/v1/friends/requests', { method: 'GET' }, token).catch(() => null),
-    ]);
+  const refreshFriendsAndRequests = async (token: string, options?: BackendSyncOptions) => {
+    const strict = options?.strict ?? false;
+    const [backFriendsRaw, requestsRaw] = strict
+      ? await Promise.all([
+          backendRequest<BackendFriend[] | BackendListData<BackendFriend>>('/v1/friends', { method: 'GET' }, token),
+          backendRequest<BackendFriendRequestList>('/v1/friends/requests', { method: 'GET' }, token),
+        ])
+      : await Promise.all([
+          backendRequest<BackendFriend[] | BackendListData<BackendFriend>>('/v1/friends', { method: 'GET' }, token).catch(
+            () => null
+          ),
+          backendRequest<BackendFriendRequestList>('/v1/friends/requests', { method: 'GET' }, token).catch(() => null),
+        ]);
 
     if (backFriendsRaw) {
       const backFriends = asListItems<BackendFriend>(backFriendsRaw);
@@ -1891,18 +1999,30 @@ function App() {
     setBots(items);
   };
 
-  const refreshRoomsFromBackend = async (token: string, fallbackUserId?: string): Promise<Room[] | null> => {
-    const backRoomsRaw = await backendRequest<BackendRoom[] | BackendListData<BackendRoom>>(
-      '/v1/rooms',
-      { method: 'GET' },
-      token
-    ).catch(() => null);
+  const refreshRoomsFromBackend = async (
+    token: string,
+    fallbackUserId?: string,
+    options?: BackendSyncOptions
+  ): Promise<Room[] | null> => {
+    const strict = options?.strict ?? false;
+    const backRoomsRaw = strict
+      ? await backendRequest<BackendRoom[] | BackendListData<BackendRoom>>('/v1/rooms', { method: 'GET' }, token)
+      : await backendRequest<BackendRoom[] | BackendListData<BackendRoom>>('/v1/rooms', { method: 'GET' }, token).catch(
+          () => null
+        );
     if (!backRoomsRaw) return null;
     const backRooms = asListItems<BackendRoom>(backRoomsRaw);
     if (!Array.isArray(backRooms)) return null;
     const mapped = backRooms
       .filter((r) => !!r?.id)
-      .map((r) => mapBackendRoom(r, fallbackUserId));
+      .map((r) => {
+        const mappedRoom = mapBackendRoom(r, fallbackUserId);
+        const suppressedUnread =
+          activeRoomRef.current === mappedRoom.id || shouldSuppressRoomUnread(mappedRoom.id, mappedRoom.unread, mappedRoom.updatedAt)
+            ? 0
+            : mappedRoom.unread;
+        return suppressedUnread === mappedRoom.unread ? mappedRoom : { ...mappedRoom, unread: suppressedUnread };
+      });
     setRooms(mapped);
     setMessages((prev) => {
       const next = { ...prev };
@@ -1933,6 +2053,10 @@ function App() {
     token: string,
     fallbackUser?: BackendAuthUser
   ): Promise<{ hasProfileName: boolean }> => {
+    logSessionTrace('sync_initial:start', {
+      hasFallbackUser: !!fallbackUser?.id,
+      tokenLength: token.length,
+    });
     const tokenPayload = decodeJwtPayload(token);
     const me = await backendRequest<BackendProfile>('/v1/me', { method: 'GET' }, token).catch(
       () => null
@@ -1961,9 +2085,18 @@ function App() {
 
     await syncLocaleWithBackend(token, me?.locale);
 
-    await Promise.all([refreshFriendsAndRequests(token), refreshBotsFromBackend(token)]);
+    await Promise.all([refreshFriendsAndRequests(token, { strict: true }), refreshBotsFromBackend(token).catch(() => null)]);
 
-    await refreshRoomsFromBackend(token, nextUserId);
+    const syncedRooms = await refreshRoomsFromBackend(token, nextUserId, { strict: true });
+    if (!syncedRooms) {
+      logSessionTrace('sync_initial:rooms_missing');
+      throw new Error(s.loginBackendSyncFailed);
+    }
+    logSessionTrace('sync_initial:done', {
+      userId: nextUserId,
+      friends: friends.length,
+      rooms: syncedRooms.length,
+    });
     return { hasProfileName: resolvedName.length > 0 };
   };
 
@@ -2038,8 +2171,16 @@ function App() {
           const roomId = typeof payload.data.roomId === 'string' ? payload.data.roomId : '';
           const unread = Number(payload.data.unread ?? Number.NaN);
           if (roomId && Number.isFinite(unread)) {
-            setRooms((prev) => prev.map((room) => (room.id === roomId ? { ...room, unread } : room)));
-            if (unread === 0) {
+            let nextUnread = unread;
+            setRooms((prev) =>
+              prev.map((room) => {
+                if (room.id !== roomId) return room;
+                nextUnread =
+                  activeRoomRef.current === roomId || shouldSuppressRoomUnread(roomId, unread, room.updatedAt) ? 0 : unread;
+                return room.unread === nextUnread ? room : { ...room, unread: nextUnread };
+              })
+            );
+            if (nextUnread === 0) {
               void dismissPresentedNotificationsForRoom(roomId).catch(() => null);
             }
           }
@@ -2154,16 +2295,22 @@ function App() {
     const run = async () => {
       setBackendState('checking');
       setBackendStateMsg('');
+      logSessionTrace('health:start', { backendBaseUrl });
       try {
         await backendRequest('/health', { method: 'GET' });
         if (cancelled) return;
         setBackendState('ready');
         setBackendStateMsg(s.loginServerReady);
+        logSessionTrace('health:ready', { backendBaseUrl });
       } catch (err) {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : '';
         setBackendState('error');
         setBackendStateMsg(msg ? `${s.loginServerError} (${msg})` : s.loginServerError);
+        logSessionTrace('health:error', {
+          backendBaseUrl,
+          message: msg || s.loginServerError,
+        });
         if (!sessionRestoreStartedRef.current) {
           setIsSessionRestoring(false);
         }
@@ -2185,42 +2332,113 @@ function App() {
     const run = async () => {
       try {
         const stored = await readSessionFromStorage();
-        if (!stored?.accessToken) return;
+        logSessionTrace('restore:storage_read', {
+          hasAccessToken: !!stored?.accessToken,
+          hasRefreshToken: !!stored?.refreshToken,
+        });
+        if (!stored?.accessToken) {
+          logSessionTrace('restore:no_session');
+          return;
+        }
 
         const applySession = async (nextAccessToken: string, nextRefreshToken?: string, user?: BackendAuthUser) => {
-          setAccessToken(nextAccessToken);
-          setRefreshToken((nextRefreshToken || '').trim());
+          logSessionTrace('restore:apply_session', {
+            accessTokenLength: nextAccessToken.length,
+            hasRefreshToken: !!(nextRefreshToken || '').trim(),
+            hasUser: !!user?.id,
+          });
+          setSessionTokens(nextAccessToken, nextRefreshToken);
+          setLoginErr('');
           await syncInitialFromBackend(nextAccessToken, user);
           if (cancelled) return;
+          logSessionTrace('restore:apply_session_done');
           setStage('app');
         };
 
         try {
           await applySession(stored.accessToken, stored.refreshToken);
           return;
-        } catch {
-          const storedRefreshToken = (stored.refreshToken || '').trim();
-          if (!storedRefreshToken) throw new Error('missing refresh token');
-          const refreshed = await backendRequest<BackendAuthData>('/v1/auth/refresh', {
-            method: 'POST',
-            body: JSON.stringify({ refreshToken: storedRefreshToken }),
+        } catch (initialError) {
+          logSessionTrace('restore:initial_failed', {
+            message: initialError instanceof Error ? initialError.message : '',
           });
+          const storedRefreshToken = (stored.refreshToken || '').trim();
+          if (!storedRefreshToken) {
+            setSessionTokens('', '');
+            await clearSessionInStorage();
+            const msg = initialError instanceof Error ? initialError.message : '';
+            logSessionTrace('restore:cleared_missing_refresh', {
+              message: msg,
+            });
+            if (!cancelled && msg) {
+              setLoginErr(normalizeBackendErrorMessage(msg, isKo));
+            }
+            return;
+          }
+
+          let refreshed: BackendAuthData;
+          try {
+            logSessionTrace('restore:refresh_start');
+            refreshed = await backendRequest<BackendAuthData>('/v1/auth/refresh', {
+              method: 'POST',
+              body: JSON.stringify({ refreshToken: storedRefreshToken }),
+            });
+          } catch (refreshError) {
+            setSessionTokens('', '');
+            await clearSessionInStorage();
+            const msg = refreshError instanceof Error ? refreshError.message : '';
+            logSessionTrace('restore:refresh_failed', {
+              message: msg,
+            });
+            if (!cancelled && msg) {
+              setLoginErr(normalizeBackendErrorMessage(msg, isKo));
+            }
+            return;
+          }
+
           const nextAccessToken = (refreshed.accessToken || refreshed.tokens?.accessToken || '').trim();
           const nextRefreshToken =
             (refreshed.refreshToken || refreshed.tokens?.refreshToken || storedRefreshToken).trim();
-          if (!nextAccessToken) throw new Error('missing access token');
+          logSessionTrace('restore:refresh_done', {
+            hasAccessToken: !!nextAccessToken,
+            hasRefreshToken: !!nextRefreshToken,
+            hasUser: !!refreshed.user?.id,
+          });
+          if (!nextAccessToken) {
+            setSessionTokens('', '');
+            await clearSessionInStorage();
+            logSessionTrace('restore:cleared_missing_access_after_refresh');
+            if (!cancelled) {
+              setLoginErr(s.loginBackendSyncFailed);
+            }
+            return;
+          }
+
           await writeSessionToStorage({
             accessToken: nextAccessToken,
             ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {})
           });
-          await applySession(nextAccessToken, nextRefreshToken, refreshed.user);
+
+          try {
+            await applySession(nextAccessToken, nextRefreshToken, refreshed.user);
+          } catch (retryError) {
+            setSessionTokens('', '');
+            const msg = retryError instanceof Error ? retryError.message : '';
+            logSessionTrace('restore:retry_failed', {
+              message: msg || s.loginBackendSyncFailed,
+            });
+            if (!cancelled) {
+              setLoginErr(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+            }
+          }
         }
       } catch {
         if (cancelled) return;
-        setAccessToken('');
-        setRefreshToken('');
+        logSessionTrace('restore:unexpected_failure');
+        setSessionTokens('', '');
         await clearSessionInStorage();
       } finally {
+        logSessionTrace('restore:finished');
         if (!cancelled) setIsSessionRestoring(false);
       }
     };
@@ -2229,7 +2447,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [backendState, isBackendConfigReady]);
+  }, [backendState, isBackendConfigReady, isKo, s.loginBackendSyncFailed]);
 
   useEffect(() => {
     if (isSessionRestoring) return;
@@ -2485,19 +2703,19 @@ function App() {
     setRooms((p) => p.map((r) => (r.id === rid ? { ...r, unread: 0 } : r)));
     void dismissPresentedNotificationsForRoom(rid).catch(() => null);
     const token = accessToken.trim();
-    if (token && appVisibility === 'active') {
-      void markRoomAsRead(token, rid).catch(() => null);
+    if (token) {
+      void syncRoomReadState(token, rid, { refreshMessages: true }).catch(() => null);
     }
   };
   const closeActiveRoom = async () => {
     const rid = activeRoomRef.current;
-    activeRoomRef.current = null;
     foregroundNotificationRoomId = '';
     const token = accessToken.trim();
-    if (rid && token && appVisibility === 'active') {
-      await markRoomAsRead(token, rid).catch(() => null);
+    if (rid && token) {
+      await syncRoomReadState(token, rid, { refreshMessages: true }).catch(() => null);
       await refreshRoomsFromBackend(token).catch(() => null);
     }
+    activeRoomRef.current = null;
     setActiveRoomId(null);
   };
 
@@ -2868,6 +3086,68 @@ function App() {
     }
   };
 
+  const mediaSaveLabels = {
+    action: isKo ? '\uAE30\uAE30\uC5D0 \uC800\uC7A5' : 'Save to device',
+    permissionTitle: isKo ? '\uAD8C\uD55C\uC774 \uD544\uC694\uD574\uC694' : 'Permission required',
+    permissionBody: isKo
+      ? '\uC0AC\uC9C4\uACFC \uB3D9\uC601\uC0C1\uC744 \uC800\uC7A5\uD558\uB824\uBA74 \uBBF8\uB514\uC5B4 \uC811\uADFC \uAD8C\uD55C\uC744 \uD5C8\uC6A9\uD574 \uC8FC\uC138\uC694.'
+      : 'Allow photo library access to save images and videos.',
+    done: isKo ? '\uAE30\uAE30\uC5D0 \uC800\uC7A5\uD588\uC5B4\uC694.' : 'Saved to device.',
+    failed: isKo ? '\uBBF8\uB514\uC5B4\uB97C \uC800\uC7A5\uD558\uC9C0 \uBABB\uD588\uC5B4\uC694.' : 'Could not save media.',
+  };
+
+  const guessMediaExtension = (uri: string, kind: 'image' | 'video') => {
+    const normalized = uri.split('?')[0].toLowerCase();
+    const match = normalized.match(/\.([a-z0-9]{2,5})$/i);
+    if (match?.[1]) return match[1];
+    return kind === 'image' ? 'jpg' : 'mp4';
+  };
+
+  const saveMediaToDevice = async (media: MediaViewer) => {
+    if (isSavingMedia || !media.uri) return;
+
+    const existingPermission = await MediaLibrary.getPermissionsAsync().catch(() => null);
+    let status = existingPermission?.status ?? 'undetermined';
+    if (status !== 'granted') {
+      const requested = await MediaLibrary.requestPermissionsAsync().catch(() => null);
+      status = requested?.status ?? 'denied';
+    }
+    if (status !== 'granted') {
+      Alert.alert(mediaSaveLabels.permissionTitle, mediaSaveLabels.permissionBody);
+      return;
+    }
+
+    setIsSavingMedia(true);
+    let downloadedUri = '';
+    try {
+      let localUri = media.uri;
+      if (!/^file:\/\//i.test(localUri)) {
+        const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+        if (!baseDir) {
+          throw new Error('Missing writable directory.');
+        }
+        const ext = guessMediaExtension(localUri, media.kind);
+        const targetUri = `${baseDir}ourhangout-${Date.now()}.${ext}`;
+        const result = await FileSystem.downloadAsync(localUri, targetUri);
+        if (result.status < 200 || result.status >= 300) {
+          throw new Error(`Download failed (${result.status}).`);
+        }
+        downloadedUri = result.uri;
+        localUri = result.uri;
+      }
+
+      await MediaLibrary.saveToLibraryAsync(localUri);
+      Alert.alert(mediaSaveLabels.done);
+    } catch {
+      Alert.alert(mediaSaveLabels.failed);
+    } finally {
+      if (downloadedUri) {
+        await FileSystem.deleteAsync(downloadedUri, { idempotent: true }).catch(() => null);
+      }
+      setIsSavingMedia(false);
+    }
+  };
+
   const captureMedia = async (kind: 'image' | 'video') => {
     if (!activeRoomId) return;
     const perm = await ImagePicker.requestCameraPermissionsAsync();
@@ -3064,9 +3344,15 @@ function App() {
         accessToken: nextAccessToken,
         ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {})
       });
-      setAccessToken(nextAccessToken);
-      setRefreshToken(nextRefreshToken);
-      await syncInitialFromBackend(nextAccessToken, authData.user);
+      setSessionTokens(nextAccessToken, nextRefreshToken);
+      try {
+        await syncInitialFromBackend(nextAccessToken, authData.user);
+      } catch (syncError) {
+        setSessionTokens('', '');
+        const msg = syncError instanceof Error ? syncError.message : '';
+        setLoginErr(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+        return;
+      }
       setStage('app');
     } catch (err) {
       if (isErrorWithCode(err)) {
@@ -3613,8 +3899,8 @@ function App() {
   };
 
   const resetForLogout = () => {
-    setAccessToken('');
-    setRefreshToken('');
+    setSessionTokens('', '');
+    roomReadCutoffRef.current = {};
     pushTokenRef.current = '';
     registeredPushTokenRef.current = '';
     setCurrentUserId(MY_ID);
@@ -3641,6 +3927,7 @@ function App() {
     setIsFriendSyncing(false);
     setInput('');
     setDraftMedia(null);
+    setAvatarViewer(null);
     setShowProfileModal(false);
     setShowFriendModal(false);
     setShowGroupModal(false);
@@ -3877,7 +4164,9 @@ function App() {
                   <Ionicons name="chevron-back" size={18} color={FOREST.text} />
                 </Pressable>
                 {roomAvatarUri(activeRoom) ? (
-                  <Image source={{ uri: roomAvatarUri(activeRoom) }} style={styles.headerAvatar} />
+                  <Pressable onPress={() => openAvatarViewer(roomAvatarUri(activeRoom), roomTitle(activeRoom))}>
+                    <Image source={{ uri: roomAvatarUri(activeRoom) }} style={styles.headerAvatar} />
+                  </Pressable>
                 ) : (
                   <View style={[styles.headerAvatar, styles.headerAvatarFallbackSmall]}>
                     <Text style={styles.headerAvatarSmallText}>{roomTitle(activeRoom).slice(0, 1).toUpperCase()}</Text>
@@ -3924,7 +4213,11 @@ function App() {
                             ]}
                           >
                             {!m.mine && m.kind !== 'system' ? (
-                              <View style={styles.messageAvatarDock}>
+                              <Pressable
+                                style={styles.messageAvatarDock}
+                                disabled={!messageAvatarUri(m)}
+                                onPress={() => openAvatarViewer(messageAvatarUri(m), m.senderName)}
+                              >
                                 {messageAvatarUri(m) ? (
                                   <Image source={{ uri: messageAvatarUri(m) }} style={styles.messageAvatar} />
                                 ) : (
@@ -3934,7 +4227,7 @@ function App() {
                                     </Text>
                                   </View>
                                 )}
-                              </View>
+                              </Pressable>
                             ) : null}
                             {!m.mine && m.kind !== 'system' ? (
                               <Text style={styles.roomSender}>{m.senderName}</Text>
@@ -4521,6 +4814,30 @@ function App() {
         </Modal>
 
         <Modal
+          visible={!!avatarViewer}
+          transparent
+          animationType="fade"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={() => setAvatarViewer(null)}
+        >
+          <View style={styles.viewerOverlay}>
+            <Pressable style={styles.backdrop} onPress={() => setAvatarViewer(null)} />
+            <View style={styles.viewerStage}>
+              {avatarViewer?.title ? <Text style={styles.avatarViewerTitle}>{avatarViewer.title}</Text> : null}
+              {avatarViewer ? (
+                <Image source={{ uri: avatarViewer.uri }} style={styles.avatarViewerMedia} resizeMode="contain" />
+              ) : null}
+              <View style={styles.viewerActions}>
+                <Pressable style={styles.smallBtn} onPress={() => setAvatarViewer(null)}>
+                  <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
           visible={!!mediaViewer}
           transparent
           animationType="fade"
@@ -4540,6 +4857,23 @@ function App() {
                 <Pressable style={styles.smallBtn} onPress={() => setMediaViewer(null)}>
                   <Text style={styles.smallBtnText}>{s.cancel}</Text>
                 </Pressable>
+                {mediaViewer ? (
+                  <Pressable
+                    style={[styles.smallBtn, isSavingMedia && styles.off]}
+                    disabled={isSavingMedia}
+                    onPress={() => void saveMediaToDevice(mediaViewer)}
+                  >
+                    <Text style={styles.smallBtnText}>
+                      {isSavingMedia
+                        ? isKo
+                          ? '\uC800\uC7A5 \uC911...'
+                          : 'Saving...'
+                        : isKo
+                          ? '\uAE30\uAE30\uC5D0 \uC800\uC7A5'
+                          : 'Save to device'}
+                    </Text>
+                  </Pressable>
+                ) : null}
                 {mediaViewer ? (
                   <Pressable style={styles.smallBtn} onPress={() => void openMediaExternally(mediaViewer.uri)}>
                     <Text style={styles.smallBtnText}>{isKo ? '다른 앱으로 열기' : 'Open Externally'}</Text>
@@ -5143,10 +5477,22 @@ const styles = StyleSheet.create({
     gap: 12,
     alignItems: 'center',
   },
+  avatarViewerTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
   viewerMedia: {
     width: '100%',
     height: 520,
     borderRadius: 18,
+    backgroundColor: 'rgba(11,25,16,0.92)',
+  },
+  avatarViewerMedia: {
+    width: '100%',
+    height: 420,
+    borderRadius: 24,
     backgroundColor: 'rgba(11,25,16,0.92)',
   },
   viewerPlaceholder: {
