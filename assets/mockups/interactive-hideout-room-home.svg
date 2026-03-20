@@ -1,0 +1,141 @@
+<svg width="1600" height="1200" viewBox="0 0 1600 1200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="1200" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EEF6FF"/>
+      <stop offset="1" stop-color="#FFF7F1"/>
+    </linearGradient>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="760" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF9EF"/>
+      <stop offset="1" stop-color="#F6EEDC"/>
+    </linearGradient>
+    <linearGradient id="floor" x1="220" y1="760" x2="1380" y2="1120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E5C29C"/>
+      <stop offset="1" stop-color="#C89261"/>
+    </linearGradient>
+    <linearGradient id="windowSky" x1="1090" y1="150" x2="1390" y2="500" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F6FCFF"/>
+      <stop offset="1" stop-color="#D7EFD7"/>
+    </linearGradient>
+    <filter id="shadow" x="0" y="0" width="1600" height="1200" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="8"/>
+      <feGaussianBlur stdDeviation="14"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.24 0 0 0 0 0.19 0 0 0 0 0.15 0 0 0 0.16 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_0_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_0_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="1200" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1600" height="760" fill="url(#wall)"/>
+  <path d="M0 760H1600V1200H0V760Z" fill="url(#floor)"/>
+  <path d="M0 760C300 710 612 698 936 708C1182 716 1406 742 1600 792V1200H0V760Z" fill="#D5AC80"/>
+
+  <rect x="78" y="62" width="1444" height="72" rx="28" fill="#FFFFFF" fill-opacity="0.62"/>
+  <text x="132" y="109" fill="#6E7B87" font-size="24" font-weight="700" font-family="Segoe UI, Arial, sans-serif" letter-spacing="4">HIDEOUT</text>
+  <text x="800" y="109" text-anchor="middle" fill="#233445" font-size="34" font-weight="700" font-family="Georgia, Times New Roman, serif">윤슬의 아지트</text>
+  <rect x="1308" y="76" width="90" height="40" rx="18" fill="#243748"/>
+  <text x="1353" y="102" text-anchor="middle" fill="#FFFFFF" font-size="18" font-weight="700" font-family="Segoe UI, Arial, sans-serif">편집</text>
+
+  <g filter="url(#shadow)">
+    <rect x="1082" y="132" width="330" height="374" rx="20" fill="#FEFCF8"/>
+    <rect x="1112" y="162" width="270" height="314" rx="10" fill="url(#windowSky)"/>
+    <circle cx="1206" cy="390" r="54" fill="#9CC69A"/>
+    <circle cx="1268" cy="374" r="70" fill="#B5D9A7"/>
+    <circle cx="1336" cy="412" r="62" fill="#9DC59A"/>
+    <rect x="1262" y="430" width="24" height="78" rx="12" fill="#8D6540"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="248" y="450" width="388" height="248" rx="24" fill="#FFFDF9"/>
+    <rect x="270" y="484" width="344" height="94" rx="20" fill="#FAF7EF"/>
+    <rect x="262" y="570" width="360" height="92" rx="18" fill="#E6BA46"/>
+    <rect x="338" y="438" width="194" height="60" rx="18" fill="#FFFDFB"/>
+    <rect x="382" y="462" width="108" height="12" rx="6" fill="#72879D"/>
+    <rect x="420" y="700" width="36" height="34" rx="8" fill="#D4B090"/>
+    <rect x="524" y="700" width="36" height="34" rx="8" fill="#D4B090"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="726" y="456" width="176" height="224" rx="20" fill="#F4EFE7"/>
+    <rect x="744" y="478" width="140" height="112" rx="12" fill="#E2E8DE"/>
+    <rect x="764" y="498" width="44" height="34" rx="8" fill="#FAFBF8"/>
+    <rect x="818" y="498" width="44" height="34" rx="8" fill="#FAFBF8"/>
+    <rect x="764" y="542" width="44" height="34" rx="8" fill="#FAFBF8"/>
+    <rect x="818" y="542" width="44" height="34" rx="8" fill="#FAFBF8"/>
+    <rect x="714" y="676" width="200" height="28" rx="14" fill="#D2B091"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="952" y="430" width="98" height="186" rx="18" fill="#F5E6CE"/>
+    <rect x="986" y="450" width="30" height="58" rx="12" fill="#FFD7A8"/>
+    <rect x="984" y="508" width="34" height="56" rx="12" fill="#9AB97E"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1014" y="560" width="122" height="170" rx="18" fill="#F2EFE8"/>
+    <rect x="1032" y="586" width="86" height="18" rx="9" fill="#D9C1A8"/>
+    <rect x="1070" y="704" width="10" height="10" rx="5" fill="#B48A65"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="344" y="164" width="180" height="230" rx="18" fill="#FFFDFB"/>
+    <rect x="368" y="186" width="132" height="182" rx="12" fill="#FAF8F2"/>
+    <line x1="434" y1="186" x2="434" y2="368" stroke="#D9D1C5" stroke-width="3"/>
+    <line x1="368" y1="248" x2="500" y2="248" stroke="#D9D1C5" stroke-width="3"/>
+    <line x1="368" y1="304" x2="500" y2="304" stroke="#D9D1C5" stroke-width="3"/>
+    <circle cx="454" cy="274" r="16" fill="#E9A96A"/>
+    <circle cx="412" cy="330" r="12" fill="#E58F8F"/>
+    <circle cx="468" cy="332" r="12" fill="#8FB27C"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="602" y="188" width="214" height="164" rx="18" fill="#F7F4EC"/>
+    <rect x="620" y="206" width="178" height="128" rx="10" fill="#EAD9BD"/>
+    <circle cx="664" cy="238" r="18" fill="#E48B6F"/>
+    <rect x="690" y="226" width="84" height="12" rx="6" fill="#8D6D53"/>
+    <rect x="642" y="272" width="136" height="14" rx="7" fill="#FDFBF8"/>
+    <rect x="642" y="296" width="102" height="14" rx="7" fill="#FDFBF8"/>
+    <circle cx="740" cy="258" r="8" fill="#5F84A8"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="876" y="172" width="126" height="176" rx="18" fill="#FFFDFB"/>
+    <rect x="896" y="194" width="86" height="16" rx="8" fill="#DBC1A9"/>
+    <rect x="896" y="220" width="86" height="16" rx="8" fill="#79A0C6"/>
+    <rect x="896" y="246" width="86" height="16" rx="8" fill="#E8A777"/>
+    <rect x="896" y="272" width="86" height="16" rx="8" fill="#A7C285"/>
+    <rect x="896" y="298" width="86" height="16" rx="8" fill="#D98E99"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="122" y="884" width="212" height="72" rx="28" fill="#FFFFFF" fill-opacity="0.74"/>
+    <circle cx="162" cy="920" r="10" fill="#E6B944"/>
+    <text x="188" y="928" fill="#6D7B86" font-size="22" font-weight="700" font-family="Segoe UI, Arial, sans-serif">벽 달력</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="374" y="884" width="232" height="72" rx="28" fill="#FFFFFF" fill-opacity="0.74"/>
+    <circle cx="414" cy="920" r="10" fill="#E58F8F"/>
+    <text x="440" y="928" fill="#6D7B86" font-size="22" font-weight="700" font-family="Segoe UI, Arial, sans-serif">게시판 / 해야 할 일</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="646" y="884" width="204" height="72" rx="28" fill="#FFFFFF" fill-opacity="0.74"/>
+    <circle cx="686" cy="920" r="10" fill="#8FB27C"/>
+    <text x="712" y="928" fill="#6D7B86" font-size="22" font-weight="700" font-family="Segoe UI, Arial, sans-serif">시간표</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="890" y="884" width="230" height="72" rx="28" fill="#FFFFFF" fill-opacity="0.74"/>
+    <circle cx="930" cy="920" r="10" fill="#79A0C6"/>
+    <text x="956" y="928" fill="#6D7B86" font-size="22" font-weight="700" font-family="Segoe UI, Arial, sans-serif">액자 / 사진첩</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1160" y="884" width="230" height="72" rx="28" fill="#FFFFFF" fill-opacity="0.74"/>
+    <circle cx="1200" cy="920" r="10" fill="#E9A96A"/>
+    <text x="1226" y="928" fill="#6D7B86" font-size="22" font-weight="700" font-family="Segoe UI, Arial, sans-serif">오디오 / BGM</text>
+  </g>
+</svg>

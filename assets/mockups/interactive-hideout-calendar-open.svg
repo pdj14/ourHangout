@@ -1,0 +1,91 @@
+<svg width="1600" height="1200" viewBox="0 0 1600 1200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="1200" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EEF6FF"/>
+      <stop offset="1" stop-color="#FFF7F1"/>
+    </linearGradient>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="760" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF9EF"/>
+      <stop offset="1" stop-color="#F6EEDC"/>
+    </linearGradient>
+    <linearGradient id="floor" x1="220" y1="760" x2="1380" y2="1120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E5C29C"/>
+      <stop offset="1" stop-color="#C89261"/>
+    </linearGradient>
+    <filter id="shadow" x="0" y="0" width="1600" height="1200" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="8"/>
+      <feGaussianBlur stdDeviation="14"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.24 0 0 0 0 0.19 0 0 0 0 0.15 0 0 0 0.16 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_0_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_0_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="1200" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1600" height="760" fill="url(#wall)"/>
+  <path d="M0 760H1600V1200H0V760Z" fill="url(#floor)"/>
+  <path d="M0 760C300 710 612 698 936 708C1182 716 1406 742 1600 792V1200H0V760Z" fill="#D5AC80"/>
+
+  <g opacity="0.22">
+    <rect x="250" y="450" width="388" height="248" rx="24" fill="#FFFDF9"/>
+    <rect x="728" y="456" width="176" height="224" rx="20" fill="#F4EFE7"/>
+    <rect x="1014" y="560" width="122" height="170" rx="18" fill="#F2EFE8"/>
+    <rect x="344" y="164" width="180" height="230" rx="18" fill="#FFFDFB"/>
+    <rect x="602" y="188" width="214" height="164" rx="18" fill="#F7F4EC"/>
+  </g>
+
+  <rect x="0" y="0" width="1600" height="1200" fill="#223042" fill-opacity="0.28"/>
+
+  <g filter="url(#shadow)">
+    <rect x="298" y="122" width="1004" height="896" rx="34" fill="#FFFDF9"/>
+  </g>
+
+  <rect x="336" y="160" width="928" height="86" rx="28" fill="#F8FBFF"/>
+  <text x="392" y="214" fill="#6F7B87" font-size="22" font-weight="700" font-family="Segoe UI, Arial, sans-serif" letter-spacing="4">CALENDAR PANEL</text>
+  <text x="800" y="214" text-anchor="middle" fill="#233445" font-size="34" font-weight="700" font-family="Georgia, Times New Roman, serif">벽 달력</text>
+  <rect x="1178" y="182" width="48" height="42" rx="16" fill="#F1EDE6"/>
+  <text x="1202" y="210" text-anchor="middle" fill="#69737B" font-size="24" font-weight="700" font-family="Segoe UI, Arial, sans-serif">×</text>
+
+  <text x="388" y="312" fill="#2A3C4D" font-size="44" font-weight="700" font-family="Georgia, Times New Roman, serif">2026 April</text>
+
+  <rect x="386" y="350" width="828" height="460" rx="24" fill="#FFF8EF"/>
+  <line x1="504" y1="408" x2="504" y2="774" stroke="#E3D7C8" stroke-width="3"/>
+  <line x1="622" y1="408" x2="622" y2="774" stroke="#E3D7C8" stroke-width="3"/>
+  <line x1="740" y1="408" x2="740" y2="774" stroke="#E3D7C8" stroke-width="3"/>
+  <line x1="858" y1="408" x2="858" y2="774" stroke="#E3D7C8" stroke-width="3"/>
+  <line x1="976" y1="408" x2="976" y2="774" stroke="#E3D7C8" stroke-width="3"/>
+  <line x1="1094" y1="408" x2="1094" y2="774" stroke="#E3D7C8" stroke-width="3"/>
+
+  <line x1="386" y1="468" x2="1214" y2="468" stroke="#E3D7C8" stroke-width="3"/>
+  <line x1="386" y1="548" x2="1214" y2="548" stroke="#E3D7C8" stroke-width="3"/>
+  <line x1="386" y1="628" x2="1214" y2="628" stroke="#E3D7C8" stroke-width="3"/>
+  <line x1="386" y1="708" x2="1214" y2="708" stroke="#E3D7C8" stroke-width="3"/>
+
+  <text x="420" y="398" fill="#A56A6A" font-size="20" font-weight="700" font-family="Segoe UI, Arial, sans-serif">SUN</text>
+  <text x="536" y="398" fill="#6E7B87" font-size="20" font-weight="700" font-family="Segoe UI, Arial, sans-serif">MON</text>
+  <text x="654" y="398" fill="#6E7B87" font-size="20" font-weight="700" font-family="Segoe UI, Arial, sans-serif">TUE</text>
+  <text x="772" y="398" fill="#6E7B87" font-size="20" font-weight="700" font-family="Segoe UI, Arial, sans-serif">WED</text>
+  <text x="890" y="398" fill="#6E7B87" font-size="20" font-weight="700" font-family="Segoe UI, Arial, sans-serif">THU</text>
+  <text x="1008" y="398" fill="#6E7B87" font-size="20" font-weight="700" font-family="Segoe UI, Arial, sans-serif">FRI</text>
+  <text x="1126" y="398" fill="#5F84A8" font-size="20" font-weight="700" font-family="Segoe UI, Arial, sans-serif">SAT</text>
+
+  <circle cx="801" cy="506" r="28" fill="#F2C07A"/>
+  <text x="801" y="514" text-anchor="middle" fill="#FFFFFF" font-size="22" font-weight="700" font-family="Segoe UI, Arial, sans-serif">16</text>
+  <rect x="762" y="528" width="78" height="24" rx="12" fill="#FFF1E0"/>
+  <text x="801" y="544" text-anchor="middle" fill="#8D6545" font-size="14" font-weight="700" font-family="Segoe UI, Arial, sans-serif">치과</text>
+
+  <circle cx="919" cy="586" r="28" fill="#89A8C8"/>
+  <text x="919" y="594" text-anchor="middle" fill="#FFFFFF" font-size="22" font-weight="700" font-family="Segoe UI, Arial, sans-serif">19</text>
+  <rect x="872" y="608" width="94" height="24" rx="12" fill="#E8F0FF"/>
+  <text x="919" y="624" text-anchor="middle" fill="#5F7792" font-size="14" font-weight="700" font-family="Segoe UI, Arial, sans-serif">가족 외식</text>
+
+  <rect x="386" y="846" width="394" height="130" rx="24" fill="#F8FBFE"/>
+  <text x="426" y="894" fill="#66727D" font-size="22" font-weight="700" font-family="Segoe UI, Arial, sans-serif" letter-spacing="3">TODAY</text>
+  <text x="426" y="942" fill="#2A3C4D" font-size="30" font-weight="700" font-family="Georgia, Times New Roman, serif">16:30 치과 예약</text>
+
+  <rect x="820" y="846" width="394" height="130" rx="24" fill="#FFF8EF"/>
+  <text x="860" y="894" fill="#836957" font-size="22" font-weight="700" font-family="Segoe UI, Arial, sans-serif" letter-spacing="3">CONNECTED OBJECT</text>
+  <text x="860" y="942" fill="#2A3C4D" font-size="28" font-weight="700" font-family="Segoe UI, Arial, sans-serif">벽 달력 오브젝트</text>
+</svg>

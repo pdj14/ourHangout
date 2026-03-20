@@ -38,6 +38,7 @@ import {
   isSuccessResponse,
   statusCodes,
 } from '@react-native-google-signin/google-signin';
+import { HideoutTab } from './hideout/HideoutTab';
 
 let foregroundNotificationRoomId = '';
 let foregroundAppState: 'active' | 'background' | 'inactive' = 'active';
@@ -56,7 +57,7 @@ Notifications.setNotificationHandler({
 });
 
 type Stage = 'login' | 'setup_name' | 'setup_intro' | 'app';
-type Tab = 'chats' | 'friends' | 'profile';
+type Tab = 'chats' | 'friends' | 'hideout' | 'profile';
 type MsgKind = 'text' | 'image' | 'video' | 'system';
 type Delivery = 'sending' | 'sent' | 'read';
 
@@ -492,7 +493,7 @@ const TEXT = {
     google: 'Continue with Google',
     loginSkip: 'Preview demo',
     needsLoginTitle: 'Sign in needed',
-    needsLoginBody: 'This part of the hideout opens after sign-in.',
+    needsLoginBody: 'This part of the app opens after sign-in.',
     loginHintMissing: 'Set app.json extra.googleAuth to enable Google login.',
     loginHintReady: 'Press Google sign-in to continue.',
     loginServerChecking: 'Checking backend connection...',
@@ -513,6 +514,7 @@ const TEXT = {
     defaultStatus: 'Chatting safely',
     tabsChats: 'Chats',
     tabsFriends: 'Friends',
+    tabsHideout: 'Hideout',
     tabsProfile: 'Profile',
     searchChats: 'Search rooms',
     searchFriends: 'Search friends',
@@ -547,7 +549,7 @@ const TEXT = {
     friendRequestAcceptedDone: 'Friend request accepted.',
     friendRequestRejectedDone: 'Friend request rejected.',
     friendLoading: 'Loading...',
-    denGreeting: 'Welcome back to the hideout',
+    denGreeting: 'Welcome back',
     denGreetingBody: 'Step away from the noise and settle into moss, lantern light, and easy conversation.',
     denChatsTitle: 'Rooms glowing softly tonight',
     denChatsBody: 'A calm place to pick up the conversations that matter.',
@@ -566,13 +568,14 @@ const TEXT = {
     denRoomDirect: 'A quiet corner for two',
     denRoomGroup: 'A shared fire for the group',
     denChatHint: 'A warm pocket of conversation, ready when you are.',
-    denFriendHint: 'The people who make the hideout feel lived in.',
+    denFriendHint: 'The people who make this place feel lived in.',
     denProfileHint: 'Keep your own little cabin soft, clear, and welcoming.',
     save: 'Save',
     cancel: 'Cancel',
     remove: 'Remove',
     startChat: 'Start chat',
     profileEdit: 'Edit profile',
+    goHideout: 'My Hideout',
     logout: 'Log out',
     logoutTitle: 'Log out?',
     logoutBody: 'You will need Google sign-in again next time.',
@@ -636,7 +639,7 @@ const TEXT = {
     google: '구글로 계속하기',
     loginSkip: '데모로 둘러보기',
     needsLoginTitle: '로그인이 필요해요',
-    needsLoginBody: '이 공간은 로그인 후 사용할 수 있어요.',
+    needsLoginBody: '이 기능은 로그인 후 사용할 수 있어요.',
     loginHintMissing: 'Google 로그인은 app.json extra.googleAuth 설정이 필요해요.',
     loginHintReady: '구글로 계속하기를 눌러 시작해요.',
     loginServerChecking: '백엔드 연결을 확인 중이에요...',
@@ -657,6 +660,7 @@ const TEXT = {
     defaultStatus: '안전하게 대화 중',
     tabsChats: '대화',
     tabsFriends: '친구',
+    tabsHideout: '아지트',
     tabsProfile: '프로필',
     searchChats: '대화방 검색',
     searchFriends: '친구 검색',
@@ -691,11 +695,11 @@ const TEXT = {
     friendRequestAcceptedDone: '친구 요청을 수락했어요.',
     friendRequestRejectedDone: '친구 요청을 거절했어요.',
     friendLoading: '불러오는 중...',
-    denGreeting: '숲속 아지트에 다시 왔어요',
+    denGreeting: '다시 왔어요',
     denGreetingBody: '바깥의 소음을 잠시 내려두고, 이끼 냄새와 등불빛 사이에서 천천히 쉬어가요.',
-    denChatsTitle: '오늘의 아지트 대화',
+    denChatsTitle: '오늘의 대화',
     denChatsBody: '중요한 대화를 조용히 이어가는 공간이에요.',
-    denFriendsTitle: '아지트를 함께할 사람들',
+    denFriendsTitle: '함께할 사람들',
     denFriendsBody: '사람을 초대하고, 가까운 사람들을 곁에 두세요.',
     denProfileTitle: '나의 작은 숲 오두막',
     denProfileBody: '내 작은 오두막을 단정하고 따뜻하게 가꿔요.',
@@ -710,13 +714,14 @@ const TEXT = {
     denRoomDirect: '둘만의 조용한 쉼터',
     denRoomGroup: '함께 둘러앉는 숲속 모닥불',
     denChatHint: '천천히 이어가는 대화가 머무는 따뜻한 공간이에요.',
-    denFriendHint: '이 아지트를 함께 채워 줄 사람들을 가까이 두세요.',
+    denFriendHint: '이 공간을 함께 채워 줄 사람들을 가까이 두세요.',
     denProfileHint: '내 오두막의 온도와 분위기를 다듬는 곳이에요.',
     save: '저장',
     cancel: '취소',
     remove: '삭제',
     startChat: '대화 시작',
     profileEdit: '프로필 수정',
+    goHideout: '내 아지트',
     logout: '로그아웃',
     logoutTitle: '로그아웃할까요?',
     logoutBody: '다음에 다시 구글 로그인이 필요해요.',
@@ -1019,7 +1024,9 @@ function App() {
   const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roomGroupRef = useRef<Record<string, boolean>>({});
   const sendLockRef = useRef(false);
+  const accessTokenRef = useRef('');
   const refreshTokenRef = useRef('');
+  const refreshRequestRef = useRef<Promise<string> | null>(null);
   const roomReadCutoffRef = useRef<Record<string, number>>({});
   const pushTokenRef = useRef('');
   const registeredPushTokenRef = useRef('');
@@ -1035,6 +1042,7 @@ function App() {
   const setSessionTokens = (nextAccessToken: string, nextRefreshToken?: string) => {
     const normalizedAccessToken = nextAccessToken.trim();
     const normalizedRefreshToken = (nextRefreshToken || '').trim();
+    accessTokenRef.current = normalizedAccessToken;
     refreshTokenRef.current = normalizedRefreshToken;
     setAccessToken(normalizedAccessToken);
     setRefreshToken(normalizedRefreshToken);
@@ -1217,6 +1225,8 @@ function App() {
   const knockCount = friendRequestsIncoming.length + friendRequestsOutgoing.length;
   const activeRoomCompanions = activeRoom?.members.filter((m) => m !== currentUserId).length ?? 0;
   const topAvatarUri = tab === 'chats' && activeRoom ? roomAvatarUri(activeRoom) : profile.avatarUri;
+  const currentSectionLabel =
+    tab === 'friends' ? s.tabsFriends : tab === 'chats' ? s.tabsChats : tab === 'hideout' ? s.tabsHideout : s.tabsProfile;
 
   useEffect(() => {
     let cancelled = false;
@@ -1407,6 +1417,10 @@ function App() {
   }, [rooms]);
 
   useEffect(() => {
+    accessTokenRef.current = accessToken.trim();
+  }, [accessToken]);
+
+  useEffect(() => {
     refreshTokenRef.current = refreshToken.trim();
   }, [refreshToken]);
 
@@ -1476,6 +1490,60 @@ function App() {
     return raw as T;
   };
 
+  const refreshAccessToken = async (preferredRefreshToken?: string): Promise<string> => {
+    const preferred = (preferredRefreshToken || '').trim();
+    const current = refreshTokenRef.current.trim();
+    const tokenToUse = current || preferred;
+    if (!tokenToUse) {
+      throw new Error('missing refresh token');
+    }
+    if (refreshRequestRef.current) {
+      return refreshRequestRef.current;
+    }
+
+    const request = (async () => {
+      const refreshed = await fetch(`${backendBaseUrl}/v1/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: tokenToUse }),
+      });
+      const refreshText = await refreshed.text();
+      let refreshJson: unknown = null;
+      if (refreshText) {
+        try {
+          refreshJson = JSON.parse(refreshText);
+        } catch {
+          refreshJson = {};
+        }
+      }
+      if (!refreshed.ok) {
+        const body = (refreshJson || {}) as BackendEnvelope<unknown>;
+        throw new Error(body.error?.message || body.message || `HTTP ${refreshed.status}`);
+      }
+      const refreshData = unwrapEnvelope<BackendAuthData>(refreshJson || {});
+      const nextAccessToken = (refreshData.accessToken || refreshData.tokens?.accessToken || '').trim();
+      const nextRefreshToken = (refreshData.refreshToken || refreshData.tokens?.refreshToken || tokenToUse).trim();
+      if (!nextAccessToken) {
+        throw new Error('missing access token');
+      }
+      setSessionTokens(nextAccessToken, nextRefreshToken);
+      await writeSessionToStorage({
+        accessToken: nextAccessToken,
+        ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {}),
+      });
+      return nextAccessToken;
+    })();
+
+    refreshRequestRef.current = request;
+    try {
+      return await request;
+    } finally {
+      if (refreshRequestRef.current === request) {
+        refreshRequestRef.current = null;
+      }
+    }
+  };
+
   const backendRequest = async <T,>(
     path: string,
     init?: RequestInit,
@@ -1506,6 +1574,7 @@ function App() {
 
     let resolvedToken = token;
     let response = await perform(resolvedToken);
+    let refreshFailure: Error | null = null;
 
     if (
       response.res.status === 401 &&
@@ -1519,47 +1588,20 @@ function App() {
         throw new Error(body.error?.message || body.message || `HTTP ${response.res.status}`);
       }
       try {
-        const refreshResponse = await perform(undefined);
-        void refreshResponse;
-      } catch {
-        // noop
-      }
-      try {
-        const refreshed = await fetch(`${backendBaseUrl}/v1/auth/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken: currentRefreshToken }),
-        });
-        const refreshText = await refreshed.text();
-        let refreshJson: unknown = null;
-        if (refreshText) {
-          try {
-            refreshJson = JSON.parse(refreshText);
-          } catch {
-            refreshJson = {};
-          }
+        const nextAccessToken = await refreshAccessToken(currentRefreshToken);
+        if (nextAccessToken) {
+          resolvedToken = nextAccessToken;
+          response = await perform(resolvedToken);
         }
-        if (refreshed.ok) {
-          const refreshData = unwrapEnvelope<BackendAuthData>(refreshJson || {});
-          const nextAccessToken = (refreshData.accessToken || refreshData.tokens?.accessToken || '').trim();
-          const nextRefreshToken =
-            (refreshData.refreshToken || refreshData.tokens?.refreshToken || currentRefreshToken).trim();
-          if (nextAccessToken) {
-            setSessionTokens(nextAccessToken, nextRefreshToken);
-            await writeSessionToStorage({
-              accessToken: nextAccessToken,
-              ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {}),
-            });
-            resolvedToken = nextAccessToken;
-            response = await perform(resolvedToken);
-          }
-        }
-      } catch {
-        // Keep the original 401 handling below.
+      } catch (error) {
+        refreshFailure = error instanceof Error ? error : new Error('Refresh failed.');
       }
     }
 
     if (!response.res.ok) {
+      if (refreshFailure) {
+        throw refreshFailure;
+      }
       const body = (response.json || {}) as BackendEnvelope<unknown>;
       throw new Error(body.error?.message || body.message || `HTTP ${response.res.status}`);
     }
@@ -2363,6 +2405,25 @@ function App() {
             message: initialError instanceof Error ? initialError.message : '',
           });
           const storedRefreshToken = (stored.refreshToken || '').trim();
+          const latestAccessToken = accessTokenRef.current.trim();
+          const latestRefreshToken = refreshTokenRef.current.trim();
+
+          if (storedRefreshToken && latestRefreshToken && latestRefreshToken !== storedRefreshToken && latestAccessToken) {
+            try {
+              logSessionTrace('restore:retry_after_internal_refresh', {
+                accessTokenLength: latestAccessToken.length,
+                hasRefreshToken: !!latestRefreshToken,
+              });
+              await applySession(latestAccessToken, latestRefreshToken);
+              return;
+            } catch (retryError) {
+              const msg = retryError instanceof Error ? retryError.message : '';
+              logSessionTrace('restore:retry_after_internal_refresh_failed', {
+                message: msg || s.loginBackendSyncFailed,
+              });
+            }
+          }
+
           if (!storedRefreshToken) {
             setSessionTokens('', '');
             await clearSessionInStorage();
@@ -2379,10 +2440,11 @@ function App() {
           let refreshed: BackendAuthData;
           try {
             logSessionTrace('restore:refresh_start');
-            refreshed = await backendRequest<BackendAuthData>('/v1/auth/refresh', {
-              method: 'POST',
-              body: JSON.stringify({ refreshToken: storedRefreshToken }),
-            });
+            const nextAccessToken = await refreshAccessToken(storedRefreshToken);
+            refreshed = {
+              accessToken: nextAccessToken,
+              refreshToken: refreshTokenRef.current.trim(),
+            };
           } catch (refreshError) {
             setSessionTokens('', '');
             await clearSessionInStorage();
@@ -2420,7 +2482,7 @@ function App() {
           });
 
           try {
-            await applySession(nextAccessToken, nextRefreshToken, refreshed.user);
+            await applySession(nextAccessToken, nextRefreshToken);
           } catch (retryError) {
             setSessionTokens('', '');
             const msg = retryError instanceof Error ? retryError.message : '';
@@ -3942,6 +4004,12 @@ function App() {
       return;
     }
 
+    if (normalized === backendBaseUrl) {
+      setShowServerMenu(false);
+      setServerMenuDraft(normalized);
+      return;
+    }
+
     const nextOverride = normalized === defaultBackendBaseUrl ? '' : normalized;
     try {
       await writeBackendOverrideToStorage(nextOverride);
@@ -4345,48 +4413,48 @@ function App() {
             </>
           ) : (
             <>
-              <View style={styles.header}>
-                <View style={styles.topIdentity}>
-                  {topAvatarUri ? (
-                    <Image source={{ uri: topAvatarUri }} style={styles.headerAvatarLarge} />
-                  ) : (
-                    <View style={styles.headerAvatarFallback}>
-                      <Text style={styles.headerAvatarFallbackText}>
-                        {(profile.name || s.me).slice(0, 1).toUpperCase()}
-                      </Text>
+              {tab !== 'hideout' ? (
+                <View style={styles.header}>
+                  <View style={styles.topIdentity}>
+                    {topAvatarUri ? (
+                      <Image source={{ uri: topAvatarUri }} style={styles.headerAvatarLarge} />
+                    ) : (
+                      <View style={styles.headerAvatarFallback}>
+                        <Text style={styles.headerAvatarFallbackText}>
+                          {(profile.name || s.me).slice(0, 1).toUpperCase()}
+                        </Text>
+                      </View>
+                    )}
+                    <View style={styles.topIdentityCopy}>
+                      <Text style={styles.headerName}>{profile.name || s.me}</Text>
+                      <Text style={styles.headerSection}>{currentSectionLabel}</Text>
                     </View>
-                  )}
-                  <View style={styles.topIdentityCopy}>
-                    <Text style={styles.headerName}>{profile.name || s.me}</Text>
-                    <Text style={styles.headerSection}>
-                      {tab === 'friends' ? s.tabsFriends : tab === 'chats' ? s.tabsChats : s.tabsProfile}
-                    </Text>
                   </View>
+                  {tab === 'friends' ? (
+                    <Pressable style={styles.iconDark} onPress={openFriendModal}>
+                      <Ionicons name="person-add" size={18} color={FOREST.text} />
+                    </Pressable>
+                  ) : tab === 'chats' ? (
+                    <Pressable style={styles.iconDark} onPress={() => setShowGroupModal(true)}>
+                      <Ionicons name="add" size={20} color={FOREST.text} />
+                    </Pressable>
+                  ) : (
+                    <Pressable
+                      style={styles.iconDark}
+                      onPress={() => {
+                        setNameDraft(profile.name);
+                        setStatusDraft(profile.status);
+                        setProfilePhotoDraft(profile.avatarUri);
+                        setShowProfileModal(true);
+                      }}
+                    >
+                      <Ionicons name="create-outline" size={18} color={FOREST.text} />
+                    </Pressable>
+                  )}
                 </View>
-                {tab === 'friends' ? (
-                  <Pressable style={styles.iconDark} onPress={openFriendModal}>
-                    <Ionicons name="person-add" size={18} color={FOREST.text} />
-                  </Pressable>
-                ) : tab === 'chats' ? (
-                  <Pressable style={styles.iconDark} onPress={() => setShowGroupModal(true)}>
-                    <Ionicons name="add" size={20} color={FOREST.text} />
-                  </Pressable>
-                ) : (
-                  <Pressable
-                    style={styles.iconDark}
-                    onPress={() => {
-                      setNameDraft(profile.name);
-                      setStatusDraft(profile.status);
-                      setProfilePhotoDraft(profile.avatarUri);
-                      setShowProfileModal(true);
-                    }}
-                  >
-                    <Ionicons name="create-outline" size={18} color={FOREST.text} />
-                  </Pressable>
-                )}
-              </View>
+              ) : null}
 
-              <View style={styles.main}>
+              <View style={[styles.main, tab === 'hideout' && styles.mainHideout]}>
                 {tab === 'chats' ? (
                   <ScrollView contentContainerStyle={styles.list}>
                     {sortedRooms.length === 0 && visibleBots.length === 0 ? (
@@ -4494,6 +4562,14 @@ function App() {
                   </ScrollView>
                 ) : null}
 
+                {tab === 'hideout' ? (
+                  <HideoutTab
+                    locale={locale}
+                    ownerKey={(currentUserId || profile.email || 'local-user').trim() || 'local-user'}
+                    ownerName={profile.name || s.me}
+                  />
+                ) : null}
+
                 {tab === 'profile' ? (
                   <ScrollView contentContainerStyle={styles.list}>
                     <Pressable style={styles.profileCabinCard} onLongPress={openServerMenu} delayLongPress={900}>
@@ -4529,6 +4605,12 @@ function App() {
                       <Ionicons name="log-out-outline" size={16} color="#FFDADD" />
                       <Text style={styles.logoutText}>{s.logout}</Text>
                     </Pressable>
+                    <Pressable style={styles.item} onPress={() => setTab('hideout')}>
+                      <Text style={styles.itemTitle}>{s.goHideout}</Text>
+                      <Text style={styles.sub}>
+                        {isKo ? '내 방으로 들어가 사물을 눌러 기능을 확인해요.' : 'Walk into your room and open features through objects.'}
+                      </Text>
+                    </Pressable>
                   </ScrollView>
                 ) : null}
               </View>
@@ -4541,6 +4623,10 @@ function App() {
                 <Pressable style={[styles.tab, tab === 'chats' && styles.tabOn]} onPress={() => setTab('chats')}>
                   <Ionicons name="chatbubbles" size={18} color={tab === 'chats' ? FOREST.text : FOREST.textMuted} />
                   <Text style={styles.tabText}>{s.tabsChats}</Text>
+                </Pressable>
+                <Pressable style={[styles.tab, tab === 'hideout' && styles.tabOn]} onPress={() => setTab('hideout')}>
+                  <Ionicons name="home" size={18} color={tab === 'hideout' ? FOREST.text : FOREST.textMuted} />
+                  <Text style={styles.tabText}>{s.tabsHideout}</Text>
                 </Pressable>
                 <Pressable style={[styles.tab, tab === 'profile' && styles.tabOn]} onPress={() => setTab('profile')}>
                   <Ionicons name="person" size={18} color={tab === 'profile' ? FOREST.text : FOREST.textMuted} />
@@ -5120,6 +5206,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FOREST.border,
     gap: 10,
+  },
+  mainHideout: {
+    marginTop: 8,
+    padding: 0,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    borderColor: 'transparent',
+    overflow: 'hidden',
   },
   list: { gap: 12, paddingBottom: 18 },
   row: { flexDirection: 'row', gap: 10, alignItems: 'center' },

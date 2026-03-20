@@ -1,0 +1,92 @@
+<svg width="1600" height="1000" viewBox="0 0 1600 1000" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="1000" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F4FAFF"/>
+      <stop offset="1" stop-color="#FFF6EE"/>
+    </linearGradient>
+    <linearGradient id="leftWall" x1="320" y1="190" x2="320" y2="690" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8F4ED"/>
+      <stop offset="1" stop-color="#EDE2D1"/>
+    </linearGradient>
+    <linearGradient id="rightWall" x1="1280" y1="190" x2="1280" y2="690" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FCF7F0"/>
+      <stop offset="1" stop-color="#F0E4D4"/>
+    </linearGradient>
+    <linearGradient id="floor" x1="800" y1="340" x2="800" y2="790" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E4C197"/>
+      <stop offset="1" stop-color="#C58D59"/>
+    </linearGradient>
+    <filter id="shadow" x="0" y="0" width="1600" height="1000" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="10"/>
+      <feGaussianBlur stdDeviation="16"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.18 0 0 0 0 0.16 0 0 0 0 0.13 0 0 0 0.18 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_0_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_0_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="1000" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1600" height="760" fill="#FBF6EE"/>
+  <path d="M0 760H1600V1000H0V760Z" fill="#D2AA7E"/>
+
+  <g filter="url(#shadow)">
+    <polygon points="320,190 800,340 800,760 320,610" fill="url(#leftWall)"/>
+    <polygon points="1280,190 800,340 800,760 1280,610" fill="url(#rightWall)"/>
+    <polygon points="800,340 1280,490 800,790 320,490" fill="url(#floor)"/>
+  </g>
+
+  <g opacity="0.22">
+    <line x1="470" y1="454" x2="940" y2="600" stroke="#9C724B" stroke-width="3"/>
+    <line x1="566" y1="424" x2="1036" y2="570" stroke="#9C724B" stroke-width="3"/>
+    <line x1="662" y1="394" x2="1132" y2="540" stroke="#9C724B" stroke-width="3"/>
+  </g>
+
+  <polygon points="464,246 562,276 562,436 464,406" fill="#FFFDF9"/>
+  <polygon points="562,276 704,234 704,394 562,436" fill="#F4E7CC"/>
+  <polygon points="464,246 562,276 704,234 612,208" fill="#F9F3E9"/>
+  <line x1="582" y1="286" x2="582" y2="430" stroke="#D8C8B4" stroke-width="3"/>
+  <line x1="628" y1="272" x2="628" y2="416" stroke="#D8C8B4" stroke-width="3"/>
+  <line x1="674" y1="258" x2="674" y2="402" stroke="#D8C8B4" stroke-width="3"/>
+  <line x1="528" y1="328" x2="678" y2="282" stroke="#D8C8B4" stroke-width="3"/>
+  <line x1="528" y1="372" x2="678" y2="326" stroke="#D8C8B4" stroke-width="3"/>
+  <circle cx="614" cy="342" r="18" fill="#F4C67A"/>
+  <circle cx="614" cy="342" r="34" fill="none" stroke="#F1B75A" stroke-width="6" stroke-dasharray="10 10"/>
+
+  <polygon points="398,492 548,540 548,682 398,634" fill="#FFFDF9"/>
+  <polygon points="548,540 808,458 808,600 548,682" fill="#FAF7F0"/>
+  <polygon points="398,492 548,540 808,458 662,414" fill="#F3ECE2"/>
+  <polygon points="470,502 576,536 576,622 470,588" fill="#E5B840"/>
+  <polygon points="576,536 770,474 770,560 576,622" fill="#F2C651"/>
+  <polygon points="510,458 588,482 682,452 606,430" fill="#FFFDFB"/>
+
+  <polygon points="816,496 930,532 930,670 816,634" fill="#F4F0E7"/>
+  <polygon points="930,532 1076,486 1076,624 930,670" fill="#ECE3D5"/>
+  <polygon points="816,496 930,532 1076,486 964,452" fill="#FBF7F0"/>
+
+  <ellipse cx="842" cy="592" rx="54" ry="24" fill="#C19A75" opacity="0.34"/>
+  <circle cx="842" cy="556" r="28" fill="#FFD9A8"/>
+  <rect x="826" y="582" width="32" height="52" rx="16" fill="#8EB07A"/>
+  <rect x="814" y="608" width="18" height="56" rx="9" fill="#7A5F48"/>
+  <rect x="852" y="608" width="18" height="56" rx="9" fill="#7A5F48"/>
+
+  <path d="M842 626C806 578 752 520 704 468C668 430 636 394 614 358" stroke="#7CC5FF" stroke-width="10" stroke-linecap="round" stroke-dasharray="14 14"/>
+  <circle cx="614" cy="358" r="16" fill="#7CC5FF"/>
+
+  <g filter="url(#shadow)">
+    <rect x="1020" y="126" width="460" height="748" rx="30" fill="#FFFDF9"/>
+    <rect x="1054" y="160" width="392" height="62" rx="20" fill="#F8FBFF"/>
+    <text x="1250" y="200" text-anchor="middle" fill="#253748" font-size="32" font-weight="700" font-family="Georgia, Times New Roman, serif">달력</text>
+    <rect x="1054" y="252" width="392" height="460" rx="22" fill="#FFF8EF"/>
+    <line x1="1110" y1="314" x2="1390" y2="314" stroke="#E0D5C7" stroke-width="3"/>
+    <line x1="1110" y1="392" x2="1390" y2="392" stroke="#E0D5C7" stroke-width="3"/>
+    <line x1="1110" y1="470" x2="1390" y2="470" stroke="#E0D5C7" stroke-width="3"/>
+    <line x1="1110" y1="548" x2="1390" y2="548" stroke="#E0D5C7" stroke-width="3"/>
+    <line x1="1170" y1="252" x2="1170" y2="712" stroke="#E0D5C7" stroke-width="3"/>
+    <line x1="1230" y1="252" x2="1230" y2="712" stroke="#E0D5C7" stroke-width="3"/>
+    <line x1="1290" y1="252" x2="1290" y2="712" stroke="#E0D5C7" stroke-width="3"/>
+    <line x1="1350" y1="252" x2="1350" y2="712" stroke="#E0D5C7" stroke-width="3"/>
+    <circle cx="1260" cy="432" r="24" fill="#F2C07A"/>
+  </g>
+</svg>
