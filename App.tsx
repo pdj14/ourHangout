@@ -255,12 +255,31 @@ type PersistedSession = {
 type BackendSyncOptions = {
   strict?: boolean;
 };
+type BackendAppUpdateRelease = {
+  version?: string;
+  notes?: string;
+  fileName?: string;
+  sizeBytes?: number;
+  uploadedAt?: string;
+  publishedAt?: string;
+  downloadUrl?: string;
+  latestDownloadUrl?: string;
+  fileExists?: boolean;
+  isLatest?: boolean;
+};
+type BackendAppUpdateStatus = {
+  currentVersion?: string;
+  latestVersion?: string;
+  isLatest?: boolean;
+  release?: BackendAppUpdateRelease | null;
+};
 
 const MY_ID = 'me';
 const URL_REGEX = /https?:\/\/\S+/gi;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const PROFILE_CROP_BOX = 260;
 const PROFILE_PHOTO_MAX_OUTPUT = 2048;
+const DEFAULT_APP_VERSION = '1.0.0';
 
 const normalizeBackendErrorMessage = (message: string, isKo: boolean): string => {
   const normalized = message.trim();
@@ -472,6 +491,89 @@ const buildDevBackendBaseUrl = (prodBaseUrl: string): string => {
   } catch {
     return 'http://wowjini0228.synology.me:7084';
   }
+};
+const getRuntimeAppVersion = (): string => {
+  const constantsAny = Constants as unknown as {
+    expoConfig?: { version?: string };
+    manifest2?: { version?: string };
+    manifest?: { version?: string };
+  };
+
+  return (
+    constantsAny.expoConfig?.version ||
+    constantsAny.manifest2?.version ||
+    constantsAny.manifest?.version ||
+    DEFAULT_APP_VERSION
+  ).trim() || DEFAULT_APP_VERSION;
+};
+const tokenizeVersion = (value: string): Array<number | string> =>
+  value
+    .trim()
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .filter(Boolean)
+    .map((part) => (/^\d+$/.test(part) ? Number(part) : part));
+const compareVersionToken = (left: number | string, right: number | string): number => {
+  if (typeof left === 'number' && typeof right === 'number') {
+    return left === right ? 0 : left > right ? 1 : -1;
+  }
+  if (typeof left === 'number') return 1;
+  if (typeof right === 'number') return -1;
+  const compared = left.localeCompare(right);
+  return compared === 0 ? 0 : compared > 0 ? 1 : -1;
+};
+const compareVersionStrings = (left: string, right: string): number => {
+  const normalizedLeft = tokenizeVersion(left);
+  const normalizedRight = tokenizeVersion(right);
+  const maxLength = Math.max(normalizedLeft.length, normalizedRight.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftToken = normalizedLeft[index] ?? 0;
+    const rightToken = normalizedRight[index] ?? 0;
+    const compared = compareVersionToken(leftToken, rightToken);
+    if (compared !== 0) {
+      return compared;
+    }
+  }
+
+  return 0;
+};
+const formatAppUpdateFileSize = (sizeBytes: number | undefined, isKo: boolean): string => {
+  if (!Number.isFinite(sizeBytes) || !sizeBytes || sizeBytes <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = sizeBytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const digits = value >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${value.toFixed(digits)} ${units[unitIndex]}${isKo ? '' : ''}`;
+};
+const buildAppUpdatePromptMessage = (
+  currentVersion: string,
+  latestVersion: string,
+  release: BackendAppUpdateRelease,
+  isKo: boolean
+): string => {
+  const lines = [
+    isKo
+      ? `\uC0C8 \uBC84\uC804 ${latestVersion}\uC774 \uC900\uBE44\uB410\uC5B4\uC694.`
+      : `Version ${latestVersion} is available.`,
+    isKo ? `\uD604\uC7AC \uBC84\uC804: ${currentVersion}` : `Current version: ${currentVersion}`,
+  ];
+
+  const fileSize = formatAppUpdateFileSize(release.sizeBytes, isKo);
+  if (fileSize) {
+    lines.push(isKo ? `\uD30C\uC77C \uD06C\uAE30: ${fileSize}` : `File size: ${fileSize}`);
+  }
+
+  const notes = (release.notes || '').trim();
+  if (notes) {
+    lines.push('', notes);
+  }
+
+  return lines.join('\n');
 };
 const logSessionTrace = (event: string, details?: Record<string, unknown>) => {
   try {
@@ -918,6 +1020,11 @@ function App() {
       .process;
     return runtimeProcess?.env ?? {};
   }, []);
+  const currentAppVersion = useMemo(() => getRuntimeAppVersion(), []);
+  const executionEnvironment = (
+    (Constants as unknown as { executionEnvironment?: string }).executionEnvironment || ''
+  ).trim();
+  const canCheckForAppUpdate = Platform.OS === 'android' && executionEnvironment !== 'storeClient';
   const pickValue = (primary?: string, fallback?: string): string =>
     (primary || '').trim() || (fallback || '').trim();
   const g = {
@@ -1031,6 +1138,8 @@ function App() {
   const pushTokenRef = useRef('');
   const registeredPushTokenRef = useRef('');
   const notificationResponseSubRef = useRef<Notifications.EventSubscription | null>(null);
+  const appUpdateCheckKeyRef = useRef('');
+  const appUpdatePromptVersionRef = useRef('');
   const backendBaseUrl = normalizeBackendBaseUrl(backendOverrideUrl) || defaultBackendBaseUrl;
   const backendOrigin = useMemo(() => {
     try {
@@ -2367,6 +2476,89 @@ function App() {
   useEffect(() => {
     if (!isBackendConfigReady) return;
     if (backendState !== 'ready') return;
+    if (!canCheckForAppUpdate) return;
+
+    const checkKey = `${backendBaseUrl}|${currentAppVersion}`;
+    if (appUpdateCheckKeyRef.current === checkKey) return;
+    appUpdateCheckKeyRef.current = checkKey;
+
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const params = new URLSearchParams({ currentVersion: currentAppVersion });
+        const data = await backendRequest<BackendAppUpdateStatus>(
+          `/v1/app-updates/latest?${params.toString()}`,
+          { method: 'GET' }
+        );
+        if (cancelled) return;
+
+        const release = data.release;
+        const latestVersion = (data.latestVersion || release?.version || '').trim();
+        const downloadUrl = (release?.latestDownloadUrl || release?.downloadUrl || '').trim();
+        const needsUpdate =
+          !!release &&
+          !!downloadUrl &&
+          !!latestVersion &&
+          (data.isLatest === false || compareVersionStrings(currentAppVersion, latestVersion) < 0);
+
+        if (!needsUpdate) return;
+        if (appUpdatePromptVersionRef.current === latestVersion) return;
+        appUpdatePromptVersionRef.current = latestVersion;
+
+        Alert.alert(
+          isKo ? '\uC5C5\uB370\uC774\uD2B8 \uC548\uB0B4' : 'Update available',
+          buildAppUpdatePromptMessage(currentAppVersion, latestVersion, release, isKo),
+          [
+            {
+              text: isKo ? '\uB098\uC911\uC5D0' : 'Later',
+              style: 'cancel',
+            },
+            {
+              text: isKo ? '\uB2E4\uC6B4\uB85C\uB4DC' : 'Download',
+              onPress: () => {
+                void (async () => {
+                  try {
+                    const canOpen = await Linking.canOpenURL(downloadUrl);
+                    if (!canOpen) {
+                      Alert.alert(s.linkUnavailableTitle, s.linkUnavailableBody);
+                      return;
+                    }
+                    await Linking.openURL(downloadUrl);
+                  } catch {
+                    Alert.alert(s.linkFailedTitle, s.linkFailedBody);
+                  }
+                })();
+              },
+            },
+          ]
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'unknown';
+        console.info('[app-update] latest check skipped:', message);
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    appUpdateCheckKeyRef,
+    backendBaseUrl,
+    backendState,
+    canCheckForAppUpdate,
+    currentAppVersion,
+    isBackendConfigReady,
+    isKo,
+    s.linkFailedBody,
+    s.linkFailedTitle,
+    s.linkUnavailableBody,
+    s.linkUnavailableTitle,
+  ]);
+
+  useEffect(() => {
+    if (!isBackendConfigReady) return;
+    if (backendState !== 'ready') return;
     if (sessionRestoreStartedRef.current) return;
     sessionRestoreStartedRef.current = true;
     let cancelled = false;
@@ -2552,7 +2744,7 @@ function App() {
     } = {
       device: {
         platform: Platform.OS,
-        appVersion: Constants.expoConfig?.version || '1.0.0',
+        appVersion: currentAppVersion,
         deviceId: String(Constants.deviceName || Constants.sessionId || 'unknown'),
       },
     };
