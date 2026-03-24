@@ -20,7 +20,10 @@
       "supportsTablet": true
     },
     "android": {
-      "versionCode": 2,
+      "versionCode": 6,
+      "permissions": [
+        "REQUEST_INSTALL_PACKAGES"
+      ],
       "softwareKeyboardLayoutMode": "resize",
       "usesCleartextTraffic": true,
       "adaptiveIcon": {
@@ -36,7 +39,6 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-font",
       "expo-web-browser",
       "expo-secure-store",
       [

@@ -23,6 +23,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as IntentLauncher from 'expo-intent-launcher';
 import * as MediaLibrary from 'expo-media-library';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as Device from 'expo-device';
@@ -38,7 +39,6 @@ import {
   isSuccessResponse,
   statusCodes,
 } from '@react-native-google-signin/google-signin';
-import { HideoutTab } from './hideout/HideoutTab';
 
 let foregroundNotificationRoomId = '';
 let foregroundAppState: 'active' | 'background' | 'inactive' = 'active';
@@ -57,7 +57,7 @@ Notifications.setNotificationHandler({
 });
 
 type Stage = 'login' | 'setup_name' | 'setup_intro' | 'app';
-type Tab = 'chats' | 'friends' | 'hideout' | 'profile';
+type Tab = 'chats' | 'friends' | 'profile';
 type MsgKind = 'text' | 'image' | 'video' | 'system';
 type Delivery = 'sending' | 'sent' | 'read';
 
@@ -273,13 +273,25 @@ type BackendAppUpdateStatus = {
   isLatest?: boolean;
   release?: BackendAppUpdateRelease | null;
 };
+type AppUpdateCardState = {
+  checked: boolean;
+  isChecking: boolean;
+  needsUpdate: boolean;
+  latestVersion: string;
+  downloadUrl: string;
+  release: BackendAppUpdateRelease | null;
+  errorMessage: string;
+};
 
 const MY_ID = 'me';
 const URL_REGEX = /https?:\/\/\S+/gi;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const PROFILE_CROP_BOX = 260;
 const PROFILE_PHOTO_MAX_OUTPUT = 2048;
-const DEFAULT_APP_VERSION = '1.0.0';
+const DEFAULT_APP_VERSION = '1.0.1';
+const APP_PACKAGE_ID = 'com.ourhangout';
+const APP_UPDATE_APK_MIME_TYPE = 'application/vnd.android.package-archive';
+const INTENT_FLAG_GRANT_READ_URI_PERMISSION = 1;
 
 const normalizeBackendErrorMessage = (message: string, isKo: boolean): string => {
   const normalized = message.trim();
@@ -550,30 +562,97 @@ const formatAppUpdateFileSize = (sizeBytes: number | undefined, isKo: boolean): 
   const digits = value >= 10 || unitIndex === 0 ? 0 : 1;
   return `${value.toFixed(digits)} ${units[unitIndex]}${isKo ? '' : ''}`;
 };
-const buildAppUpdatePromptMessage = (
-  currentVersion: string,
-  latestVersion: string,
-  release: BackendAppUpdateRelease,
+const sanitizeAppUpdateVersion = (value: string): string =>
+  value.trim().replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'latest';
+const openUnknownSourcesSettings = async (): Promise<void> => {
+  try {
+    await IntentLauncher.startActivityAsync(IntentLauncher.ActivityAction.MANAGE_UNKNOWN_APP_SOURCES, {
+      data: `package:${APP_PACKAGE_ID}`,
+    });
+  } catch {
+    await Linking.openSettings().catch(() => null);
+  }
+};
+const downloadAndInstallAppUpdate = async (
+  downloadUrl: string,
+  version: string,
   isKo: boolean
-): string => {
-  const lines = [
-    isKo
-      ? `\uC0C8 \uBC84\uC804 ${latestVersion}\uC774 \uC900\uBE44\uB410\uC5B4\uC694.`
-      : `Version ${latestVersion} is available.`,
-    isKo ? `\uD604\uC7AC \uBC84\uC804: ${currentVersion}` : `Current version: ${currentVersion}`,
-  ];
-
-  const fileSize = formatAppUpdateFileSize(release.sizeBytes, isKo);
-  if (fileSize) {
-    lines.push(isKo ? `\uD30C\uC77C \uD06C\uAE30: ${fileSize}` : `File size: ${fileSize}`);
+): Promise<boolean> => {
+  if (Platform.OS !== 'android') {
+    try {
+      const canOpen = await Linking.canOpenURL(downloadUrl);
+      if (!canOpen) {
+        Alert.alert(
+          isKo ? '링크를 열 수 없어요' : 'Cannot open link',
+          isKo ? '이 기기에는 링크를 열 수 있는 앱이 없어요.' : 'No app is available to open the link.'
+        );
+        return false;
+      }
+      await Linking.openURL(downloadUrl);
+      return true;
+    } catch {
+      Alert.alert(
+        isKo ? '열기 실패' : 'Open failed',
+        isKo ? '다운로드 링크를 열지 못했어요.' : 'Could not open the download link.'
+      );
+      return false;
+    }
   }
 
-  const notes = (release.notes || '').trim();
-  if (notes) {
-    lines.push('', notes);
-  }
+  try {
+    const sideLoadingEnabled = await Device.isSideLoadingEnabledAsync();
+    if (!sideLoadingEnabled) {
+      Alert.alert(
+        isKo ? '설치 권한이 필요해요' : 'Install permission required',
+        isKo
+          ? '브라우저 없이 업데이트하려면 이 앱에 "알 수 없는 앱 설치" 권한을 허용해 주세요.'
+          : 'To update without a browser, allow this app to install unknown apps.',
+        [
+          { text: isKo ? '닫기' : 'Close', style: 'cancel' },
+          {
+            text: isKo ? '설정 열기' : 'Open Settings',
+            onPress: () => {
+              void openUnknownSourcesSettings();
+            },
+          },
+        ]
+      );
+      return false;
+    }
 
-  return lines.join('\n');
+    const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+    if (!baseDir) {
+      throw new Error('Missing writable directory.');
+    }
+
+    const targetUri = `${baseDir}ourhangout-update-${sanitizeAppUpdateVersion(version)}.apk`;
+    await FileSystem.deleteAsync(targetUri, { idempotent: true }).catch(() => null);
+
+    const result = await FileSystem.downloadAsync(downloadUrl, targetUri);
+    if (result.status < 200 || result.status >= 300) {
+      throw new Error(`Download failed (${result.status}).`);
+    }
+
+    const contentUri = await FileSystem.getContentUriAsync(result.uri);
+    await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+      data: contentUri,
+      flags: INTENT_FLAG_GRANT_READ_URI_PERMISSION,
+      type: APP_UPDATE_APK_MIME_TYPE,
+    });
+    return true;
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : isKo
+          ? '업데이트 파일을 내려받거나 설치 화면을 열지 못했어요.'
+          : 'Could not download the update or open the installer.';
+    Alert.alert(
+      isKo ? '업데이트 실패' : 'Update failed',
+      normalizeBackendErrorMessage(message, isKo)
+    );
+    return false;
+  }
 };
 const logSessionTrace = (event: string, details?: Record<string, unknown>) => {
   try {
@@ -616,7 +695,6 @@ const TEXT = {
     defaultStatus: 'Chatting safely',
     tabsChats: 'Chats',
     tabsFriends: 'Friends',
-    tabsHideout: 'Hideout',
     tabsProfile: 'Profile',
     searchChats: 'Search rooms',
     searchFriends: 'Search friends',
@@ -677,7 +755,6 @@ const TEXT = {
     remove: 'Remove',
     startChat: 'Start chat',
     profileEdit: 'Edit profile',
-    goHideout: 'My Hideout',
     logout: 'Log out',
     logoutTitle: 'Log out?',
     logoutBody: 'You will need Google sign-in again next time.',
@@ -762,7 +839,6 @@ const TEXT = {
     defaultStatus: '안전하게 대화 중',
     tabsChats: '대화',
     tabsFriends: '친구',
-    tabsHideout: '아지트',
     tabsProfile: '프로필',
     searchChats: '대화방 검색',
     searchFriends: '친구 검색',
@@ -823,7 +899,6 @@ const TEXT = {
     remove: '삭제',
     startChat: '대화 시작',
     profileEdit: '프로필 수정',
-    goHideout: '내 아지트',
     logout: '로그아웃',
     logoutTitle: '로그아웃할까요?',
     logoutBody: '다음에 다시 구글 로그인이 필요해요.',
@@ -1120,6 +1195,16 @@ function App() {
   const [roomMenuId, setRoomMenuId] = useState<string | null>(null);
   const [wsRetryTick, setWsRetryTick] = useState(0);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [appUpdateStatus, setAppUpdateStatus] = useState<AppUpdateCardState>({
+    checked: false,
+    isChecking: false,
+    needsUpdate: false,
+    latestVersion: '',
+    downloadUrl: '',
+    release: null,
+    errorMessage: '',
+  });
+  const [isInstallingAppUpdate, setIsInstallingAppUpdate] = useState(false);
   const [directReadCutoffs, setDirectReadCutoffs] = useState<Record<string, number>>({});
 
   const scrollRef = useRef<ScrollView>(null);
@@ -1139,7 +1224,6 @@ function App() {
   const registeredPushTokenRef = useRef('');
   const notificationResponseSubRef = useRef<Notifications.EventSubscription | null>(null);
   const appUpdateCheckKeyRef = useRef('');
-  const appUpdatePromptVersionRef = useRef('');
   const backendBaseUrl = normalizeBackendBaseUrl(backendOverrideUrl) || defaultBackendBaseUrl;
   const backendOrigin = useMemo(() => {
     try {
@@ -1334,8 +1418,47 @@ function App() {
   const knockCount = friendRequestsIncoming.length + friendRequestsOutgoing.length;
   const activeRoomCompanions = activeRoom?.members.filter((m) => m !== currentUserId).length ?? 0;
   const topAvatarUri = tab === 'chats' && activeRoom ? roomAvatarUri(activeRoom) : profile.avatarUri;
-  const currentSectionLabel =
-    tab === 'friends' ? s.tabsFriends : tab === 'chats' ? s.tabsChats : tab === 'hideout' ? s.tabsHideout : s.tabsProfile;
+  const currentSectionLabel = tab === 'friends' ? s.tabsFriends : tab === 'chats' ? s.tabsChats : s.tabsProfile;
+  const appUpdateRelease = appUpdateStatus.release;
+  const appUpdateFileSize = formatAppUpdateFileSize(appUpdateRelease?.sizeBytes, isKo);
+  const appUpdateNotes = (appUpdateRelease?.notes || '').trim();
+  const appUpdateSummary = appUpdateStatus.isChecking
+    ? isKo
+      ? '\uCD5C\uC2E0 \uBC84\uC804\uC744 \uD655\uC778 \uC911\uC774\uC5D0\uC694.'
+      : 'Checking for the latest version.'
+    : appUpdateStatus.errorMessage
+      ? appUpdateStatus.errorMessage
+      : appUpdateStatus.needsUpdate
+        ? isKo
+          ? `\uC0C8 \uBC84\uC804 ${appUpdateStatus.latestVersion}\uC774 \uC900\uBE44\uB410\uC5B4\uC694.`
+          : `Version ${appUpdateStatus.latestVersion} is ready.`
+        : appUpdateStatus.checked
+          ? isKo
+            ? '\uD604\uC7AC \uC571\uC740 \uCD5C\uC2E0 \uBC84\uC804\uC744 \uC0AC\uC6A9 \uC911\uC774\uC5D0\uC694.'
+            : 'This device is already on the latest version.'
+          : isKo
+            ? '\uD504\uB85C\uD544 \uD0ED\uC5D0\uC11C \uCD5C\uC2E0 \uBC84\uC804 \uC5EC\uBD80\uB97C \uD655\uC778\uD574\uC694.'
+            : 'The profile tab checks whether a newer version is available.';
+  const appUpdateButtonLabel = isInstallingAppUpdate
+    ? isKo
+      ? '\uC124\uCE58 \uD654\uBA74 \uC5EC\uB294 \uC911...'
+      : 'Opening installer...'
+    : isKo
+      ? '\uCD5C\uC2E0 \uBC84\uC804 \uC5C5\uB370\uC774\uD2B8'
+      : 'Update to latest';
+
+  const startAppUpdateInstall = async () => {
+    if (!appUpdateStatus.needsUpdate) return;
+    if (!appUpdateStatus.downloadUrl || !appUpdateStatus.latestVersion) return;
+    if (isInstallingAppUpdate) return;
+
+    setIsInstallingAppUpdate(true);
+    try {
+      await downloadAndInstallAppUpdate(appUpdateStatus.downloadUrl, appUpdateStatus.latestVersion, isKo);
+    } finally {
+      setIsInstallingAppUpdate(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -2492,7 +2615,7 @@ function App() {
         );
         if (cancelled) return;
 
-        const release = data.release;
+        const release = data.release ?? null;
         const latestVersion = (data.latestVersion || release?.version || '').trim();
         const downloadUrl = (release?.latestDownloadUrl || release?.downloadUrl || '').trim();
         const needsUpdate =
@@ -2501,43 +2624,38 @@ function App() {
           !!latestVersion &&
           (data.isLatest === false || compareVersionStrings(currentAppVersion, latestVersion) < 0);
 
-        if (!needsUpdate) return;
-        if (appUpdatePromptVersionRef.current === latestVersion) return;
-        appUpdatePromptVersionRef.current = latestVersion;
-
-        Alert.alert(
-          isKo ? '\uC5C5\uB370\uC774\uD2B8 \uC548\uB0B4' : 'Update available',
-          buildAppUpdatePromptMessage(currentAppVersion, latestVersion, release, isKo),
-          [
-            {
-              text: isKo ? '\uB098\uC911\uC5D0' : 'Later',
-              style: 'cancel',
-            },
-            {
-              text: isKo ? '\uB2E4\uC6B4\uB85C\uB4DC' : 'Download',
-              onPress: () => {
-                void (async () => {
-                  try {
-                    const canOpen = await Linking.canOpenURL(downloadUrl);
-                    if (!canOpen) {
-                      Alert.alert(s.linkUnavailableTitle, s.linkUnavailableBody);
-                      return;
-                    }
-                    await Linking.openURL(downloadUrl);
-                  } catch {
-                    Alert.alert(s.linkFailedTitle, s.linkFailedBody);
-                  }
-                })();
-              },
-            },
-          ]
-        );
+        setAppUpdateStatus({
+          checked: true,
+          isChecking: false,
+          needsUpdate,
+          latestVersion,
+          downloadUrl: needsUpdate ? downloadUrl : '',
+          release,
+          errorMessage: '',
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'unknown';
         console.info('[app-update] latest check skipped:', message);
+        if (cancelled) return;
+        setAppUpdateStatus({
+          checked: true,
+          isChecking: false,
+          needsUpdate: false,
+          latestVersion: '',
+          downloadUrl: '',
+          release: null,
+          errorMessage: isKo
+            ? '\uC9C0\uAE08\uC740 \uCD5C\uC2E0 \uBC84\uC804\uC744 \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC5B4\uC694.'
+            : 'Could not check for updates right now.',
+        });
       }
     };
 
+    setAppUpdateStatus((prev) => ({
+      ...prev,
+      isChecking: true,
+      errorMessage: '',
+    }));
     void run();
     return () => {
       cancelled = true;
@@ -2550,10 +2668,6 @@ function App() {
     currentAppVersion,
     isBackendConfigReady,
     isKo,
-    s.linkFailedBody,
-    s.linkFailedTitle,
-    s.linkUnavailableBody,
-    s.linkUnavailableTitle,
   ]);
 
   useEffect(() => {
@@ -4605,48 +4719,46 @@ function App() {
             </>
           ) : (
             <>
-              {tab !== 'hideout' ? (
-                <View style={styles.header}>
-                  <View style={styles.topIdentity}>
-                    {topAvatarUri ? (
-                      <Image source={{ uri: topAvatarUri }} style={styles.headerAvatarLarge} />
-                    ) : (
-                      <View style={styles.headerAvatarFallback}>
-                        <Text style={styles.headerAvatarFallbackText}>
-                          {(profile.name || s.me).slice(0, 1).toUpperCase()}
-                        </Text>
-                      </View>
-                    )}
-                    <View style={styles.topIdentityCopy}>
-                      <Text style={styles.headerName}>{profile.name || s.me}</Text>
-                      <Text style={styles.headerSection}>{currentSectionLabel}</Text>
-                    </View>
-                  </View>
-                  {tab === 'friends' ? (
-                    <Pressable style={styles.iconDark} onPress={openFriendModal}>
-                      <Ionicons name="person-add" size={18} color={FOREST.text} />
-                    </Pressable>
-                  ) : tab === 'chats' ? (
-                    <Pressable style={styles.iconDark} onPress={() => setShowGroupModal(true)}>
-                      <Ionicons name="add" size={20} color={FOREST.text} />
-                    </Pressable>
+              <View style={styles.header}>
+                <View style={styles.topIdentity}>
+                  {topAvatarUri ? (
+                    <Image source={{ uri: topAvatarUri }} style={styles.headerAvatarLarge} />
                   ) : (
-                    <Pressable
-                      style={styles.iconDark}
-                      onPress={() => {
-                        setNameDraft(profile.name);
-                        setStatusDraft(profile.status);
-                        setProfilePhotoDraft(profile.avatarUri);
-                        setShowProfileModal(true);
-                      }}
-                    >
-                      <Ionicons name="create-outline" size={18} color={FOREST.text} />
-                    </Pressable>
+                    <View style={styles.headerAvatarFallback}>
+                      <Text style={styles.headerAvatarFallbackText}>
+                        {(profile.name || s.me).slice(0, 1).toUpperCase()}
+                      </Text>
+                    </View>
                   )}
+                  <View style={styles.topIdentityCopy}>
+                    <Text style={styles.headerName}>{profile.name || s.me}</Text>
+                    <Text style={styles.headerSection}>{currentSectionLabel}</Text>
+                  </View>
                 </View>
-              ) : null}
+                {tab === 'friends' ? (
+                  <Pressable style={styles.iconDark} onPress={openFriendModal}>
+                    <Ionicons name="person-add" size={18} color={FOREST.text} />
+                  </Pressable>
+                ) : tab === 'chats' ? (
+                  <Pressable style={styles.iconDark} onPress={() => setShowGroupModal(true)}>
+                    <Ionicons name="add" size={20} color={FOREST.text} />
+                  </Pressable>
+                ) : (
+                  <Pressable
+                    style={styles.iconDark}
+                    onPress={() => {
+                      setNameDraft(profile.name);
+                      setStatusDraft(profile.status);
+                      setProfilePhotoDraft(profile.avatarUri);
+                      setShowProfileModal(true);
+                    }}
+                  >
+                    <Ionicons name="create-outline" size={18} color={FOREST.text} />
+                  </Pressable>
+                )}
+              </View>
 
-              <View style={[styles.main, tab === 'hideout' && styles.mainHideout]}>
+              <View style={styles.main}>
                 {tab === 'chats' ? (
                   <ScrollView contentContainerStyle={styles.list}>
                     {sortedRooms.length === 0 && visibleBots.length === 0 ? (
@@ -4754,14 +4866,6 @@ function App() {
                   </ScrollView>
                 ) : null}
 
-                {tab === 'hideout' ? (
-                  <HideoutTab
-                    locale={locale}
-                    ownerKey={(currentUserId || profile.email || 'local-user').trim() || 'local-user'}
-                    ownerName={profile.name || s.me}
-                  />
-                ) : null}
-
                 {tab === 'profile' ? (
                   <ScrollView contentContainerStyle={styles.list}>
                     <Pressable style={styles.profileCabinCard} onLongPress={openServerMenu} delayLongPress={900}>
@@ -4793,16 +4897,57 @@ function App() {
                         <Text style={styles.smallBtnText}>{s.profileEdit}</Text>
                       </Pressable>
                     </Pressable>
+                    {canCheckForAppUpdate ? (
+                      <View style={styles.appUpdateCard}>
+                        <Text style={styles.sectionTitle}>{isKo ? '\uC571 \uC5C5\uB370\uC774\uD2B8' : 'App update'}</Text>
+                        <Text style={styles.sub}>{appUpdateSummary}</Text>
+                        <View style={styles.appUpdateMetaRow}>
+                          <Text style={styles.appUpdateMetaLabel}>{isKo ? '\uD604\uC7AC' : 'Current'}</Text>
+                          <Text style={styles.appUpdateMetaValue}>{currentAppVersion}</Text>
+                        </View>
+                        {appUpdateStatus.latestVersion ? (
+                          <View style={styles.appUpdateMetaRow}>
+                            <Text style={styles.appUpdateMetaLabel}>{isKo ? '\uCD5C\uC2E0' : 'Latest'}</Text>
+                            <Text style={styles.appUpdateMetaValue}>{appUpdateStatus.latestVersion}</Text>
+                          </View>
+                        ) : null}
+                        {appUpdateFileSize ? (
+                          <View style={styles.appUpdateMetaRow}>
+                            <Text style={styles.appUpdateMetaLabel}>{isKo ? '\uD30C\uC77C \uD06C\uAE30' : 'File size'}</Text>
+                            <Text style={styles.appUpdateMetaValue}>{appUpdateFileSize}</Text>
+                          </View>
+                        ) : null}
+                        {appUpdateNotes ? (
+                          <View style={styles.appUpdateNotesBlock}>
+                            <Text style={styles.appUpdateMetaLabel}>{isKo ? '\uBC30\uD3EC \uBA54\uBAA8' : 'Release notes'}</Text>
+                            <Text style={styles.appUpdateNotes}>{appUpdateNotes}</Text>
+                          </View>
+                        ) : null}
+                        {appUpdateStatus.needsUpdate ? (
+                          <Text style={styles.appUpdateHint}>
+                            {isKo
+                              ? `\uC9C0\uAE08 \uC5C5\uB370\uC774\uD2B8\uD558\uC9C0 \uC54A\uC73C\uBA74 v${currentAppVersion}\uC5D0 \uB9DE\uB294 \uAD6C\uD615 \uBAA8\uB378\uC744 \uACC4\uC18D \uC0AC\uC6A9\uD574\uC694.`
+                              : `If you stay on v${currentAppVersion}, the app keeps using the older model.`}
+                          </Text>
+                        ) : null}
+                        {appUpdateStatus.needsUpdate ? (
+                          <Pressable
+                            style={[styles.smallBtn, styles.appUpdateButton, isInstallingAppUpdate && styles.off]}
+                            disabled={isInstallingAppUpdate}
+                            onPress={() => {
+                              void startAppUpdateInstall();
+                            }}
+                          >
+                            <Text style={styles.smallBtnText}>{appUpdateButtonLabel}</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    ) : null}
                     <Pressable style={styles.logoutBtn} onPress={requestLogout}>
                       <Ionicons name="log-out-outline" size={16} color="#FFDADD" />
                       <Text style={styles.logoutText}>{s.logout}</Text>
                     </Pressable>
-                    <Pressable style={styles.item} onPress={() => setTab('hideout')}>
-                      <Text style={styles.itemTitle}>{s.goHideout}</Text>
-                      <Text style={styles.sub}>
-                        {isKo ? '내 방으로 들어가 사물을 눌러 기능을 확인해요.' : 'Walk into your room and open features through objects.'}
-                      </Text>
-                    </Pressable>
+                    <Text style={styles.appVersionText}>{`v${currentAppVersion}`}</Text>
                   </ScrollView>
                 ) : null}
               </View>
@@ -4815,10 +4960,6 @@ function App() {
                 <Pressable style={[styles.tab, tab === 'chats' && styles.tabOn]} onPress={() => setTab('chats')}>
                   <Ionicons name="chatbubbles" size={18} color={tab === 'chats' ? FOREST.text : FOREST.textMuted} />
                   <Text style={styles.tabText}>{s.tabsChats}</Text>
-                </Pressable>
-                <Pressable style={[styles.tab, tab === 'hideout' && styles.tabOn]} onPress={() => setTab('hideout')}>
-                  <Ionicons name="home" size={18} color={tab === 'hideout' ? FOREST.text : FOREST.textMuted} />
-                  <Text style={styles.tabText}>{s.tabsHideout}</Text>
                 </Pressable>
                 <Pressable style={[styles.tab, tab === 'profile' && styles.tabOn]} onPress={() => setTab('profile')}>
                   <Ionicons name="person" size={18} color={tab === 'profile' ? FOREST.text : FOREST.textMuted} />
@@ -5399,14 +5540,6 @@ const styles = StyleSheet.create({
     borderColor: FOREST.border,
     gap: 10,
   },
-  mainHideout: {
-    marginTop: 8,
-    padding: 0,
-    backgroundColor: 'transparent',
-    borderWidth: 0,
-    borderColor: 'transparent',
-    overflow: 'hidden',
-  },
   list: { gap: 12, paddingBottom: 18 },
   row: { flexDirection: 'row', gap: 10, alignItems: 'center' },
   sectionTitle: { color: FOREST.text, fontSize: 14, fontWeight: '800', letterSpacing: 0.2 },
@@ -5610,6 +5743,26 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   profileCabinText: { flex: 1, gap: 4 },
+  appUpdateCard: {
+    borderRadius: 20,
+    padding: 14,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+    gap: 10,
+  },
+  appUpdateMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  appUpdateMetaLabel: { color: FOREST.textMuted, fontSize: 12, fontWeight: '700' },
+  appUpdateMetaValue: { color: FOREST.text, fontSize: 12, fontWeight: '700', flexShrink: 1, textAlign: 'right' },
+  appUpdateNotesBlock: { gap: 6 },
+  appUpdateNotes: { color: FOREST.textSoft, fontSize: 12, lineHeight: 18 },
+  appUpdateHint: { color: FOREST.textMuted, fontSize: 11, lineHeight: 17 },
+  appUpdateButton: { marginTop: 2 },
   stat: {
     flex: 1,
     borderRadius: 18,
@@ -5634,6 +5787,14 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   logoutText: { color: '#D05E85', fontSize: 14, fontWeight: '800' },
+  appVersionText: {
+    alignSelf: 'center',
+    marginTop: 2,
+    color: FOREST.textMuted,
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
   tabs: {
     marginHorizontal: 12,
     marginTop: 8,
