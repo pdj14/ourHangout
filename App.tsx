@@ -23,6 +23,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as IntentLauncher from 'expo-intent-launcher';
+import * as MediaLibrary from 'expo-media-library';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
@@ -89,6 +91,7 @@ type Room = {
 type Profile = { name: string; status: string; email: string; avatarUri: string; localeTag: string };
 type DraftMedia = { kind: 'image' | 'video'; uri: string; mimeType: string };
 type MediaViewer = { kind: 'image' | 'video'; uri: string };
+type AvatarViewer = { uri: string; title: string };
 type CropTarget = 'profile' | 'chat';
 type ProfilePhotoCrop = {
   uri: string;
@@ -249,11 +252,46 @@ type PersistedSession = {
   accessToken: string;
   refreshToken?: string;
 };
+type BackendSyncOptions = {
+  strict?: boolean;
+};
+type BackendAppUpdateRelease = {
+  version?: string;
+  notes?: string;
+  fileName?: string;
+  sizeBytes?: number;
+  uploadedAt?: string;
+  publishedAt?: string;
+  downloadUrl?: string;
+  latestDownloadUrl?: string;
+  fileExists?: boolean;
+  isLatest?: boolean;
+};
+type BackendAppUpdateStatus = {
+  currentVersion?: string;
+  latestVersion?: string;
+  isLatest?: boolean;
+  release?: BackendAppUpdateRelease | null;
+};
+type AppUpdateCardState = {
+  checked: boolean;
+  isChecking: boolean;
+  needsUpdate: boolean;
+  latestVersion: string;
+  downloadUrl: string;
+  release: BackendAppUpdateRelease | null;
+  errorMessage: string;
+};
 
 const MY_ID = 'me';
 const URL_REGEX = /https?:\/\/\S+/gi;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const PROFILE_CROP_BOX = 260;
+const PROFILE_PHOTO_MAX_OUTPUT = 2048;
+const DEFAULT_APP_VERSION = '1.0.1';
+const APP_PACKAGE_ID = 'com.ourhangout';
+const APP_UPDATE_APK_MIME_TYPE = 'application/vnd.android.package-archive';
+const INTENT_FLAG_GRANT_READ_URI_PERMISSION = 1;
 
 const normalizeBackendErrorMessage = (message: string, isKo: boolean): string => {
   const normalized = message.trim();
@@ -466,6 +504,167 @@ const buildDevBackendBaseUrl = (prodBaseUrl: string): string => {
     return 'http://wowjini0228.synology.me:7084';
   }
 };
+const getRuntimeAppVersion = (): string => {
+  const constantsAny = Constants as unknown as {
+    expoConfig?: { version?: string };
+    manifest2?: { version?: string };
+    manifest?: { version?: string };
+  };
+
+  return (
+    constantsAny.expoConfig?.version ||
+    constantsAny.manifest2?.version ||
+    constantsAny.manifest?.version ||
+    DEFAULT_APP_VERSION
+  ).trim() || DEFAULT_APP_VERSION;
+};
+const tokenizeVersion = (value: string): Array<number | string> =>
+  value
+    .trim()
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .filter(Boolean)
+    .map((part) => (/^\d+$/.test(part) ? Number(part) : part));
+const compareVersionToken = (left: number | string, right: number | string): number => {
+  if (typeof left === 'number' && typeof right === 'number') {
+    return left === right ? 0 : left > right ? 1 : -1;
+  }
+  if (typeof left === 'number') return 1;
+  if (typeof right === 'number') return -1;
+  const compared = left.localeCompare(right);
+  return compared === 0 ? 0 : compared > 0 ? 1 : -1;
+};
+const compareVersionStrings = (left: string, right: string): number => {
+  const normalizedLeft = tokenizeVersion(left);
+  const normalizedRight = tokenizeVersion(right);
+  const maxLength = Math.max(normalizedLeft.length, normalizedRight.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftToken = normalizedLeft[index] ?? 0;
+    const rightToken = normalizedRight[index] ?? 0;
+    const compared = compareVersionToken(leftToken, rightToken);
+    if (compared !== 0) {
+      return compared;
+    }
+  }
+
+  return 0;
+};
+const formatAppUpdateFileSize = (sizeBytes: number | undefined, isKo: boolean): string => {
+  if (!Number.isFinite(sizeBytes) || !sizeBytes || sizeBytes <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = sizeBytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const digits = value >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${value.toFixed(digits)} ${units[unitIndex]}${isKo ? '' : ''}`;
+};
+const sanitizeAppUpdateVersion = (value: string): string =>
+  value.trim().replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'latest';
+const openUnknownSourcesSettings = async (): Promise<void> => {
+  try {
+    await IntentLauncher.startActivityAsync(IntentLauncher.ActivityAction.MANAGE_UNKNOWN_APP_SOURCES, {
+      data: `package:${APP_PACKAGE_ID}`,
+    });
+  } catch {
+    await Linking.openSettings().catch(() => null);
+  }
+};
+const downloadAndInstallAppUpdate = async (
+  downloadUrl: string,
+  version: string,
+  isKo: boolean
+): Promise<boolean> => {
+  if (Platform.OS !== 'android') {
+    try {
+      const canOpen = await Linking.canOpenURL(downloadUrl);
+      if (!canOpen) {
+        Alert.alert(
+          isKo ? '링크를 열 수 없어요' : 'Cannot open link',
+          isKo ? '이 기기에는 링크를 열 수 있는 앱이 없어요.' : 'No app is available to open the link.'
+        );
+        return false;
+      }
+      await Linking.openURL(downloadUrl);
+      return true;
+    } catch {
+      Alert.alert(
+        isKo ? '열기 실패' : 'Open failed',
+        isKo ? '다운로드 링크를 열지 못했어요.' : 'Could not open the download link.'
+      );
+      return false;
+    }
+  }
+
+  try {
+    const sideLoadingEnabled = await Device.isSideLoadingEnabledAsync();
+    if (!sideLoadingEnabled) {
+      Alert.alert(
+        isKo ? '설치 권한이 필요해요' : 'Install permission required',
+        isKo
+          ? '브라우저 없이 업데이트하려면 이 앱에 "알 수 없는 앱 설치" 권한을 허용해 주세요.'
+          : 'To update without a browser, allow this app to install unknown apps.',
+        [
+          { text: isKo ? '닫기' : 'Close', style: 'cancel' },
+          {
+            text: isKo ? '설정 열기' : 'Open Settings',
+            onPress: () => {
+              void openUnknownSourcesSettings();
+            },
+          },
+        ]
+      );
+      return false;
+    }
+
+    const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+    if (!baseDir) {
+      throw new Error('Missing writable directory.');
+    }
+
+    const targetUri = `${baseDir}ourhangout-update-${sanitizeAppUpdateVersion(version)}.apk`;
+    await FileSystem.deleteAsync(targetUri, { idempotent: true }).catch(() => null);
+
+    const result = await FileSystem.downloadAsync(downloadUrl, targetUri);
+    if (result.status < 200 || result.status >= 300) {
+      throw new Error(`Download failed (${result.status}).`);
+    }
+
+    const contentUri = await FileSystem.getContentUriAsync(result.uri);
+    await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+      data: contentUri,
+      flags: INTENT_FLAG_GRANT_READ_URI_PERMISSION,
+      type: APP_UPDATE_APK_MIME_TYPE,
+    });
+    return true;
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : isKo
+          ? '업데이트 파일을 내려받거나 설치 화면을 열지 못했어요.'
+          : 'Could not download the update or open the installer.';
+    Alert.alert(
+      isKo ? '업데이트 실패' : 'Update failed',
+      normalizeBackendErrorMessage(message, isKo)
+    );
+    return false;
+  }
+};
+const logSessionTrace = (event: string, details?: Record<string, unknown>) => {
+  try {
+    if (details) {
+      console.info(`[session] ${event}`, JSON.stringify(details));
+      return;
+    }
+    console.info(`[session] ${event}`);
+  } catch {
+    console.info(`[session] ${event}`);
+  }
+};
 
 const TEXT = {
   en: {
@@ -475,7 +674,7 @@ const TEXT = {
     google: 'Continue with Google',
     loginSkip: 'Preview demo',
     needsLoginTitle: 'Sign in needed',
-    needsLoginBody: 'This part of the hideout opens after sign-in.',
+    needsLoginBody: 'This part of the app opens after sign-in.',
     loginHintMissing: 'Set app.json extra.googleAuth to enable Google login.',
     loginHintReady: 'Press Google sign-in to continue.',
     loginServerChecking: 'Checking backend connection...',
@@ -530,7 +729,7 @@ const TEXT = {
     friendRequestAcceptedDone: 'Friend request accepted.',
     friendRequestRejectedDone: 'Friend request rejected.',
     friendLoading: 'Loading...',
-    denGreeting: 'Welcome back to the hideout',
+    denGreeting: 'Welcome back',
     denGreetingBody: 'Step away from the noise and settle into moss, lantern light, and easy conversation.',
     denChatsTitle: 'Rooms glowing softly tonight',
     denChatsBody: 'A calm place to pick up the conversations that matter.',
@@ -549,7 +748,7 @@ const TEXT = {
     denRoomDirect: 'A quiet corner for two',
     denRoomGroup: 'A shared fire for the group',
     denChatHint: 'A warm pocket of conversation, ready when you are.',
-    denFriendHint: 'The people who make the hideout feel lived in.',
+    denFriendHint: 'The people who make this place feel lived in.',
     denProfileHint: 'Keep your own little cabin soft, clear, and welcoming.',
     save: 'Save',
     cancel: 'Cancel',
@@ -619,7 +818,7 @@ const TEXT = {
     google: '구글로 계속하기',
     loginSkip: '데모로 둘러보기',
     needsLoginTitle: '로그인이 필요해요',
-    needsLoginBody: '이 공간은 로그인 후 사용할 수 있어요.',
+    needsLoginBody: '이 기능은 로그인 후 사용할 수 있어요.',
     loginHintMissing: 'Google 로그인은 app.json extra.googleAuth 설정이 필요해요.',
     loginHintReady: '구글로 계속하기를 눌러 시작해요.',
     loginServerChecking: '백엔드 연결을 확인 중이에요...',
@@ -674,11 +873,11 @@ const TEXT = {
     friendRequestAcceptedDone: '친구 요청을 수락했어요.',
     friendRequestRejectedDone: '친구 요청을 거절했어요.',
     friendLoading: '불러오는 중...',
-    denGreeting: '숲속 아지트에 다시 왔어요',
+    denGreeting: '다시 왔어요',
     denGreetingBody: '바깥의 소음을 잠시 내려두고, 이끼 냄새와 등불빛 사이에서 천천히 쉬어가요.',
-    denChatsTitle: '오늘의 아지트 대화',
+    denChatsTitle: '오늘의 대화',
     denChatsBody: '중요한 대화를 조용히 이어가는 공간이에요.',
-    denFriendsTitle: '아지트를 함께할 사람들',
+    denFriendsTitle: '함께할 사람들',
     denFriendsBody: '사람을 초대하고, 가까운 사람들을 곁에 두세요.',
     denProfileTitle: '나의 작은 숲 오두막',
     denProfileBody: '내 작은 오두막을 단정하고 따뜻하게 가꿔요.',
@@ -693,7 +892,7 @@ const TEXT = {
     denRoomDirect: '둘만의 조용한 쉼터',
     denRoomGroup: '함께 둘러앉는 숲속 모닥불',
     denChatHint: '천천히 이어가는 대화가 머무는 따뜻한 공간이에요.',
-    denFriendHint: '이 아지트를 함께 채워 줄 사람들을 가까이 두세요.',
+    denFriendHint: '이 공간을 함께 채워 줄 사람들을 가까이 두세요.',
     denProfileHint: '내 오두막의 온도와 분위기를 다듬는 곳이에요.',
     save: '저장',
     cancel: '취소',
@@ -896,6 +1095,11 @@ function App() {
       .process;
     return runtimeProcess?.env ?? {};
   }, []);
+  const currentAppVersion = useMemo(() => getRuntimeAppVersion(), []);
+  const executionEnvironment = (
+    (Constants as unknown as { executionEnvironment?: string }).executionEnvironment || ''
+  ).trim();
+  const canCheckForAppUpdate = Platform.OS === 'android' && executionEnvironment !== 'storeClient';
   const pickValue = (primary?: string, fallback?: string): string =>
     (primary || '').trim() || (fallback || '').trim();
   const g = {
@@ -986,9 +1190,21 @@ function App() {
   const [showRoomTitleModal, setShowRoomTitleModal] = useState(false);
   const [roomTitleDraft, setRoomTitleDraft] = useState('');
   const [mediaViewer, setMediaViewer] = useState<MediaViewer | null>(null);
+  const [avatarViewer, setAvatarViewer] = useState<AvatarViewer | null>(null);
+  const [isSavingMedia, setIsSavingMedia] = useState(false);
   const [roomMenuId, setRoomMenuId] = useState<string | null>(null);
   const [wsRetryTick, setWsRetryTick] = useState(0);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [appUpdateStatus, setAppUpdateStatus] = useState<AppUpdateCardState>({
+    checked: false,
+    isChecking: false,
+    needsUpdate: false,
+    latestVersion: '',
+    downloadUrl: '',
+    release: null,
+    errorMessage: '',
+  });
+  const [isInstallingAppUpdate, setIsInstallingAppUpdate] = useState(false);
   const [directReadCutoffs, setDirectReadCutoffs] = useState<Record<string, number>>({});
 
   const scrollRef = useRef<ScrollView>(null);
@@ -1000,9 +1216,14 @@ function App() {
   const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roomGroupRef = useRef<Record<string, boolean>>({});
   const sendLockRef = useRef(false);
+  const accessTokenRef = useRef('');
+  const refreshTokenRef = useRef('');
+  const refreshRequestRef = useRef<Promise<string> | null>(null);
+  const roomReadCutoffRef = useRef<Record<string, number>>({});
   const pushTokenRef = useRef('');
   const registeredPushTokenRef = useRef('');
   const notificationResponseSubRef = useRef<Notifications.EventSubscription | null>(null);
+  const appUpdateCheckKeyRef = useRef('');
   const backendBaseUrl = normalizeBackendBaseUrl(backendOverrideUrl) || defaultBackendBaseUrl;
   const backendOrigin = useMemo(() => {
     try {
@@ -1011,6 +1232,14 @@ function App() {
       return '';
     }
   }, [backendBaseUrl]);
+  const setSessionTokens = (nextAccessToken: string, nextRefreshToken?: string) => {
+    const normalizedAccessToken = nextAccessToken.trim();
+    const normalizedRefreshToken = (nextRefreshToken || '').trim();
+    accessTokenRef.current = normalizedAccessToken;
+    refreshTokenRef.current = normalizedRefreshToken;
+    setAccessToken(normalizedAccessToken);
+    setRefreshToken(normalizedRefreshToken);
+  };
 
   const resolveBackendUrl = (
     value: string | null | undefined,
@@ -1064,12 +1293,46 @@ function App() {
       .map((m) => getFriend(m)?.name ?? getBot(m)?.name ?? '')
         .filter(Boolean)
         .join(', ');
+  const openAvatarViewer = (uri: string, title: string) => {
+    const normalizedUri = uri.trim();
+    if (!normalizedUri) return;
+    setAvatarViewer({
+      uri: normalizedUri,
+      title: title.trim(),
+    });
+  };
   const openServerMenu = () => {
     setServerMenuDraft(backendBaseUrl);
     setShowServerMenu(true);
   };
   const shouldAutoMarkRoomRead = (roomId: string) =>
     !!roomId && appVisibility === 'active' && activeRoomRef.current === roomId;
+  const latestReadableMessage = (roomMessages?: Message[]): Message | null => {
+    if (!Array.isArray(roomMessages) || roomMessages.length === 0) return null;
+    for (let index = roomMessages.length - 1; index >= 0; index -= 1) {
+      const candidate = roomMessages[index];
+      if (candidate?.id && candidate.kind !== 'system') {
+        return candidate;
+      }
+    }
+    return null;
+  };
+  const latestReadableMessageId = (roomMessages?: Message[]): string => latestReadableMessage(roomMessages)?.id || '';
+  const rememberRoomReadCutoff = (roomId: string, roomMessages?: Message[]) => {
+    if (!roomId) return;
+    const latestMessage = latestReadableMessage(roomMessages);
+    const fallbackUpdatedAt = roomMap.get(roomId)?.updatedAt ?? 0;
+    const nextCutoff = Math.max(latestMessage?.at ?? 0, fallbackUpdatedAt);
+    if (!nextCutoff) return;
+    roomReadCutoffRef.current[roomId] = Math.max(roomReadCutoffRef.current[roomId] ?? 0, nextCutoff);
+  };
+  const shouldSuppressRoomUnread = (roomId: string, unread: number, roomUpdatedAt?: number) => {
+    if (unread <= 0) return false;
+    const cutoff = roomReadCutoffRef.current[roomId] ?? 0;
+    if (!cutoff) return false;
+    const updatedAt = roomUpdatedAt ?? roomMap.get(roomId)?.updatedAt ?? 0;
+    return updatedAt > 0 && updatedAt <= cutoff;
+  };
   const registerHiddenServerMenuTap = () => {
     if (hiddenServerTapTimerRef.current) {
       clearTimeout(hiddenServerTapTimerRef.current);
@@ -1155,6 +1418,47 @@ function App() {
   const knockCount = friendRequestsIncoming.length + friendRequestsOutgoing.length;
   const activeRoomCompanions = activeRoom?.members.filter((m) => m !== currentUserId).length ?? 0;
   const topAvatarUri = tab === 'chats' && activeRoom ? roomAvatarUri(activeRoom) : profile.avatarUri;
+  const currentSectionLabel = tab === 'friends' ? s.tabsFriends : tab === 'chats' ? s.tabsChats : s.tabsProfile;
+  const appUpdateRelease = appUpdateStatus.release;
+  const appUpdateFileSize = formatAppUpdateFileSize(appUpdateRelease?.sizeBytes, isKo);
+  const appUpdateNotes = (appUpdateRelease?.notes || '').trim();
+  const appUpdateSummary = appUpdateStatus.isChecking
+    ? isKo
+      ? '\uCD5C\uC2E0 \uBC84\uC804\uC744 \uD655\uC778 \uC911\uC774\uC5D0\uC694.'
+      : 'Checking for the latest version.'
+    : appUpdateStatus.errorMessage
+      ? appUpdateStatus.errorMessage
+      : appUpdateStatus.needsUpdate
+        ? isKo
+          ? `\uC0C8 \uBC84\uC804 ${appUpdateStatus.latestVersion}\uC774 \uC900\uBE44\uB410\uC5B4\uC694.`
+          : `Version ${appUpdateStatus.latestVersion} is ready.`
+        : appUpdateStatus.checked
+          ? isKo
+            ? '\uD604\uC7AC \uC571\uC740 \uCD5C\uC2E0 \uBC84\uC804\uC744 \uC0AC\uC6A9 \uC911\uC774\uC5D0\uC694.'
+            : 'This device is already on the latest version.'
+          : isKo
+            ? '\uD504\uB85C\uD544 \uD0ED\uC5D0\uC11C \uCD5C\uC2E0 \uBC84\uC804 \uC5EC\uBD80\uB97C \uD655\uC778\uD574\uC694.'
+            : 'The profile tab checks whether a newer version is available.';
+  const appUpdateButtonLabel = isInstallingAppUpdate
+    ? isKo
+      ? '\uC124\uCE58 \uD654\uBA74 \uC5EC\uB294 \uC911...'
+      : 'Opening installer...'
+    : isKo
+      ? '\uCD5C\uC2E0 \uBC84\uC804 \uC5C5\uB370\uC774\uD2B8'
+      : 'Update to latest';
+
+  const startAppUpdateInstall = async () => {
+    if (!appUpdateStatus.needsUpdate) return;
+    if (!appUpdateStatus.downloadUrl || !appUpdateStatus.latestVersion) return;
+    if (isInstallingAppUpdate) return;
+
+    setIsInstallingAppUpdate(true);
+    try {
+      await downloadAndInstallAppUpdate(appUpdateStatus.downloadUrl, appUpdateStatus.latestVersion, isKo);
+    } finally {
+      setIsInstallingAppUpdate(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -1220,13 +1524,20 @@ function App() {
 
   const renderRoomRow = (room: Room) => (
     <Pressable key={room.id} style={styles.roomItem} onPress={() => openRoom(room.id)}>
-      <View style={styles.listAvatar}>
+      <Pressable
+        style={styles.listAvatar}
+        disabled={!roomAvatarUri(room)}
+        onPress={(event) => {
+          event.stopPropagation();
+          openAvatarViewer(roomAvatarUri(room), roomTitle(room));
+        }}
+      >
         {roomAvatarUri(room) ? (
           <Image source={{ uri: roomAvatarUri(room) }} style={styles.listAvatarImage} />
         ) : (
           <Text style={styles.listAvatarText}>{roomTitle(room).slice(0, 1).toUpperCase()}</Text>
         )}
-      </View>
+      </Pressable>
       <View style={styles.roomItemCopy}>
         <View style={styles.roomItemHead}>
           <Text style={[styles.itemTitle, { flex: 1 }]}>{roomTitle(room)}</Text>
@@ -1257,13 +1568,17 @@ function App() {
     const trustedBusy = friendActionKey === `trusted:${friend.id}`;
     return (
       <View key={friend.id} style={styles.friendItem}>
-        <View style={styles.listAvatar}>
+        <Pressable
+          style={styles.listAvatar}
+          disabled={!friend.avatarUri}
+          onPress={() => openAvatarViewer(friend.avatarUri, friend.name)}
+        >
           {friend.avatarUri ? (
             <Image source={{ uri: friend.avatarUri }} style={styles.listAvatarImage} />
           ) : (
             <Text style={styles.listAvatarText}>{friend.name.slice(0, 1).toUpperCase()}</Text>
           )}
-        </View>
+        </Pressable>
         <View style={styles.friendItemCopy}>
           <Text style={styles.itemTitle}>{friend.name}</Text>
           <Text style={styles.friendStatusText} numberOfLines={1}>
@@ -1316,7 +1631,7 @@ function App() {
       if (!token) return;
       void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token)]).catch(() => null);
       if (activeRoomRef.current) {
-        void syncRoomMessagesFromBackend(token, activeRoomRef.current).catch(() => null);
+        void syncRoomReadState(token, activeRoomRef.current, { refreshMessages: true }).catch(() => null);
       }
     });
     return () => sub.remove();
@@ -1332,6 +1647,14 @@ function App() {
     const totalUnread = rooms.reduce((sum, room) => sum + Math.max(0, room.unread), 0);
     void syncAppBadgeCount(totalUnread);
   }, [rooms]);
+
+  useEffect(() => {
+    accessTokenRef.current = accessToken.trim();
+  }, [accessToken]);
+
+  useEffect(() => {
+    refreshTokenRef.current = refreshToken.trim();
+  }, [refreshToken]);
 
   useEffect(() => {
     if (tab !== 'chats') return;
@@ -1350,7 +1673,7 @@ function App() {
     const latest = activeMsgs[activeMsgs.length - 1];
     if (!latest || latest.mine) return;
     if (latest.delivery !== 'read') {
-      void markRoomAsRead(token, activeRoomId, latest.id);
+      void syncRoomReadState(token, activeRoomId).catch(() => null);
     }
   }, [activeRoomId, activeMsgs.length, accessToken, appVisibility]);
 
@@ -1361,11 +1684,7 @@ function App() {
     let cancelled = false;
     const run = async () => {
       try {
-        const synced = await syncRoomMessagesFromBackend(token, activeRoomId);
-        await maybeMarkLatestIncomingMessageRead(token, activeRoomId, synced);
-        if (!cancelled) {
-          await markRoomAsRead(token, activeRoomId);
-        }
+        await syncRoomReadState(token, activeRoomId, { refreshMessages: true });
       } catch {
         if (cancelled) return;
       }
@@ -1403,6 +1722,60 @@ function App() {
     return raw as T;
   };
 
+  const refreshAccessToken = async (preferredRefreshToken?: string): Promise<string> => {
+    const preferred = (preferredRefreshToken || '').trim();
+    const current = refreshTokenRef.current.trim();
+    const tokenToUse = current || preferred;
+    if (!tokenToUse) {
+      throw new Error('missing refresh token');
+    }
+    if (refreshRequestRef.current) {
+      return refreshRequestRef.current;
+    }
+
+    const request = (async () => {
+      const refreshed = await fetch(`${backendBaseUrl}/v1/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: tokenToUse }),
+      });
+      const refreshText = await refreshed.text();
+      let refreshJson: unknown = null;
+      if (refreshText) {
+        try {
+          refreshJson = JSON.parse(refreshText);
+        } catch {
+          refreshJson = {};
+        }
+      }
+      if (!refreshed.ok) {
+        const body = (refreshJson || {}) as BackendEnvelope<unknown>;
+        throw new Error(body.error?.message || body.message || `HTTP ${refreshed.status}`);
+      }
+      const refreshData = unwrapEnvelope<BackendAuthData>(refreshJson || {});
+      const nextAccessToken = (refreshData.accessToken || refreshData.tokens?.accessToken || '').trim();
+      const nextRefreshToken = (refreshData.refreshToken || refreshData.tokens?.refreshToken || tokenToUse).trim();
+      if (!nextAccessToken) {
+        throw new Error('missing access token');
+      }
+      setSessionTokens(nextAccessToken, nextRefreshToken);
+      await writeSessionToStorage({
+        accessToken: nextAccessToken,
+        ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {}),
+      });
+      return nextAccessToken;
+    })();
+
+    refreshRequestRef.current = request;
+    try {
+      return await request;
+    } finally {
+      if (refreshRequestRef.current === request) {
+        refreshRequestRef.current = null;
+      }
+    }
+  };
+
   const backendRequest = async <T,>(
     path: string,
     init?: RequestInit,
@@ -1431,59 +1804,36 @@ function App() {
       return { res, json };
     };
 
-    const shouldAttemptRefresh =
-      normalizedPath !== '/v1/auth/refresh' &&
-      normalizedPath !== '/v1/auth/google' &&
-      normalizedPath !== '/health' &&
-      !!refreshToken.trim();
-
     let resolvedToken = token;
     let response = await perform(resolvedToken);
+    let refreshFailure: Error | null = null;
 
-    if (response.res.status === 401 && shouldAttemptRefresh) {
-      try {
-        const refreshResponse = await perform(undefined);
-        void refreshResponse;
-      } catch {
-        // noop
+    if (
+      response.res.status === 401 &&
+      normalizedPath !== '/v1/auth/refresh' &&
+      normalizedPath !== '/v1/auth/google' &&
+      normalizedPath !== '/health'
+    ) {
+      const currentRefreshToken = refreshTokenRef.current.trim();
+      if (!currentRefreshToken) {
+        const body = (response.json || {}) as BackendEnvelope<unknown>;
+        throw new Error(body.error?.message || body.message || `HTTP ${response.res.status}`);
       }
       try {
-        const refreshed = await fetch(`${backendBaseUrl}/v1/auth/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken: refreshToken.trim() }),
-        });
-        const refreshText = await refreshed.text();
-        let refreshJson: unknown = null;
-        if (refreshText) {
-          try {
-            refreshJson = JSON.parse(refreshText);
-          } catch {
-            refreshJson = {};
-          }
+        const nextAccessToken = await refreshAccessToken(currentRefreshToken);
+        if (nextAccessToken) {
+          resolvedToken = nextAccessToken;
+          response = await perform(resolvedToken);
         }
-        if (refreshed.ok) {
-          const refreshData = unwrapEnvelope<BackendAuthData>(refreshJson || {});
-          const nextAccessToken = (refreshData.accessToken || refreshData.tokens?.accessToken || '').trim();
-          const nextRefreshToken =
-            (refreshData.refreshToken || refreshData.tokens?.refreshToken || refreshToken).trim();
-          if (nextAccessToken) {
-            setAccessToken(nextAccessToken);
-            setRefreshToken(nextRefreshToken);
-            await writeSessionToStorage({
-              accessToken: nextAccessToken,
-              ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {}),
-            });
-            resolvedToken = nextAccessToken;
-            response = await perform(resolvedToken);
-          }
-        }
-      } catch {
-        // Keep the original 401 handling below.
+      } catch (error) {
+        refreshFailure = error instanceof Error ? error : new Error('Refresh failed.');
       }
     }
 
     if (!response.res.ok) {
+      if (refreshFailure) {
+        throw refreshFailure;
+      }
       const body = (response.json || {}) as BackendEnvelope<unknown>;
       throw new Error(body.error?.message || body.message || `HTTP ${response.res.status}`);
     }
@@ -1737,8 +2087,8 @@ function App() {
     }
   };
 
-  const markRoomAsRead = async (token: string, roomId: string, lastReadMessageId?: string) => {
-    if (!token || !roomId) return;
+  const markRoomAsRead = async (token: string, roomId: string, lastReadMessageId?: string): Promise<number | null> => {
+    if (!token || !roomId) return null;
     const result = await backendRequest<BackendRoomRead>(
       `/v1/rooms/${roomId}/read`,
       {
@@ -1753,6 +2103,33 @@ function App() {
     if (activeRoomRef.current === roomId) {
       await syncRoomMessagesFromBackend(token, roomId).catch(() => null);
     }
+    return unread;
+  };
+
+  const syncRoomReadState = async (
+    token: string,
+    roomId: string,
+    options?: { refreshMessages?: boolean }
+  ): Promise<number | null> => {
+    if (!token || !roomId) return null;
+    let roomMessages = messages[roomId] ?? [];
+    if (options?.refreshMessages || roomMessages.length === 0) {
+      const syncedMessages = await syncRoomMessagesFromBackend(token, roomId).catch(() => null);
+      if (syncedMessages) {
+        roomMessages = syncedMessages;
+      }
+    }
+
+    const lastReadMessageId = latestReadableMessageId(roomMessages);
+    const unread = await markRoomAsRead(token, roomId, lastReadMessageId || undefined).catch(() => null);
+    if (unread !== null) {
+      rememberRoomReadCutoff(roomId, roomMessages);
+      const latestMessage = latestReadableMessage(roomMessages);
+      const fallbackUpdatedAt = Math.max(latestMessage?.at ?? 0, roomMap.get(roomId)?.updatedAt ?? 0);
+      const nextUnread = shouldSuppressRoomUnread(roomId, unread, fallbackUpdatedAt) ? 0 : unread;
+      setRooms((prev) => prev.map((room) => (room.id === roomId ? { ...room, unread: nextUnread } : room)));
+    }
+    return unread;
   };
 
   const syncLocaleWithBackend = async (token: string, currentLocale?: string) => {
@@ -1842,13 +2219,19 @@ function App() {
       .sort((a, b) => b.createdAt - a.createdAt);
   };
 
-  const refreshFriendsAndRequests = async (token: string) => {
-    const [backFriendsRaw, requestsRaw] = await Promise.all([
-      backendRequest<BackendFriend[] | BackendListData<BackendFriend>>('/v1/friends', { method: 'GET' }, token).catch(
-        () => null
-      ),
-      backendRequest<BackendFriendRequestList>('/v1/friends/requests', { method: 'GET' }, token).catch(() => null),
-    ]);
+  const refreshFriendsAndRequests = async (token: string, options?: BackendSyncOptions) => {
+    const strict = options?.strict ?? false;
+    const [backFriendsRaw, requestsRaw] = strict
+      ? await Promise.all([
+          backendRequest<BackendFriend[] | BackendListData<BackendFriend>>('/v1/friends', { method: 'GET' }, token),
+          backendRequest<BackendFriendRequestList>('/v1/friends/requests', { method: 'GET' }, token),
+        ])
+      : await Promise.all([
+          backendRequest<BackendFriend[] | BackendListData<BackendFriend>>('/v1/friends', { method: 'GET' }, token).catch(
+            () => null
+          ),
+          backendRequest<BackendFriendRequestList>('/v1/friends/requests', { method: 'GET' }, token).catch(() => null),
+        ]);
 
     if (backFriendsRaw) {
       const backFriends = asListItems<BackendFriend>(backFriendsRaw);
@@ -1890,18 +2273,30 @@ function App() {
     setBots(items);
   };
 
-  const refreshRoomsFromBackend = async (token: string, fallbackUserId?: string): Promise<Room[] | null> => {
-    const backRoomsRaw = await backendRequest<BackendRoom[] | BackendListData<BackendRoom>>(
-      '/v1/rooms',
-      { method: 'GET' },
-      token
-    ).catch(() => null);
+  const refreshRoomsFromBackend = async (
+    token: string,
+    fallbackUserId?: string,
+    options?: BackendSyncOptions
+  ): Promise<Room[] | null> => {
+    const strict = options?.strict ?? false;
+    const backRoomsRaw = strict
+      ? await backendRequest<BackendRoom[] | BackendListData<BackendRoom>>('/v1/rooms', { method: 'GET' }, token)
+      : await backendRequest<BackendRoom[] | BackendListData<BackendRoom>>('/v1/rooms', { method: 'GET' }, token).catch(
+          () => null
+        );
     if (!backRoomsRaw) return null;
     const backRooms = asListItems<BackendRoom>(backRoomsRaw);
     if (!Array.isArray(backRooms)) return null;
     const mapped = backRooms
       .filter((r) => !!r?.id)
-      .map((r) => mapBackendRoom(r, fallbackUserId));
+      .map((r) => {
+        const mappedRoom = mapBackendRoom(r, fallbackUserId);
+        const suppressedUnread =
+          activeRoomRef.current === mappedRoom.id || shouldSuppressRoomUnread(mappedRoom.id, mappedRoom.unread, mappedRoom.updatedAt)
+            ? 0
+            : mappedRoom.unread;
+        return suppressedUnread === mappedRoom.unread ? mappedRoom : { ...mappedRoom, unread: suppressedUnread };
+      });
     setRooms(mapped);
     setMessages((prev) => {
       const next = { ...prev };
@@ -1932,6 +2327,10 @@ function App() {
     token: string,
     fallbackUser?: BackendAuthUser
   ): Promise<{ hasProfileName: boolean }> => {
+    logSessionTrace('sync_initial:start', {
+      hasFallbackUser: !!fallbackUser?.id,
+      tokenLength: token.length,
+    });
     const tokenPayload = decodeJwtPayload(token);
     const me = await backendRequest<BackendProfile>('/v1/me', { method: 'GET' }, token).catch(
       () => null
@@ -1960,9 +2359,18 @@ function App() {
 
     await syncLocaleWithBackend(token, me?.locale);
 
-    await Promise.all([refreshFriendsAndRequests(token), refreshBotsFromBackend(token)]);
+    await Promise.all([refreshFriendsAndRequests(token, { strict: true }), refreshBotsFromBackend(token).catch(() => null)]);
 
-    await refreshRoomsFromBackend(token, nextUserId);
+    const syncedRooms = await refreshRoomsFromBackend(token, nextUserId, { strict: true });
+    if (!syncedRooms) {
+      logSessionTrace('sync_initial:rooms_missing');
+      throw new Error(s.loginBackendSyncFailed);
+    }
+    logSessionTrace('sync_initial:done', {
+      userId: nextUserId,
+      friends: friends.length,
+      rooms: syncedRooms.length,
+    });
     return { hasProfileName: resolvedName.length > 0 };
   };
 
@@ -2037,8 +2445,16 @@ function App() {
           const roomId = typeof payload.data.roomId === 'string' ? payload.data.roomId : '';
           const unread = Number(payload.data.unread ?? Number.NaN);
           if (roomId && Number.isFinite(unread)) {
-            setRooms((prev) => prev.map((room) => (room.id === roomId ? { ...room, unread } : room)));
-            if (unread === 0) {
+            let nextUnread = unread;
+            setRooms((prev) =>
+              prev.map((room) => {
+                if (room.id !== roomId) return room;
+                nextUnread =
+                  activeRoomRef.current === roomId || shouldSuppressRoomUnread(roomId, unread, room.updatedAt) ? 0 : unread;
+                return room.unread === nextUnread ? room : { ...room, unread: nextUnread };
+              })
+            );
+            if (nextUnread === 0) {
               void dismissPresentedNotificationsForRoom(roomId).catch(() => null);
             }
           }
@@ -2153,16 +2569,22 @@ function App() {
     const run = async () => {
       setBackendState('checking');
       setBackendStateMsg('');
+      logSessionTrace('health:start', { backendBaseUrl });
       try {
         await backendRequest('/health', { method: 'GET' });
         if (cancelled) return;
         setBackendState('ready');
         setBackendStateMsg(s.loginServerReady);
+        logSessionTrace('health:ready', { backendBaseUrl });
       } catch (err) {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : '';
         setBackendState('error');
         setBackendStateMsg(msg ? `${s.loginServerError} (${msg})` : s.loginServerError);
+        logSessionTrace('health:error', {
+          backendBaseUrl,
+          message: msg || s.loginServerError,
+        });
         if (!sessionRestoreStartedRef.current) {
           setIsSessionRestoring(false);
         }
@@ -2177,6 +2599,80 @@ function App() {
   useEffect(() => {
     if (!isBackendConfigReady) return;
     if (backendState !== 'ready') return;
+    if (!canCheckForAppUpdate) return;
+
+    const checkKey = `${backendBaseUrl}|${currentAppVersion}`;
+    if (appUpdateCheckKeyRef.current === checkKey) return;
+    appUpdateCheckKeyRef.current = checkKey;
+
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const params = new URLSearchParams({ currentVersion: currentAppVersion });
+        const data = await backendRequest<BackendAppUpdateStatus>(
+          `/v1/app-updates/latest?${params.toString()}`,
+          { method: 'GET' }
+        );
+        if (cancelled) return;
+
+        const release = data.release ?? null;
+        const latestVersion = (data.latestVersion || release?.version || '').trim();
+        const downloadUrl = (release?.latestDownloadUrl || release?.downloadUrl || '').trim();
+        const needsUpdate =
+          !!release &&
+          !!downloadUrl &&
+          !!latestVersion &&
+          (data.isLatest === false || compareVersionStrings(currentAppVersion, latestVersion) < 0);
+
+        setAppUpdateStatus({
+          checked: true,
+          isChecking: false,
+          needsUpdate,
+          latestVersion,
+          downloadUrl: needsUpdate ? downloadUrl : '',
+          release,
+          errorMessage: '',
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'unknown';
+        console.info('[app-update] latest check skipped:', message);
+        if (cancelled) return;
+        setAppUpdateStatus({
+          checked: true,
+          isChecking: false,
+          needsUpdate: false,
+          latestVersion: '',
+          downloadUrl: '',
+          release: null,
+          errorMessage: isKo
+            ? '\uC9C0\uAE08\uC740 \uCD5C\uC2E0 \uBC84\uC804\uC744 \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC5B4\uC694.'
+            : 'Could not check for updates right now.',
+        });
+      }
+    };
+
+    setAppUpdateStatus((prev) => ({
+      ...prev,
+      isChecking: true,
+      errorMessage: '',
+    }));
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    appUpdateCheckKeyRef,
+    backendBaseUrl,
+    backendState,
+    canCheckForAppUpdate,
+    currentAppVersion,
+    isBackendConfigReady,
+    isKo,
+  ]);
+
+  useEffect(() => {
+    if (!isBackendConfigReady) return;
+    if (backendState !== 'ready') return;
     if (sessionRestoreStartedRef.current) return;
     sessionRestoreStartedRef.current = true;
     let cancelled = false;
@@ -2184,42 +2680,133 @@ function App() {
     const run = async () => {
       try {
         const stored = await readSessionFromStorage();
-        if (!stored?.accessToken) return;
+        logSessionTrace('restore:storage_read', {
+          hasAccessToken: !!stored?.accessToken,
+          hasRefreshToken: !!stored?.refreshToken,
+        });
+        if (!stored?.accessToken) {
+          logSessionTrace('restore:no_session');
+          return;
+        }
 
         const applySession = async (nextAccessToken: string, nextRefreshToken?: string, user?: BackendAuthUser) => {
-          setAccessToken(nextAccessToken);
-          setRefreshToken((nextRefreshToken || '').trim());
+          logSessionTrace('restore:apply_session', {
+            accessTokenLength: nextAccessToken.length,
+            hasRefreshToken: !!(nextRefreshToken || '').trim(),
+            hasUser: !!user?.id,
+          });
+          setSessionTokens(nextAccessToken, nextRefreshToken);
+          setLoginErr('');
           await syncInitialFromBackend(nextAccessToken, user);
           if (cancelled) return;
+          logSessionTrace('restore:apply_session_done');
           setStage('app');
         };
 
         try {
           await applySession(stored.accessToken, stored.refreshToken);
           return;
-        } catch {
-          const storedRefreshToken = (stored.refreshToken || '').trim();
-          if (!storedRefreshToken) throw new Error('missing refresh token');
-          const refreshed = await backendRequest<BackendAuthData>('/v1/auth/refresh', {
-            method: 'POST',
-            body: JSON.stringify({ refreshToken: storedRefreshToken }),
+        } catch (initialError) {
+          logSessionTrace('restore:initial_failed', {
+            message: initialError instanceof Error ? initialError.message : '',
           });
+          const storedRefreshToken = (stored.refreshToken || '').trim();
+          const latestAccessToken = accessTokenRef.current.trim();
+          const latestRefreshToken = refreshTokenRef.current.trim();
+
+          if (storedRefreshToken && latestRefreshToken && latestRefreshToken !== storedRefreshToken && latestAccessToken) {
+            try {
+              logSessionTrace('restore:retry_after_internal_refresh', {
+                accessTokenLength: latestAccessToken.length,
+                hasRefreshToken: !!latestRefreshToken,
+              });
+              await applySession(latestAccessToken, latestRefreshToken);
+              return;
+            } catch (retryError) {
+              const msg = retryError instanceof Error ? retryError.message : '';
+              logSessionTrace('restore:retry_after_internal_refresh_failed', {
+                message: msg || s.loginBackendSyncFailed,
+              });
+            }
+          }
+
+          if (!storedRefreshToken) {
+            setSessionTokens('', '');
+            await clearSessionInStorage();
+            const msg = initialError instanceof Error ? initialError.message : '';
+            logSessionTrace('restore:cleared_missing_refresh', {
+              message: msg,
+            });
+            if (!cancelled && msg) {
+              setLoginErr(normalizeBackendErrorMessage(msg, isKo));
+            }
+            return;
+          }
+
+          let refreshed: BackendAuthData;
+          try {
+            logSessionTrace('restore:refresh_start');
+            const nextAccessToken = await refreshAccessToken(storedRefreshToken);
+            refreshed = {
+              accessToken: nextAccessToken,
+              refreshToken: refreshTokenRef.current.trim(),
+            };
+          } catch (refreshError) {
+            setSessionTokens('', '');
+            await clearSessionInStorage();
+            const msg = refreshError instanceof Error ? refreshError.message : '';
+            logSessionTrace('restore:refresh_failed', {
+              message: msg,
+            });
+            if (!cancelled && msg) {
+              setLoginErr(normalizeBackendErrorMessage(msg, isKo));
+            }
+            return;
+          }
+
           const nextAccessToken = (refreshed.accessToken || refreshed.tokens?.accessToken || '').trim();
           const nextRefreshToken =
             (refreshed.refreshToken || refreshed.tokens?.refreshToken || storedRefreshToken).trim();
-          if (!nextAccessToken) throw new Error('missing access token');
+          logSessionTrace('restore:refresh_done', {
+            hasAccessToken: !!nextAccessToken,
+            hasRefreshToken: !!nextRefreshToken,
+            hasUser: !!refreshed.user?.id,
+          });
+          if (!nextAccessToken) {
+            setSessionTokens('', '');
+            await clearSessionInStorage();
+            logSessionTrace('restore:cleared_missing_access_after_refresh');
+            if (!cancelled) {
+              setLoginErr(s.loginBackendSyncFailed);
+            }
+            return;
+          }
+
           await writeSessionToStorage({
             accessToken: nextAccessToken,
             ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {})
           });
-          await applySession(nextAccessToken, nextRefreshToken, refreshed.user);
+
+          try {
+            await applySession(nextAccessToken, nextRefreshToken);
+          } catch (retryError) {
+            setSessionTokens('', '');
+            const msg = retryError instanceof Error ? retryError.message : '';
+            logSessionTrace('restore:retry_failed', {
+              message: msg || s.loginBackendSyncFailed,
+            });
+            if (!cancelled) {
+              setLoginErr(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+            }
+          }
         }
       } catch {
         if (cancelled) return;
-        setAccessToken('');
-        setRefreshToken('');
+        logSessionTrace('restore:unexpected_failure');
+        setSessionTokens('', '');
         await clearSessionInStorage();
       } finally {
+        logSessionTrace('restore:finished');
         if (!cancelled) setIsSessionRestoring(false);
       }
     };
@@ -2228,7 +2815,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [backendState, isBackendConfigReady]);
+  }, [backendState, isBackendConfigReady, isKo, s.loginBackendSyncFailed]);
 
   useEffect(() => {
     if (isSessionRestoring) return;
@@ -2271,7 +2858,7 @@ function App() {
     } = {
       device: {
         platform: Platform.OS,
-        appVersion: Constants.expoConfig?.version || '1.0.0',
+        appVersion: currentAppVersion,
         deviceId: String(Constants.deviceName || Constants.sessionId || 'unknown'),
       },
     };
@@ -2306,19 +2893,7 @@ function App() {
   };
 
   const normalizeImageForCrop = async (uri: string) => {
-    try {
-      const normalized = await ImageManipulator.manipulateAsync(
-        uri,
-        [{ rotate: 0 }],
-        {
-          compress: 1,
-          format: ImageManipulator.SaveFormat.JPEG,
-        }
-      );
-      return normalized.uri || uri;
-    } catch {
-      return uri;
-    }
+    return uri;
   };
 
   const beginPinch = (crop: ProfilePhotoCrop, touches: TouchPoint[]) => {
@@ -2496,19 +3071,19 @@ function App() {
     setRooms((p) => p.map((r) => (r.id === rid ? { ...r, unread: 0 } : r)));
     void dismissPresentedNotificationsForRoom(rid).catch(() => null);
     const token = accessToken.trim();
-    if (token && appVisibility === 'active') {
-      void markRoomAsRead(token, rid).catch(() => null);
+    if (token) {
+      void syncRoomReadState(token, rid, { refreshMessages: true }).catch(() => null);
     }
   };
   const closeActiveRoom = async () => {
     const rid = activeRoomRef.current;
-    activeRoomRef.current = null;
     foregroundNotificationRoomId = '';
     const token = accessToken.trim();
-    if (rid && token && appVisibility === 'active') {
-      await markRoomAsRead(token, rid).catch(() => null);
+    if (rid && token) {
+      await syncRoomReadState(token, rid, { refreshMessages: true }).catch(() => null);
       await refreshRoomsFromBackend(token).catch(() => null);
     }
+    activeRoomRef.current = null;
     setActiveRoomId(null);
   };
 
@@ -2858,7 +3433,11 @@ function App() {
       });
       return;
     }
-    await openImageCrop(asset.uri, 'chat');
+    setDraftMedia({
+      kind: 'image',
+      uri: asset.uri,
+      mimeType: inferMediaMimeType(asset.uri, 'image', asset.mimeType),
+    });
   };
 
   const openMediaExternally = async (uri: string) => {
@@ -2872,6 +3451,68 @@ function App() {
       await Linking.openURL(uri);
     } catch {
       Alert.alert(s.linkFailedTitle, s.linkFailedBody);
+    }
+  };
+
+  const mediaSaveLabels = {
+    action: isKo ? '\uAE30\uAE30\uC5D0 \uC800\uC7A5' : 'Save to device',
+    permissionTitle: isKo ? '\uAD8C\uD55C\uC774 \uD544\uC694\uD574\uC694' : 'Permission required',
+    permissionBody: isKo
+      ? '\uC0AC\uC9C4\uACFC \uB3D9\uC601\uC0C1\uC744 \uC800\uC7A5\uD558\uB824\uBA74 \uBBF8\uB514\uC5B4 \uC811\uADFC \uAD8C\uD55C\uC744 \uD5C8\uC6A9\uD574 \uC8FC\uC138\uC694.'
+      : 'Allow photo library access to save images and videos.',
+    done: isKo ? '\uAE30\uAE30\uC5D0 \uC800\uC7A5\uD588\uC5B4\uC694.' : 'Saved to device.',
+    failed: isKo ? '\uBBF8\uB514\uC5B4\uB97C \uC800\uC7A5\uD558\uC9C0 \uBABB\uD588\uC5B4\uC694.' : 'Could not save media.',
+  };
+
+  const guessMediaExtension = (uri: string, kind: 'image' | 'video') => {
+    const normalized = uri.split('?')[0].toLowerCase();
+    const match = normalized.match(/\.([a-z0-9]{2,5})$/i);
+    if (match?.[1]) return match[1];
+    return kind === 'image' ? 'jpg' : 'mp4';
+  };
+
+  const saveMediaToDevice = async (media: MediaViewer) => {
+    if (isSavingMedia || !media.uri) return;
+
+    const existingPermission = await MediaLibrary.getPermissionsAsync().catch(() => null);
+    let status = existingPermission?.status ?? 'undetermined';
+    if (status !== 'granted') {
+      const requested = await MediaLibrary.requestPermissionsAsync().catch(() => null);
+      status = requested?.status ?? 'denied';
+    }
+    if (status !== 'granted') {
+      Alert.alert(mediaSaveLabels.permissionTitle, mediaSaveLabels.permissionBody);
+      return;
+    }
+
+    setIsSavingMedia(true);
+    let downloadedUri = '';
+    try {
+      let localUri = media.uri;
+      if (!/^file:\/\//i.test(localUri)) {
+        const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+        if (!baseDir) {
+          throw new Error('Missing writable directory.');
+        }
+        const ext = guessMediaExtension(localUri, media.kind);
+        const targetUri = `${baseDir}ourhangout-${Date.now()}.${ext}`;
+        const result = await FileSystem.downloadAsync(localUri, targetUri);
+        if (result.status < 200 || result.status >= 300) {
+          throw new Error(`Download failed (${result.status}).`);
+        }
+        downloadedUri = result.uri;
+        localUri = result.uri;
+      }
+
+      await MediaLibrary.saveToLibraryAsync(localUri);
+      Alert.alert(mediaSaveLabels.done);
+    } catch {
+      Alert.alert(mediaSaveLabels.failed);
+    } finally {
+      if (downloadedUri) {
+        await FileSystem.deleteAsync(downloadedUri, { idempotent: true }).catch(() => null);
+      }
+      setIsSavingMedia(false);
     }
   };
 
@@ -2889,7 +3530,7 @@ function App() {
       const r = await ImagePicker.launchCameraAsync({
         mediaTypes: [kind === 'image' ? 'images' : 'videos'],
         allowsEditing: false,
-        quality: 0.9,
+        quality: 1,
         videoMaxDuration: 120,
       });
       if (r.canceled || !r.assets.length) return;
@@ -2923,7 +3564,7 @@ function App() {
         mediaTypes: [kind === 'image' ? 'images' : 'videos'],
         allowsEditing: false,
         legacy: Platform.OS === 'android',
-        quality: 0.9,
+        quality: 1,
         videoMaxDuration: 120,
       });
       if (r.canceled || !r.assets.length) return;
@@ -3026,7 +3667,7 @@ function App() {
         mediaTypes: ['images'],
         allowsEditing: false,
         legacy: Platform.OS === 'android',
-        quality: 0.9,
+        quality: 1,
       });
       if (r.canceled || !r.assets.length || !r.assets[0].uri) return;
       await openImageCrop(r.assets[0].uri, 'profile');
@@ -3071,9 +3712,15 @@ function App() {
         accessToken: nextAccessToken,
         ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {})
       });
-      setAccessToken(nextAccessToken);
-      setRefreshToken(nextRefreshToken);
-      await syncInitialFromBackend(nextAccessToken, authData.user);
+      setSessionTokens(nextAccessToken, nextRefreshToken);
+      try {
+        await syncInitialFromBackend(nextAccessToken, authData.user);
+      } catch (syncError) {
+        setSessionTokens('', '');
+        const msg = syncError instanceof Error ? syncError.message : '';
+        setLoginErr(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+        return;
+      }
       setStage('app');
     } catch (err) {
       if (isErrorWithCode(err)) {
@@ -3202,29 +3849,33 @@ function App() {
     setIsApplyingPhoto(true);
     try {
       const viewport = cropViewportLayoutRef.current;
-      const renderWidth = Math.max(1, Math.round(crop.renderWidth));
-      const renderHeight = Math.max(1, Math.round(crop.renderHeight));
-      const resized = await ImageManipulator.manipulateAsync(
-        crop.uri,
-        [{ resize: { width: renderWidth, height: renderHeight } }],
-        { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
-      );
-
       const viewportW = Math.max(1, Math.round(viewport.width));
       const viewportH = Math.max(1, Math.round(viewport.height));
-      const side = Math.max(1, Math.min(viewportW, viewportH, renderWidth, renderHeight));
-      const maxOriginX = Math.max(0, renderWidth - side);
-      const maxOriginY = Math.max(0, renderHeight - side);
-      const originX = clamp(Math.round(-crop.offsetX), 0, maxOriginX);
-      const originY = clamp(Math.round(-crop.offsetY), 0, maxOriginY);
+      const viewportSide = Math.max(1, Math.min(viewportW, viewportH));
+      const cropSide = Math.max(
+        1,
+        Math.min(
+          Math.round(viewportSide / crop.scale),
+          Math.round(crop.imageWidth),
+          Math.round(crop.imageHeight)
+        )
+      );
+      const maxOriginX = Math.max(0, Math.round(crop.imageWidth) - cropSide);
+      const maxOriginY = Math.max(0, Math.round(crop.imageHeight) - cropSide);
+      const originX = clamp(Math.round(-crop.offsetX / crop.scale), 0, maxOriginX);
+      const originY = clamp(Math.round(-crop.offsetY / crop.scale), 0, maxOriginY);
+      const profileOutputSize = Math.max(1, Math.min(PROFILE_PHOTO_MAX_OUTPUT, cropSide));
+      const actions: ImageManipulator.Action[] = [
+        { crop: { originX, originY, width: cropSide, height: cropSide } },
+      ];
+      if (cropTarget !== 'chat' && cropSide > profileOutputSize) {
+        actions.push({ resize: { width: profileOutputSize, height: profileOutputSize } });
+      }
       const out = await ImageManipulator.manipulateAsync(
-        resized.uri,
-        [
-          { crop: { originX, originY, width: side, height: side } },
-          { resize: { width: 640, height: 640 } },
-        ],
+        crop.uri,
+        actions,
         {
-          compress: 0.9,
+          compress: 1,
           format: ImageManipulator.SaveFormat.JPEG,
         }
       );
@@ -3616,8 +4267,8 @@ function App() {
   };
 
   const resetForLogout = () => {
-    setAccessToken('');
-    setRefreshToken('');
+    setSessionTokens('', '');
+    roomReadCutoffRef.current = {};
     pushTokenRef.current = '';
     registeredPushTokenRef.current = '';
     setCurrentUserId(MY_ID);
@@ -3644,6 +4295,7 @@ function App() {
     setIsFriendSyncing(false);
     setInput('');
     setDraftMedia(null);
+    setAvatarViewer(null);
     setShowProfileModal(false);
     setShowFriendModal(false);
     setShowGroupModal(false);
@@ -3655,6 +4307,12 @@ function App() {
     const normalized = normalizeBackendBaseUrl(nextUrl);
     if (!normalized) {
       Alert.alert(isKo ? '서버 주소를 입력해 주세요.' : 'Enter a server URL.');
+      return;
+    }
+
+    if (normalized === backendBaseUrl) {
+      setShowServerMenu(false);
+      setServerMenuDraft(normalized);
       return;
     }
 
@@ -3880,7 +4538,9 @@ function App() {
                   <Ionicons name="chevron-back" size={18} color={FOREST.text} />
                 </Pressable>
                 {roomAvatarUri(activeRoom) ? (
-                  <Image source={{ uri: roomAvatarUri(activeRoom) }} style={styles.headerAvatar} />
+                  <Pressable onPress={() => openAvatarViewer(roomAvatarUri(activeRoom), roomTitle(activeRoom))}>
+                    <Image source={{ uri: roomAvatarUri(activeRoom) }} style={styles.headerAvatar} />
+                  </Pressable>
                 ) : (
                   <View style={[styles.headerAvatar, styles.headerAvatarFallbackSmall]}>
                     <Text style={styles.headerAvatarSmallText}>{roomTitle(activeRoom).slice(0, 1).toUpperCase()}</Text>
@@ -3927,7 +4587,11 @@ function App() {
                             ]}
                           >
                             {!m.mine && m.kind !== 'system' ? (
-                              <View style={styles.messageAvatarDock}>
+                              <Pressable
+                                style={styles.messageAvatarDock}
+                                disabled={!messageAvatarUri(m)}
+                                onPress={() => openAvatarViewer(messageAvatarUri(m), m.senderName)}
+                              >
                                 {messageAvatarUri(m) ? (
                                   <Image source={{ uri: messageAvatarUri(m) }} style={styles.messageAvatar} />
                                 ) : (
@@ -3937,7 +4601,7 @@ function App() {
                                     </Text>
                                   </View>
                                 )}
-                              </View>
+                              </Pressable>
                             ) : null}
                             {!m.mine && m.kind !== 'system' ? (
                               <Text style={styles.roomSender}>{m.senderName}</Text>
@@ -4068,9 +4732,7 @@ function App() {
                   )}
                   <View style={styles.topIdentityCopy}>
                     <Text style={styles.headerName}>{profile.name || s.me}</Text>
-                    <Text style={styles.headerSection}>
-                      {tab === 'friends' ? s.tabsFriends : tab === 'chats' ? s.tabsChats : s.tabsProfile}
-                    </Text>
+                    <Text style={styles.headerSection}>{currentSectionLabel}</Text>
                   </View>
                 </View>
                 {tab === 'friends' ? (
@@ -4235,10 +4897,57 @@ function App() {
                         <Text style={styles.smallBtnText}>{s.profileEdit}</Text>
                       </Pressable>
                     </Pressable>
+                    {canCheckForAppUpdate ? (
+                      <View style={styles.appUpdateCard}>
+                        <Text style={styles.sectionTitle}>{isKo ? '\uC571 \uC5C5\uB370\uC774\uD2B8' : 'App update'}</Text>
+                        <Text style={styles.sub}>{appUpdateSummary}</Text>
+                        <View style={styles.appUpdateMetaRow}>
+                          <Text style={styles.appUpdateMetaLabel}>{isKo ? '\uD604\uC7AC' : 'Current'}</Text>
+                          <Text style={styles.appUpdateMetaValue}>{currentAppVersion}</Text>
+                        </View>
+                        {appUpdateStatus.latestVersion ? (
+                          <View style={styles.appUpdateMetaRow}>
+                            <Text style={styles.appUpdateMetaLabel}>{isKo ? '\uCD5C\uC2E0' : 'Latest'}</Text>
+                            <Text style={styles.appUpdateMetaValue}>{appUpdateStatus.latestVersion}</Text>
+                          </View>
+                        ) : null}
+                        {appUpdateFileSize ? (
+                          <View style={styles.appUpdateMetaRow}>
+                            <Text style={styles.appUpdateMetaLabel}>{isKo ? '\uD30C\uC77C \uD06C\uAE30' : 'File size'}</Text>
+                            <Text style={styles.appUpdateMetaValue}>{appUpdateFileSize}</Text>
+                          </View>
+                        ) : null}
+                        {appUpdateNotes ? (
+                          <View style={styles.appUpdateNotesBlock}>
+                            <Text style={styles.appUpdateMetaLabel}>{isKo ? '\uBC30\uD3EC \uBA54\uBAA8' : 'Release notes'}</Text>
+                            <Text style={styles.appUpdateNotes}>{appUpdateNotes}</Text>
+                          </View>
+                        ) : null}
+                        {appUpdateStatus.needsUpdate ? (
+                          <Text style={styles.appUpdateHint}>
+                            {isKo
+                              ? `\uC9C0\uAE08 \uC5C5\uB370\uC774\uD2B8\uD558\uC9C0 \uC54A\uC73C\uBA74 v${currentAppVersion}\uC5D0 \uB9DE\uB294 \uAD6C\uD615 \uBAA8\uB378\uC744 \uACC4\uC18D \uC0AC\uC6A9\uD574\uC694.`
+                              : `If you stay on v${currentAppVersion}, the app keeps using the older model.`}
+                          </Text>
+                        ) : null}
+                        {appUpdateStatus.needsUpdate ? (
+                          <Pressable
+                            style={[styles.smallBtn, styles.appUpdateButton, isInstallingAppUpdate && styles.off]}
+                            disabled={isInstallingAppUpdate}
+                            onPress={() => {
+                              void startAppUpdateInstall();
+                            }}
+                          >
+                            <Text style={styles.smallBtnText}>{appUpdateButtonLabel}</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    ) : null}
                     <Pressable style={styles.logoutBtn} onPress={requestLogout}>
                       <Ionicons name="log-out-outline" size={16} color="#FFDADD" />
                       <Text style={styles.logoutText}>{s.logout}</Text>
                     </Pressable>
+                    <Text style={styles.appVersionText}>{`v${currentAppVersion}`}</Text>
                   </ScrollView>
                 ) : null}
               </View>
@@ -4524,6 +5233,30 @@ function App() {
         </Modal>
 
         <Modal
+          visible={!!avatarViewer}
+          transparent
+          animationType="fade"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={() => setAvatarViewer(null)}
+        >
+          <View style={styles.viewerOverlay}>
+            <Pressable style={styles.backdrop} onPress={() => setAvatarViewer(null)} />
+            <View style={styles.viewerStage}>
+              {avatarViewer?.title ? <Text style={styles.avatarViewerTitle}>{avatarViewer.title}</Text> : null}
+              {avatarViewer ? (
+                <Image source={{ uri: avatarViewer.uri }} style={styles.avatarViewerMedia} resizeMode="contain" />
+              ) : null}
+              <View style={styles.viewerActions}>
+                <Pressable style={styles.smallBtn} onPress={() => setAvatarViewer(null)}>
+                  <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
           visible={!!mediaViewer}
           transparent
           animationType="fade"
@@ -4543,6 +5276,23 @@ function App() {
                 <Pressable style={styles.smallBtn} onPress={() => setMediaViewer(null)}>
                   <Text style={styles.smallBtnText}>{s.cancel}</Text>
                 </Pressable>
+                {mediaViewer ? (
+                  <Pressable
+                    style={[styles.smallBtn, isSavingMedia && styles.off]}
+                    disabled={isSavingMedia}
+                    onPress={() => void saveMediaToDevice(mediaViewer)}
+                  >
+                    <Text style={styles.smallBtnText}>
+                      {isSavingMedia
+                        ? isKo
+                          ? '\uC800\uC7A5 \uC911...'
+                          : 'Saving...'
+                        : isKo
+                          ? '\uAE30\uAE30\uC5D0 \uC800\uC7A5'
+                          : 'Save to device'}
+                    </Text>
+                  </Pressable>
+                ) : null}
                 {mediaViewer ? (
                   <Pressable style={styles.smallBtn} onPress={() => void openMediaExternally(mediaViewer.uri)}>
                     <Text style={styles.smallBtnText}>{isKo ? '다른 앱으로 열기' : 'Open Externally'}</Text>
@@ -4993,6 +5743,26 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   profileCabinText: { flex: 1, gap: 4 },
+  appUpdateCard: {
+    borderRadius: 20,
+    padding: 14,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+    gap: 10,
+  },
+  appUpdateMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  appUpdateMetaLabel: { color: FOREST.textMuted, fontSize: 12, fontWeight: '700' },
+  appUpdateMetaValue: { color: FOREST.text, fontSize: 12, fontWeight: '700', flexShrink: 1, textAlign: 'right' },
+  appUpdateNotesBlock: { gap: 6 },
+  appUpdateNotes: { color: FOREST.textSoft, fontSize: 12, lineHeight: 18 },
+  appUpdateHint: { color: FOREST.textMuted, fontSize: 11, lineHeight: 17 },
+  appUpdateButton: { marginTop: 2 },
   stat: {
     flex: 1,
     borderRadius: 18,
@@ -5017,6 +5787,14 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   logoutText: { color: '#D05E85', fontSize: 14, fontWeight: '800' },
+  appVersionText: {
+    alignSelf: 'center',
+    marginTop: 2,
+    color: FOREST.textMuted,
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
   tabs: {
     marginHorizontal: 12,
     marginTop: 8,
@@ -5146,10 +5924,22 @@ const styles = StyleSheet.create({
     gap: 12,
     alignItems: 'center',
   },
+  avatarViewerTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
   viewerMedia: {
     width: '100%',
     height: 520,
     borderRadius: 18,
+    backgroundColor: 'rgba(11,25,16,0.92)',
+  },
+  avatarViewerMedia: {
+    width: '100%',
+    height: 420,
+    borderRadius: 24,
     backgroundColor: 'rgba(11,25,16,0.92)',
   },
   viewerPlaceholder: {

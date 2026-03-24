@@ -1,0 +1,92 @@
+<svg width="1600" height="1200" viewBox="0 0 1600 1200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="1200" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EFF6FF"/>
+      <stop offset="1" stop-color="#FFF6F0"/>
+    </linearGradient>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="760" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF9EF"/>
+      <stop offset="1" stop-color="#F6EEDC"/>
+    </linearGradient>
+    <linearGradient id="floor" x1="200" y1="760" x2="1320" y2="1120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E5C29C"/>
+      <stop offset="1" stop-color="#C89261"/>
+    </linearGradient>
+    <filter id="shadow" x="0" y="0" width="1600" height="1200" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="8"/>
+      <feGaussianBlur stdDeviation="14"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.24 0 0 0 0 0.19 0 0 0 0 0.15 0 0 0 0.16 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_0_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_0_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="1200" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1600" height="760" fill="url(#wall)"/>
+  <path d="M0 760H1600V1200H0V760Z" fill="url(#floor)"/>
+  <path d="M0 760C300 710 612 698 936 708C1182 716 1406 742 1600 792V1200H0V760Z" fill="#D5AC80"/>
+
+  <rect x="68" y="58" width="1464" height="74" rx="28" fill="#FFFFFF" fill-opacity="0.7"/>
+  <text x="126" y="106" fill="#6E7B87" font-size="24" font-weight="700" font-family="Segoe UI, Arial, sans-serif" letter-spacing="4">EDIT MODE</text>
+  <text x="800" y="106" text-anchor="middle" fill="#233445" font-size="34" font-weight="700" font-family="Georgia, Times New Roman, serif">아지트 꾸미기</text>
+  <rect x="1324" y="76" width="110" height="40" rx="18" fill="#243748"/>
+  <text x="1379" y="102" text-anchor="middle" fill="#FFFFFF" font-size="18" font-weight="700" font-family="Segoe UI, Arial, sans-serif">저장</text>
+
+  <g filter="url(#shadow)">
+    <rect x="214" y="462" width="388" height="248" rx="24" fill="#FFFDF9"/>
+    <rect x="236" y="496" width="344" height="94" rx="20" fill="#FAF7EF"/>
+    <rect x="228" y="582" width="360" height="92" rx="18" fill="#E6BA46"/>
+    <rect x="304" y="450" width="194" height="60" rx="18" fill="#FFFDFB"/>
+  </g>
+
+  <rect x="214" y="462" width="388" height="248" rx="26" fill="none" stroke="#6F84FF" stroke-width="8" stroke-dasharray="18 14"/>
+  <circle cx="408" cy="450" r="18" fill="#6F84FF"/>
+  <circle cx="214" cy="586" r="18" fill="#6F84FF"/>
+  <circle cx="602" cy="586" r="18" fill="#6F84FF"/>
+  <circle cx="408" cy="710" r="18" fill="#6F84FF"/>
+
+  <g filter="url(#shadow)">
+    <rect x="690" y="452" width="176" height="224" rx="20" fill="#F4EFE7"/>
+    <rect x="708" y="474" width="140" height="112" rx="12" fill="#E2E8DE"/>
+    <rect x="678" y="672" width="200" height="28" rx="14" fill="#D2B091"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="952" y="206" width="198" height="164" rx="18" fill="#F7F4EC"/>
+    <rect x="970" y="224" width="162" height="128" rx="10" fill="#EAD9BD"/>
+    <rect x="990" y="290" width="120" height="14" rx="7" fill="#FDFBF8"/>
+    <rect x="990" y="316" width="86" height="14" rx="7" fill="#FDFBF8"/>
+  </g>
+  <rect x="952" y="206" width="198" height="164" rx="18" fill="none" stroke="#FF9A5B" stroke-width="8" stroke-dasharray="16 12"/>
+
+  <rect x="1098" y="152" width="294" height="208" rx="22" fill="#FFF8F1"/>
+  <text x="1245" y="206" text-anchor="middle" fill="#6E7068" font-size="22" font-weight="700" font-family="Segoe UI, Arial, sans-serif">선택한 오브젝트</text>
+  <text x="1245" y="258" text-anchor="middle" fill="#243748" font-size="30" font-weight="700" font-family="Segoe UI, Arial, sans-serif">달력 보드</text>
+  <rect x="1132" y="286" width="226" height="42" rx="18" fill="#F2EEE7"/>
+  <text x="1245" y="314" text-anchor="middle" fill="#63707A" font-size="20" font-weight="700" font-family="Segoe UI, Arial, sans-serif">벽에 배치</text>
+  <rect x="1132" y="338" width="226" height="42" rx="18" fill="#F2EEE7"/>
+  <text x="1245" y="366" text-anchor="middle" fill="#63707A" font-size="20" font-weight="700" font-family="Segoe UI, Arial, sans-serif">기능 연결: 달력</text>
+
+  <rect x="110" y="916" width="1380" height="188" rx="34" fill="#FFFDFC"/>
+  <text x="162" y="970" fill="#6E7B87" font-size="22" font-weight="700" font-family="Segoe UI, Arial, sans-serif" letter-spacing="4">OBJECT TRAY</text>
+
+  <rect x="160" y="988" width="116" height="48" rx="18" fill="#243748"/>
+  <text x="218" y="1018" text-anchor="middle" fill="#FFFFFF" font-size="18" font-weight="700" font-family="Segoe UI, Arial, sans-serif">가구</text>
+  <rect x="288" y="988" width="116" height="48" rx="18" fill="#F3EEE6"/>
+  <text x="346" y="1018" text-anchor="middle" fill="#6D7B86" font-size="18" font-weight="700" font-family="Segoe UI, Arial, sans-serif">학습</text>
+  <rect x="416" y="988" width="116" height="48" rx="18" fill="#F3EEE6"/>
+  <text x="474" y="1018" text-anchor="middle" fill="#6D7B86" font-size="18" font-weight="700" font-family="Segoe UI, Arial, sans-serif">취미</text>
+  <rect x="544" y="988" width="116" height="48" rx="18" fill="#F3EEE6"/>
+  <text x="602" y="1018" text-anchor="middle" fill="#6D7B86" font-size="18" font-weight="700" font-family="Segoe UI, Arial, sans-serif">장식</text>
+  <rect x="672" y="988" width="116" height="48" rx="18" fill="#F3EEE6"/>
+  <text x="730" y="1018" text-anchor="middle" fill="#6D7B86" font-size="18" font-weight="700" font-family="Segoe UI, Arial, sans-serif">벽</text>
+
+  <rect x="162" y="1048" width="150" height="34" rx="17" fill="#E7B94B"/>
+  <rect x="330" y="1048" width="150" height="34" rx="17" fill="#EAD9BE"/>
+  <rect x="498" y="1048" width="150" height="34" rx="17" fill="#DDE8D8"/>
+  <rect x="666" y="1048" width="150" height="34" rx="17" fill="#F0D5B8"/>
+  <rect x="834" y="1048" width="150" height="34" rx="17" fill="#E5ECF6"/>
+  <rect x="1002" y="1048" width="150" height="34" rx="17" fill="#F2E2CB"/>
+</svg>
