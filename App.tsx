@@ -58,8 +58,12 @@ Notifications.setNotificationHandler({
 
 type Stage = 'login' | 'setup_name' | 'setup_intro' | 'app';
 type Tab = 'chats' | 'friends' | 'profile';
+type FriendsMode = 'friends' | 'family';
+type ChatsMode = 'direct' | 'group';
 type MsgKind = 'text' | 'image' | 'video' | 'system';
 type Delivery = 'sending' | 'sent' | 'read';
+type FamilyLabel = 'mother' | 'father' | 'guardian' | 'child';
+type FamilyRelationshipType = 'parent_child';
 
 type Message = {
   id: string;
@@ -75,8 +79,33 @@ type Message = {
   unreadCount?: number;
   readByNames?: string[];
 };
-
-type Friend = { id: string; name: string; status: string; avatarUri: string; trusted: boolean };
+type FriendFamilySummary = {
+  isFamily: true;
+  relationshipId: string;
+  relationshipType: FamilyRelationshipType;
+  displayLabel: FamilyLabel;
+  familyGroupId?: string;
+  status: 'active';
+};
+type Friend = {
+  id: string;
+  name: string;
+  status: string;
+  avatarUri: string;
+  trusted: boolean;
+  family?: FriendFamilySummary;
+};
+type FamilyUpgradeRequestItem = {
+  requestId: string;
+  peerUserId: string;
+  peerName: string;
+  peerAvatarUri: string;
+  relationshipType: FamilyRelationshipType;
+  requesterLabel: FamilyLabel;
+  targetLabel: FamilyLabel;
+  note: string;
+  createdAt: number;
+};
 type Room = {
   id: string;
   title: string;
@@ -143,6 +172,14 @@ type BackendFriend = {
   status?: string;
   avatarUri?: string;
   trusted?: boolean;
+  family?: {
+    isFamily?: boolean;
+    relationshipId?: string;
+    relationshipType?: FamilyRelationshipType;
+    displayLabel?: FamilyLabel;
+    familyGroupId?: string;
+    status?: 'active';
+  };
 };
 type BackendFriendSearchUser = {
   id?: string;
@@ -163,6 +200,24 @@ type BackendFriendRequest = {
 type BackendFriendRequestList = {
   incoming?: BackendFriendRequest[];
   outgoing?: BackendFriendRequest[];
+};
+type BackendFamilyUpgradeRequestPeer = {
+  userId?: string;
+  name?: string;
+  avatarUri?: string;
+};
+type BackendFamilyUpgradeRequest = {
+  requestId?: string;
+  peer?: BackendFamilyUpgradeRequestPeer;
+  relationshipType?: FamilyRelationshipType;
+  requesterLabel?: FamilyLabel;
+  targetLabel?: FamilyLabel;
+  note?: string;
+  createdAt?: string;
+};
+type BackendFamilyUpgradeRequestList = {
+  incoming?: BackendFamilyUpgradeRequest[];
+  outgoing?: BackendFamilyUpgradeRequest[];
 };
 type FriendRequestItem = {
   id: string;
@@ -226,6 +281,10 @@ type BackendEnvelope<T> = {
   error?: { message?: string; code?: string };
   message?: string;
 };
+type BackendRequestError = Error & {
+  status?: number;
+  code?: string;
+};
 type BackendListData<T> = {
   items?: T[];
   nextCursor?: string;
@@ -288,7 +347,7 @@ const URL_REGEX = /https?:\/\/\S+/gi;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const PROFILE_CROP_BOX = 260;
 const PROFILE_PHOTO_MAX_OUTPUT = 2048;
-const DEFAULT_APP_VERSION = '1.0.0';
+const DEFAULT_APP_VERSION = '1.0.1';
 const APP_PACKAGE_ID = 'com.ourhangout';
 const APP_UPDATE_APK_MIME_TYPE = 'application/vnd.android.package-archive';
 const INTENT_FLAG_GRANT_READ_URI_PERMISSION = 1;
@@ -341,6 +400,36 @@ const normalizeBackendErrorMessage = (message: string, isKo: boolean): string =>
       '\uADF8\uB8F9\uBC29\uC740 \uCD5C\uC18C 2\uBA85 \uC774\uC0C1\uC774\uC5B4\uC57C \uD574\uC694.',
       'Group rooms require at least 2 members.',
     ],
+    [
+      'Users are already connected as family.',
+      '이미 가족으로 연결된 사용자예요.',
+      'Users are already connected as family.',
+    ],
+    [
+      'A family upgrade request is already pending.',
+      '이미 가족 연결 요청이 진행 중이에요.',
+      'A family-group request is already pending.',
+    ],
+    [
+      'Family upgrade requires an existing friend relationship.',
+      '가족 연결은 먼저 친구 관계여야 해요.',
+      'Family links require an existing friend relationship.',
+    ],
+    [
+      'Pending family upgrade request not found.',
+      '진행 중인 가족 연결 요청을 찾을 수 없어요.',
+      'The pending family-group request was not found.',
+    ],
+    [
+      'Active family link not found.',
+      '활성 가족 연결을 찾을 수 없어요.',
+      'The active family link was not found.',
+    ],
+    [
+      'Family link access is not allowed.',
+      '이 가족 연결을 변경할 권한이 없어요.',
+      'You do not have access to this family link.',
+    ],
   ];
 
   for (const [source, ko, en] of map) {
@@ -351,8 +440,54 @@ const normalizeBackendErrorMessage = (message: string, isKo: boolean): string =>
 
   return normalized;
 };
+const createBackendRequestError = (
+  message: string,
+  options?: {
+    status?: number;
+    code?: string;
+  }
+): BackendRequestError => {
+  const error = new Error(message) as BackendRequestError;
+  if (typeof options?.status === 'number') {
+    error.status = options.status;
+  }
+  if (options?.code) {
+    error.code = options.code;
+  }
+  return error;
+};
+const getBackendErrorDetails = (raw: unknown): { message: string; code: string } => {
+  if (!raw || typeof raw !== 'object') {
+    return { message: '', code: '' };
+  }
+  const body = raw as BackendEnvelope<unknown>;
+  return {
+    message: String(body.error?.message || body.message || '').trim(),
+    code: String(body.error?.code || '').trim(),
+  };
+};
+const toBackendRequestError = (
+  raw: unknown,
+  fallbackMessage: string,
+  status?: number
+): BackendRequestError => {
+  const details = getBackendErrorDetails(raw);
+  return createBackendRequestError(details.message || fallbackMessage, {
+    ...(typeof status === 'number' ? { status } : {}),
+    ...(details.code ? { code: details.code } : {}),
+  });
+};
+const isSessionInvalidError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) return false;
+  const status = typeof (error as BackendRequestError).status === 'number' ? (error as BackendRequestError).status : 0;
+  const code = String((error as BackendRequestError).code || '').trim();
+  return code === 'AUTH_REFRESH_INVALID' || code === 'AUTH_UNAUTHORIZED' || (status === 401 && !code);
+};
+const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : '');
 const SESSION_STORAGE_KEY = 'ourhangout.session.v1';
 const BACKEND_OVERRIDE_STORAGE_KEY = 'ourhangout.backend-override.v1';
+const FRIENDS_TAB_MODE_STORAGE_KEY = 'ourhangout.friends-tab-mode.v1';
+const CHATS_TAB_MODE_STORAGE_KEY = 'ourhangout.chats-tab-mode.v1';
 const HIDDEN_SERVER_MENU_TAP_COUNT = 5;
 const HIDDEN_SERVER_MENU_TAP_WINDOW_MS = 1200;
 const FOREST_GLOWS: Array<{
@@ -1124,6 +1259,8 @@ function App() {
 
   const [stage, setStage] = useState<Stage>('login');
   const [tab, setTab] = useState<Tab>('friends');
+  const [friendsMode, setFriendsMode] = useState<FriendsMode>('friends');
+  const [chatsMode, setChatsMode] = useState<ChatsMode>('direct');
   const [profile, setProfile] = useState<Profile>({ name: '', status: '', email: '', avatarUri: '', localeTag: appLocaleTag });
   const [nameDraft, setNameDraft] = useState('');
   const [statusDraft, setStatusDraft] = useState('');
@@ -1181,8 +1318,14 @@ function App() {
   const [isFriendLookupLoading, setIsFriendLookupLoading] = useState(false);
   const [friendRequestsIncoming, setFriendRequestsIncoming] = useState<FriendRequestItem[]>([]);
   const [friendRequestsOutgoing, setFriendRequestsOutgoing] = useState<FriendRequestItem[]>([]);
+  const [familyRequestsIncoming, setFamilyRequestsIncoming] = useState<FamilyUpgradeRequestItem[]>([]);
+  const [familyRequestsOutgoing, setFamilyRequestsOutgoing] = useState<FamilyUpgradeRequestItem[]>([]);
   const [friendActionKey, setFriendActionKey] = useState('');
+  const [familyActionKey, setFamilyActionKey] = useState('');
   const [isFriendSyncing, setIsFriendSyncing] = useState(false);
+  const [showFamilyPickerModal, setShowFamilyPickerModal] = useState(false);
+  const [showFamilyUpgradeModal, setShowFamilyUpgradeModal] = useState(false);
+  const [familyUpgradeTargetId, setFamilyUpgradeTargetId] = useState('');
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [groupNameDraft, setGroupNameDraft] = useState('');
   const [groupPick, setGroupPick] = useState<string[]>([]);
@@ -1383,15 +1526,33 @@ function App() {
     if (!q) return friends;
     return friends.filter((f) => `${f.name} ${f.status}`.toLowerCase().includes(q));
   }, [friendQuery, friends]);
-
-  const favoriteRooms = useMemo(() => sortedRooms.filter((room) => room.favorite), [sortedRooms]);
-  const otherRooms = useMemo(() => sortedRooms.filter((room) => !room.favorite), [sortedRooms]);
+  const familyFriends = useMemo(
+    () =>
+      [...filteredFriends.filter((friend) => friend.family?.isFamily)]
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [filteredFriends]
+  );
+  const nonFamilyFriends = useMemo(
+    () => filteredFriends.filter((friend) => !friend.family?.isFamily),
+    [filteredFriends]
+  );
+  const connectableFamilyFriends = useMemo(
+    () =>
+      [...friends.filter((friend) => !friend.family?.isFamily)].sort((a, b) => a.name.localeCompare(b.name)),
+    [friends]
+  );
+  const directRooms = useMemo(() => filteredRooms.filter((room) => !room.isGroup), [filteredRooms]);
+  const groupRooms = useMemo(() => filteredRooms.filter((room) => room.isGroup), [filteredRooms]);
+  const favoriteDirectRooms = useMemo(() => directRooms.filter((room) => room.favorite), [directRooms]);
+  const otherDirectRooms = useMemo(() => directRooms.filter((room) => !room.favorite), [directRooms]);
+  const favoriteGroupRooms = useMemo(() => groupRooms.filter((room) => room.favorite), [groupRooms]);
+  const otherGroupRooms = useMemo(() => groupRooms.filter((room) => !room.favorite), [groupRooms]);
   const sortedFriendsByTrust = useMemo(
     () =>
-      [...friends].sort((a, b) =>
+      [...nonFamilyFriends].sort((a, b) =>
         a.trusted === b.trusted ? a.name.localeCompare(b.name) : a.trusted ? -1 : 1
       ),
-    [friends]
+    [nonFamilyFriends]
   );
   const favoriteFriends = useMemo(() => sortedFriendsByTrust.filter((friend) => friend.trusted), [sortedFriendsByTrust]);
   const otherFriends = useMemo(() => sortedFriendsByTrust.filter((friend) => !friend.trusted), [sortedFriendsByTrust]);
@@ -1415,10 +1576,42 @@ function App() {
   );
 
   const roomMap = useMemo(() => new Map(rooms.map((r) => [r.id, r])), [rooms]);
-  const knockCount = friendRequestsIncoming.length + friendRequestsOutgoing.length;
+  const knockCount =
+    friendRequestsIncoming.length +
+    friendRequestsOutgoing.length +
+    familyRequestsIncoming.length +
+    familyRequestsOutgoing.length;
   const activeRoomCompanions = activeRoom?.members.filter((m) => m !== currentUserId).length ?? 0;
   const topAvatarUri = tab === 'chats' && activeRoom ? roomAvatarUri(activeRoom) : profile.avatarUri;
-  const currentSectionLabel = tab === 'friends' ? s.tabsFriends : tab === 'chats' ? s.tabsChats : s.tabsProfile;
+  const familyUpgradeTarget = useMemo(
+    () => friends.find((friend) => friend.id === familyUpgradeTargetId) ?? null,
+    [familyUpgradeTargetId, friends]
+  );
+  const friendsTabLabel = friendsMode === 'family' ? (isKo ? '가족' : 'Family') : s.tabsFriends;
+  const friendsTabHint =
+    friendsMode === 'family'
+      ? isKo
+        ? '다시 누르면 친구'
+        : 'Tap again: Friends'
+      : isKo
+        ? '다시 누르면 가족'
+        : 'Tap again: Family';
+  const chatsTabLabel =
+    chatsMode === 'group' ? (isKo ? '그룹' : 'Groups') : isKo ? '1:1' : 'Direct';
+  const chatsTabHint =
+    chatsMode === 'group'
+      ? isKo
+        ? '다시 누르면 1:1'
+        : 'Tap again: Direct'
+      : isKo
+        ? '다시 누르면 그룹'
+        : 'Tap again: Groups';
+  const currentSectionLabel =
+    tab === 'friends'
+      ? friendsTabLabel
+      : tab === 'chats'
+        ? chatsTabLabel
+        : s.tabsProfile;
   const appUpdateRelease = appUpdateStatus.release;
   const appUpdateFileSize = formatAppUpdateFileSize(appUpdateRelease?.sizeBytes, isKo);
   const appUpdateNotes = (appUpdateRelease?.notes || '').trim();
@@ -1459,6 +1652,22 @@ function App() {
       setIsInstallingAppUpdate(false);
     }
   };
+  const handleFriendsTabPress = () => {
+    if (activeRoomRef.current) return;
+    if (tab === 'friends') {
+      setFriendsMode((prev) => (prev === 'friends' ? 'family' : 'friends'));
+      return;
+    }
+    setTab('friends');
+  };
+  const handleChatsTabPress = () => {
+    if (activeRoomRef.current) return;
+    if (tab === 'chats') {
+      setChatsMode((prev) => (prev === 'direct' ? 'group' : 'direct'));
+      return;
+    }
+    setTab('chats');
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -1478,6 +1687,36 @@ function App() {
       }
     };
   }, [defaultBackendBaseUrl]);
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const [storedFriendsMode, storedChatsMode] = await Promise.all([
+          AsyncStorage.getItem(FRIENDS_TAB_MODE_STORAGE_KEY),
+          AsyncStorage.getItem(CHATS_TAB_MODE_STORAGE_KEY),
+        ]);
+        if (cancelled) return;
+        if (storedFriendsMode === 'friends' || storedFriendsMode === 'family') {
+          setFriendsMode(storedFriendsMode);
+        }
+        if (storedChatsMode === 'direct' || storedChatsMode === 'group') {
+          setChatsMode(storedChatsMode);
+        }
+      } catch {
+        if (cancelled) return;
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    void AsyncStorage.setItem(FRIENDS_TAB_MODE_STORAGE_KEY, friendsMode).catch(() => null);
+  }, [friendsMode]);
+  useEffect(() => {
+    void AsyncStorage.setItem(CHATS_TAB_MODE_STORAGE_KEY, chatsMode).catch(() => null);
+  }, [chatsMode]);
 
   const renderNookHero = ({
     title,
@@ -1566,6 +1805,11 @@ function App() {
 
   const renderFriendRow = (friend: Friend) => {
     const trustedBusy = friendActionKey === `trusted:${friend.id}`;
+    const familyBusy = familyActionKey === `create:${friend.id}`;
+    const removeFamilyBusy = friend.family?.relationshipId
+      ? familyActionKey === `family-remove:${friend.family.relationshipId}`
+      : false;
+    const removeFriendBusy = friendActionKey === `friend-remove:${friend.id}`;
     return (
       <View key={friend.id} style={styles.friendItem}>
         <Pressable
@@ -1581,6 +1825,13 @@ function App() {
         </Pressable>
         <View style={styles.friendItemCopy}>
           <Text style={styles.itemTitle}>{friend.name}</Text>
+          <View style={styles.friendMetaRow}>
+            {friend.family?.isFamily ? (
+              <View style={[styles.moodChip, styles.familyPill]}>
+                <Text style={styles.familyPillText}>{isKo ? '가족' : 'Family'}</Text>
+              </View>
+            ) : null}
+          </View>
           <Text style={styles.friendStatusText} numberOfLines={1}>
             {friend.status || s.startChat}
           </Text>
@@ -1592,8 +1843,24 @@ function App() {
         >
           <Ionicons name={friend.trusted ? 'star' : 'star-outline'} size={16} color={FOREST.text} />
         </Pressable>
+        {!friend.family?.isFamily ? (
+          <Pressable
+            style={[styles.iconLight, (familyBusy || !!familyActionKey) && styles.off]}
+            disabled={!!familyActionKey}
+            onPress={() => openFamilyUpgradeModal(friend)}
+          >
+            <Ionicons name="people-outline" size={16} color={FOREST.text} />
+          </Pressable>
+        ) : null}
         <Pressable style={styles.iconLight} onPress={() => void startDirectRoom(friend.id)}>
           <Ionicons name="chatbubble-ellipses" size={16} color={FOREST.text} />
+        </Pressable>
+        <Pressable
+          style={[styles.iconLight, (removeFamilyBusy || removeFriendBusy || !!friendActionKey || !!familyActionKey) && styles.off]}
+          disabled={!!friendActionKey || !!familyActionKey}
+          onPress={() => openFriendActions(friend)}
+        >
+          <Ionicons name="ellipsis-horizontal" size={16} color={FOREST.text} />
         </Pressable>
       </View>
     );
@@ -1629,7 +1896,7 @@ function App() {
       if (backendState !== 'ready') return;
       const token = accessToken.trim();
       if (!token) return;
-      void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token)]).catch(() => null);
+      void Promise.all([refreshFriendTabData(), refreshRoomsFromBackend(token)]).catch(() => null);
       if (activeRoomRef.current) {
         void syncRoomReadState(token, activeRoomRef.current, { refreshMessages: true }).catch(() => null);
       }
@@ -1716,7 +1983,7 @@ function App() {
     if (!raw || typeof raw !== 'object') return {} as T;
     const body = raw as BackendEnvelope<T>;
     if (body.ok === false || body.success === false) {
-      throw new Error(body.error?.message || body.message || 'Request failed');
+      throw toBackendRequestError(raw, 'Request failed');
     }
     if (body.data !== undefined) return body.data;
     return raw as T;
@@ -1734,11 +2001,18 @@ function App() {
     }
 
     const request = (async () => {
-      const refreshed = await fetch(`${backendBaseUrl}/v1/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken: tokenToUse }),
-      });
+      let refreshed: Response;
+      try {
+        refreshed = await fetch(`${backendBaseUrl}/v1/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken: tokenToUse }),
+        });
+      } catch (error) {
+        throw createBackendRequestError(errorMessage(error) || 'Network request failed.', {
+          code: 'NETWORK_ERROR',
+        });
+      }
       const refreshText = await refreshed.text();
       let refreshJson: unknown = null;
       if (refreshText) {
@@ -1749,8 +2023,7 @@ function App() {
         }
       }
       if (!refreshed.ok) {
-        const body = (refreshJson || {}) as BackendEnvelope<unknown>;
-        throw new Error(body.error?.message || body.message || `HTTP ${refreshed.status}`);
+        throw toBackendRequestError(refreshJson || {}, `HTTP ${refreshed.status}`, refreshed.status);
       }
       const refreshData = unwrapEnvelope<BackendAuthData>(refreshJson || {});
       const nextAccessToken = (refreshData.accessToken || refreshData.tokens?.accessToken || '').trim();
@@ -1791,7 +2064,14 @@ function App() {
       };
       if (!headers['Content-Type'] && typeof init?.body === 'string') headers['Content-Type'] = 'application/json';
       if (resolvedToken) headers.Authorization = `Bearer ${resolvedToken}`;
-      const res = await fetch(requestUrl, { ...(init || {}), headers });
+      let res: Response;
+      try {
+        res = await fetch(requestUrl, { ...(init || {}), headers });
+      } catch (error) {
+        throw createBackendRequestError(errorMessage(error) || 'Network request failed.', {
+          code: 'NETWORK_ERROR',
+        });
+      }
       const txt = await res.text();
       let json: unknown = null;
       if (txt) {
@@ -1816,8 +2096,7 @@ function App() {
     ) {
       const currentRefreshToken = refreshTokenRef.current.trim();
       if (!currentRefreshToken) {
-        const body = (response.json || {}) as BackendEnvelope<unknown>;
-        throw new Error(body.error?.message || body.message || `HTTP ${response.res.status}`);
+        throw toBackendRequestError(response.json || {}, `HTTP ${response.res.status}`, response.res.status);
       }
       try {
         const nextAccessToken = await refreshAccessToken(currentRefreshToken);
@@ -1834,8 +2113,7 @@ function App() {
       if (refreshFailure) {
         throw refreshFailure;
       }
-      const body = (response.json || {}) as BackendEnvelope<unknown>;
-      throw new Error(body.error?.message || body.message || `HTTP ${response.res.status}`);
+      throw toBackendRequestError(response.json || {}, `HTTP ${response.res.status}`, response.res.status);
     }
     return unwrapEnvelope<T>(response.json || {});
   };
@@ -2218,6 +2496,33 @@ function App() {
       }))
       .sort((a, b) => b.createdAt - a.createdAt);
   };
+  const mapFamilyRequests = (value: BackendFamilyUpgradeRequest[] | undefined): FamilyUpgradeRequestItem[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((item) => !!item?.requestId && !!item?.peer?.userId && !!item?.peer?.name)
+      .map((item) => ({
+        requestId: String(item.requestId),
+        peerUserId: String(item.peer?.userId),
+        peerName: String(item.peer?.name),
+        peerAvatarUri: resolveBackendMediaUrl(String(item.peer?.avatarUri || '')),
+        relationshipType: (item.relationshipType || 'parent_child') as FamilyRelationshipType,
+        requesterLabel: (item.requesterLabel || 'guardian') as FamilyLabel,
+        targetLabel: (item.targetLabel || 'child') as FamilyLabel,
+        note: String(item.note || ''),
+        createdAt: parseTimestamp(item.createdAt),
+      }))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  };
+  const refreshFamilyUpgradeRequests = async (token: string, strict = false) => {
+    const raw = strict
+      ? await backendRequest<BackendFamilyUpgradeRequestList>('/v1/family/upgrade-requests', { method: 'GET' }, token)
+      : await backendRequest<BackendFamilyUpgradeRequestList>('/v1/family/upgrade-requests', { method: 'GET' }, token).catch(
+          () => null
+        );
+    if (!raw) return;
+    setFamilyRequestsIncoming(mapFamilyRequests(raw.incoming));
+    setFamilyRequestsOutgoing(mapFamilyRequests(raw.outgoing));
+  };
 
   const refreshFriendsAndRequests = async (token: string, options?: BackendSyncOptions) => {
     const strict = options?.strict ?? false;
@@ -2245,6 +2550,18 @@ function App() {
               status: String(f.status || ''),
               avatarUri: resolveBackendMediaUrl(String(f.avatarUri || '')),
               trusted: !!f.trusted,
+              ...(f.family?.isFamily && f.family.relationshipId
+                ? {
+                    family: {
+                      isFamily: true as const,
+                      relationshipId: String(f.family.relationshipId),
+                      relationshipType: (f.family.relationshipType || 'parent_child') as FamilyRelationshipType,
+                      displayLabel: (f.family.displayLabel || 'guardian') as FamilyLabel,
+                      ...(f.family.familyGroupId ? { familyGroupId: String(f.family.familyGroupId) } : {}),
+                      status: 'active' as const,
+                    },
+                  }
+                : {}),
             }))
         );
       }
@@ -2332,9 +2649,15 @@ function App() {
       tokenLength: token.length,
     });
     const tokenPayload = decodeJwtPayload(token);
-    const me = await backendRequest<BackendProfile>('/v1/me', { method: 'GET' }, token).catch(
-      () => null
-    );
+    const me = await backendRequest<BackendProfile>('/v1/me', { method: 'GET' }, token).catch((error) => {
+      if (isSessionInvalidError(error)) {
+        throw error;
+      }
+      logSessionTrace('sync_initial:me_failed', {
+        message: errorMessage(error),
+      });
+      return null;
+    });
     const nextUserId = (me?.id || fallbackUser?.id || tokenPayload.sub || MY_ID).trim();
     const resolvedName = (
       me?.name ||
@@ -2359,17 +2682,31 @@ function App() {
 
     await syncLocaleWithBackend(token, me?.locale);
 
-    await Promise.all([refreshFriendsAndRequests(token, { strict: true }), refreshBotsFromBackend(token).catch(() => null)]);
+    await Promise.all([
+      refreshFriendsAndRequests(token, { strict: true }).catch((error) => {
+        if (isSessionInvalidError(error)) {
+          throw error;
+        }
+        logSessionTrace('sync_initial:friends_failed', {
+          message: errorMessage(error),
+        });
+      }),
+      refreshBotsFromBackend(token).catch(() => null),
+    ]);
 
-    const syncedRooms = await refreshRoomsFromBackend(token, nextUserId, { strict: true });
-    if (!syncedRooms) {
-      logSessionTrace('sync_initial:rooms_missing');
-      throw new Error(s.loginBackendSyncFailed);
-    }
+    const syncedRooms = await refreshRoomsFromBackend(token, nextUserId, { strict: true }).catch((error) => {
+      if (isSessionInvalidError(error)) {
+        throw error;
+      }
+      logSessionTrace('sync_initial:rooms_failed', {
+        message: errorMessage(error),
+      });
+      return null;
+    });
     logSessionTrace('sync_initial:done', {
       userId: nextUserId,
       friends: friends.length,
-      rooms: syncedRooms.length,
+      rooms: syncedRooms?.length ?? 0,
     });
     return { hasProfileName: resolvedName.length > 0 };
   };
@@ -2475,7 +2812,12 @@ function App() {
         }
 
         if (payload.event === 'friend.updated') {
-          void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token)]).catch(() => null);
+          void Promise.all([refreshFriendTabData(), refreshRoomsFromBackend(token)]).catch(() => null);
+          return;
+        }
+
+        if (payload.event === 'family.updated') {
+          void Promise.all([refreshFriendTabData(), refreshRoomsFromBackend(token)]).catch(() => null);
         }
       } catch {
         // Ignore malformed websocket payloads and keep the socket alive.
@@ -2697,7 +3039,16 @@ function App() {
           });
           setSessionTokens(nextAccessToken, nextRefreshToken);
           setLoginErr('');
-          await syncInitialFromBackend(nextAccessToken, user);
+          try {
+            await syncInitialFromBackend(nextAccessToken, user);
+          } catch (error) {
+            if (isSessionInvalidError(error)) {
+              throw error;
+            }
+            logSessionTrace('restore:apply_session_partial', {
+              message: errorMessage(error),
+            });
+          }
           if (cancelled) return;
           logSessionTrace('restore:apply_session_done');
           setStage('app');
@@ -2731,14 +3082,23 @@ function App() {
           }
 
           if (!storedRefreshToken) {
-            setSessionTokens('', '');
-            await clearSessionInStorage();
-            const msg = initialError instanceof Error ? initialError.message : '';
-            logSessionTrace('restore:cleared_missing_refresh', {
+            const msg = errorMessage(initialError);
+            if (isSessionInvalidError(initialError)) {
+              setSessionTokens('', '');
+              await clearSessionInStorage();
+              logSessionTrace('restore:cleared_missing_refresh', {
+                message: msg,
+              });
+              if (!cancelled && msg) {
+                setLoginErr(normalizeBackendErrorMessage(msg, isKo));
+              }
+              return;
+            }
+            logSessionTrace('restore:proceed_without_refresh', {
               message: msg,
             });
-            if (!cancelled && msg) {
-              setLoginErr(normalizeBackendErrorMessage(msg, isKo));
+            if (!cancelled) {
+              setStage('app');
             }
             return;
           }
@@ -2752,14 +3112,21 @@ function App() {
               refreshToken: refreshTokenRef.current.trim(),
             };
           } catch (refreshError) {
-            setSessionTokens('', '');
-            await clearSessionInStorage();
-            const msg = refreshError instanceof Error ? refreshError.message : '';
+            const msg = errorMessage(refreshError);
             logSessionTrace('restore:refresh_failed', {
               message: msg,
             });
-            if (!cancelled && msg) {
-              setLoginErr(normalizeBackendErrorMessage(msg, isKo));
+            if (isSessionInvalidError(refreshError)) {
+              setSessionTokens('', '');
+              await clearSessionInStorage();
+              if (!cancelled && msg) {
+                setLoginErr(normalizeBackendErrorMessage(msg, isKo));
+              }
+              return;
+            }
+            setSessionTokens(stored.accessToken, storedRefreshToken);
+            if (!cancelled) {
+              setStage('app');
             }
             return;
           }
@@ -2790,21 +3157,38 @@ function App() {
           try {
             await applySession(nextAccessToken, nextRefreshToken);
           } catch (retryError) {
-            setSessionTokens('', '');
-            const msg = retryError instanceof Error ? retryError.message : '';
+            const msg = errorMessage(retryError);
             logSessionTrace('restore:retry_failed', {
               message: msg || s.loginBackendSyncFailed,
             });
+            if (isSessionInvalidError(retryError)) {
+              setSessionTokens('', '');
+              await clearSessionInStorage();
+              if (!cancelled) {
+                setLoginErr(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+              }
+              return;
+            }
             if (!cancelled) {
-              setLoginErr(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+              setStage('app');
             }
           }
         }
-      } catch {
+      } catch (error) {
         if (cancelled) return;
         logSessionTrace('restore:unexpected_failure');
-        setSessionTokens('', '');
-        await clearSessionInStorage();
+        if (isSessionInvalidError(error)) {
+          setSessionTokens('', '');
+          await clearSessionInStorage();
+          const msg = errorMessage(error);
+          if (msg) {
+            setLoginErr(normalizeBackendErrorMessage(msg, isKo));
+          }
+          return;
+        }
+        if (accessTokenRef.current.trim()) {
+          setStage('app');
+        }
       } finally {
         logSessionTrace('restore:finished');
         if (!cancelled) setIsSessionRestoring(false);
@@ -3064,6 +3448,10 @@ function App() {
   const openRoom = (rid: string) => {
     activeRoomRef.current = rid;
     foregroundNotificationRoomId = rid;
+    const targetRoom = rooms.find((room) => room.id === rid);
+    if (targetRoom) {
+      setChatsMode(targetRoom.isGroup ? 'group' : 'direct');
+    }
     setActiveRoomId(rid);
     setTab('chats');
     setInput('');
@@ -3092,7 +3480,7 @@ function App() {
     if (!token) return;
     setIsFriendSyncing(true);
     try {
-      await refreshFriendsAndRequests(token);
+      await Promise.all([refreshFriendsAndRequests(token), refreshFamilyUpgradeRequests(token)]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
       if (msg) Alert.alert(msg);
@@ -3106,6 +3494,159 @@ function App() {
     setFriendLookupResults([]);
     setFriendLookupMsg('');
     setShowFriendModal(true);
+  };
+  const openFamilyUpgradeModal = (friend: Friend) => {
+    if (friend.family?.isFamily) return;
+    setFamilyUpgradeTargetId(friend.id);
+    setShowFamilyUpgradeModal(true);
+  };
+  const openFamilyPickerModal = () => {
+    setShowFamilyPickerModal(true);
+  };
+  const closeFamilyPickerModal = () => {
+    setShowFamilyPickerModal(false);
+  };
+  const selectFamilyUpgradeFriend = (friend: Friend) => {
+    closeFamilyPickerModal();
+    openFamilyUpgradeModal(friend);
+  };
+  const closeFamilyUpgradeModal = () => {
+    setShowFamilyUpgradeModal(false);
+    setFamilyUpgradeTargetId('');
+  };
+  const sendFamilyUpgradeRequest = async () => {
+    const token = requireAccessToken();
+    if (!token) return;
+    const targetUserId = familyUpgradeTargetId.trim();
+    if (!targetUserId) return;
+    const actionKey = `create:${targetUserId}`;
+    setFamilyActionKey(actionKey);
+    try {
+      await backendRequest(
+        '/v1/family/upgrade-requests',
+        {
+          method: 'POST',
+          body: JSON.stringify({ targetUserId }),
+        },
+        token
+      );
+      closeFamilyUpgradeModal();
+      await refreshFriendTabData();
+      Alert.alert(isKo ? '가족 연결 요청을 보냈어요.' : 'Family link request sent.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setFamilyActionKey('');
+    }
+  };
+  const acceptFamilyUpgradeRequest = async (requestId: string) => {
+    const token = requireAccessToken();
+    if (!token) return;
+    const actionKey = `accept:${requestId}`;
+    setFamilyActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/family/upgrade-requests/${requestId}/accept`, { method: 'POST' }, token);
+      await refreshFriendTabData();
+      await refreshRoomsFromBackend(token).catch(() => null);
+      Alert.alert(isKo ? '가족 관계가 연결됐어요.' : 'Family link created.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setFamilyActionKey('');
+    }
+  };
+  const rejectFamilyUpgradeRequest = async (requestId: string) => {
+    const token = requireAccessToken();
+    if (!token) return;
+    const actionKey = `reject:${requestId}`;
+    setFamilyActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/family/upgrade-requests/${requestId}/reject`, { method: 'POST' }, token);
+      await refreshFriendTabData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setFamilyActionKey('');
+    }
+  };
+  const cancelFamilyUpgradeRequest = async (requestId: string) => {
+    const token = requireAccessToken();
+    if (!token) return;
+    const actionKey = `cancel:${requestId}`;
+    setFamilyActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/family/upgrade-requests/${requestId}/cancel`, { method: 'POST' }, token);
+      await refreshFriendTabData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setFamilyActionKey('');
+    }
+  };
+  const removeFamilyLink = async (relationshipId: string) => {
+    const token = requireAccessToken();
+    if (!token) return;
+    const actionKey = `family-remove:${relationshipId}`;
+    setFamilyActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/family/links/${relationshipId}`, { method: 'DELETE' }, token);
+      await refreshFriendTabData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setFamilyActionKey('');
+    }
+  };
+  const removeFriendConnection = async (friendUserId: string) => {
+    const token = requireAccessToken();
+    if (!token) return;
+    const actionKey = `friend-remove:${friendUserId}`;
+    setFriendActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/friends/${friendUserId}`, { method: 'DELETE' }, token);
+      await Promise.all([refreshFriendTabData(), refreshRoomsFromBackend(token)]).catch(() => null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setFriendActionKey('');
+    }
+  };
+  const openFriendActions = (friend: Friend) => {
+    const buttons = [
+      {
+        text: isKo ? '취소' : 'Cancel',
+        style: 'cancel' as const,
+      },
+      ...(friend.family?.isFamily && friend.family.relationshipId
+        ? [
+            {
+              text: isKo ? '가족 해제' : 'Remove Family Link',
+              style: 'destructive' as const,
+              onPress: () => {
+                void removeFamilyLink(friend.family!.relationshipId);
+              },
+            },
+          ]
+        : []),
+      {
+        text: isKo ? '친구 삭제' : 'Remove Friend',
+        style: 'destructive' as const,
+        onPress: () => {
+          void removeFriendConnection(friend.id);
+        },
+      },
+    ];
+    Alert.alert(
+      friend.name,
+      isKo ? '이 친구의 연결 상태를 관리할 수 있어요.' : 'Manage this connection.',
+      buttons
+    );
   };
 
   const searchFriendCandidates = async () => {
@@ -3716,10 +4257,16 @@ function App() {
       try {
         await syncInitialFromBackend(nextAccessToken, authData.user);
       } catch (syncError) {
-        setSessionTokens('', '');
-        const msg = syncError instanceof Error ? syncError.message : '';
-        setLoginErr(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
-        return;
+        const msg = errorMessage(syncError);
+        if (isSessionInvalidError(syncError)) {
+          setSessionTokens('', '');
+          await clearSessionInStorage();
+          setLoginErr(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+          return;
+        }
+        logSessionTrace('login:initial_sync_partial', {
+          message: msg || s.loginBackendSyncFailed,
+        });
       }
       setStage('app');
     } catch (err) {
@@ -4291,14 +4838,20 @@ function App() {
     setIsFriendLookupLoading(false);
     setFriendRequestsIncoming([]);
     setFriendRequestsOutgoing([]);
+    setFamilyRequestsIncoming([]);
+    setFamilyRequestsOutgoing([]);
     setFriendActionKey('');
+    setFamilyActionKey('');
     setIsFriendSyncing(false);
     setInput('');
     setDraftMedia(null);
     setAvatarViewer(null);
     setShowProfileModal(false);
     setShowFriendModal(false);
+    setShowFamilyPickerModal(false);
+    setShowFamilyUpgradeModal(false);
     setShowGroupModal(false);
+    setFamilyUpgradeTargetId('');
     setRoomMenuId(null);
     setLoginErr('');
   };
@@ -4736,13 +5289,27 @@ function App() {
                   </View>
                 </View>
                 {tab === 'friends' ? (
-                  <Pressable style={styles.iconDark} onPress={openFriendModal}>
-                    <Ionicons name="person-add" size={18} color={FOREST.text} />
-                  </Pressable>
+                  friendsMode === 'family' ? (
+                    <Pressable
+                      style={[styles.iconDark, connectableFamilyFriends.length === 0 && styles.off]}
+                      disabled={connectableFamilyFriends.length === 0}
+                      onPress={openFamilyPickerModal}
+                    >
+                      <Ionicons name="people-outline" size={18} color={FOREST.text} />
+                    </Pressable>
+                  ) : (
+                    <Pressable style={styles.iconDark} onPress={openFriendModal}>
+                      <Ionicons name="person-add" size={18} color={FOREST.text} />
+                    </Pressable>
+                  )
                 ) : tab === 'chats' ? (
-                  <Pressable style={styles.iconDark} onPress={() => setShowGroupModal(true)}>
-                    <Ionicons name="add" size={20} color={FOREST.text} />
-                  </Pressable>
+                  chatsMode === 'group' ? (
+                    <Pressable style={styles.iconDark} onPress={() => setShowGroupModal(true)}>
+                      <Ionicons name="add" size={20} color={FOREST.text} />
+                    </Pressable>
+                  ) : (
+                    <View style={styles.iconPlaceholder} />
+                  )
                 ) : (
                   <Pressable
                     style={styles.iconDark}
@@ -4761,38 +5328,58 @@ function App() {
               <View style={styles.main}>
                 {tab === 'chats' ? (
                   <ScrollView contentContainerStyle={styles.list}>
-                    {sortedRooms.length === 0 && visibleBots.length === 0 ? (
+                    {chatsMode === 'direct' && directRooms.length === 0 && visibleBots.length === 0 ? (
                       <View style={[styles.empty, styles.emptyCove]}>
-                        <Text style={styles.h1}>{s.noRooms}</Text>
-                        <Text style={styles.sub}>{s.noRoomsBody}</Text>
+                        <Text style={styles.h1}>{isKo ? '1:1 대화가 없어요' : 'No Direct Chats Yet'}</Text>
+                        <Text style={styles.sub}>
+                          {isKo ? '친구와 대화를 시작하면 여기에서 바로 이어져요.' : 'Start a chat with a friend and it will appear here.'}
+                        </Text>
+                      </View>
+                    ) : chatsMode === 'group' && groupRooms.length === 0 ? (
+                      <View style={[styles.empty, styles.emptyCove]}>
+                        <Text style={styles.h1}>{isKo ? '그룹 대화가 없어요' : 'No Group Chats Yet'}</Text>
+                        <Text style={styles.sub}>
+                          {isKo ? '그룹을 만들면 이 목록에 모여 보여요.' : 'Create a group chat and it will show up here.'}
+                        </Text>
                       </View>
                     ) : (
                       <>
-                        {visibleBots.length > 0 ? <Text style={styles.sectionTitle}>{s.botsTitle}</Text> : null}
-                        {visibleBots.map((bot) => (
-                          <Pressable key={bot.id} style={styles.roomItem} onPress={() => void startBotRoom(bot.id)}>
-                            <View style={styles.listAvatar}>
-                              <Text style={styles.listAvatarText}>{bot.name.slice(0, 1).toUpperCase()}</Text>
-                            </View>
-                            <View style={styles.roomItemCopy}>
-                              <View style={styles.roomItemHead}>
-                                <Text style={[styles.itemTitle, { flex: 1 }]}>{bot.name}</Text>
-                              </View>
-                              <Text style={styles.roomPreview} numberOfLines={1}>
-                                {bot.description || s.botStart}
-                              </Text>
-                            </View>
-                            <View style={styles.itemRight}>
-                              <Pressable style={styles.iconLight} onPress={() => void startBotRoom(bot.id)}>
-                                <Ionicons name="chatbubble-ellipses" size={16} color={FOREST.text} />
+                        {chatsMode === 'direct' ? (
+                          <>
+                            {visibleBots.length > 0 ? <Text style={styles.sectionTitle}>{s.botsTitle}</Text> : null}
+                            {visibleBots.map((bot) => (
+                              <Pressable key={bot.id} style={styles.roomItem} onPress={() => void startBotRoom(bot.id)}>
+                                <View style={styles.listAvatar}>
+                                  <Text style={styles.listAvatarText}>{bot.name.slice(0, 1).toUpperCase()}</Text>
+                                </View>
+                                <View style={styles.roomItemCopy}>
+                                  <View style={styles.roomItemHead}>
+                                    <Text style={[styles.itemTitle, { flex: 1 }]}>{bot.name}</Text>
+                                  </View>
+                                  <Text style={styles.roomPreview} numberOfLines={1}>
+                                    {bot.description || s.botStart}
+                                  </Text>
+                                </View>
+                                <View style={styles.itemRight}>
+                                  <Pressable style={styles.iconLight} onPress={() => void startBotRoom(bot.id)}>
+                                    <Ionicons name="chatbubble-ellipses" size={16} color={FOREST.text} />
+                                  </Pressable>
+                                </View>
                               </Pressable>
-                            </View>
-                          </Pressable>
-                        ))}
-                        {favoriteRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '즐겨찾기' : 'Favorites'}</Text> : null}
-                        {favoriteRooms.map(renderRoomRow)}
-                        {otherRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '대화방' : 'Chats'}</Text> : null}
-                        {otherRooms.map(renderRoomRow)}
+                            ))}
+                            {favoriteDirectRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '즐겨찾기' : 'Favorites'}</Text> : null}
+                            {favoriteDirectRooms.map(renderRoomRow)}
+                            {otherDirectRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '1:1 대화' : 'Direct Chats'}</Text> : null}
+                            {otherDirectRooms.map(renderRoomRow)}
+                          </>
+                        ) : (
+                          <>
+                            {favoriteGroupRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '즐겨찾기' : 'Favorites'}</Text> : null}
+                            {favoriteGroupRooms.map(renderRoomRow)}
+                            {otherGroupRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '그룹 대화' : 'Group Chats'}</Text> : null}
+                            {otherGroupRooms.map(renderRoomRow)}
+                          </>
+                        )}
                       </>
                     )}
                   </ScrollView>
@@ -4801,7 +5388,60 @@ function App() {
                 {tab === 'friends' ? (
                   <ScrollView contentContainerStyle={styles.list}>
                     {isFriendSyncing ? <Text style={styles.sub}>{s.friendLoading}</Text> : null}
-                    {friendRequestsIncoming.length > 0 ? (
+                    {friendsMode === 'family' && familyRequestsIncoming.length > 0 ? (
+                      <>
+                        <Text style={styles.sectionTitle}>{isKo ? '가족 요청' : 'Family Requests'}</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
+                          {familyRequestsIncoming.map((req) => (
+                            <View key={req.requestId} style={styles.requestCard}>
+                              <Text style={styles.itemTitle}>{req.peerName}</Text>
+                              <Text style={styles.sub}>
+                                {isKo ? '가족 그룹 초대 요청' : 'Family group invitation'}
+                              </Text>
+                              <View style={styles.row}>
+                                <Pressable
+                                  style={[styles.requestBtn, !!familyActionKey && styles.off]}
+                                  disabled={!!familyActionKey}
+                                  onPress={() => void acceptFamilyUpgradeRequest(req.requestId)}
+                                >
+                                  <Text style={styles.requestBtnText}>{isKo ? '수락' : 'Accept'}</Text>
+                                </Pressable>
+                                <Pressable
+                                  style={[styles.requestBtn, !!familyActionKey && styles.off]}
+                                  disabled={!!familyActionKey}
+                                  onPress={() => void rejectFamilyUpgradeRequest(req.requestId)}
+                                >
+                                  <Text style={styles.requestBtnText}>{isKo ? '거절' : 'Reject'}</Text>
+                                </Pressable>
+                              </View>
+                            </View>
+                          ))}
+                        </ScrollView>
+                      </>
+                    ) : null}
+                    {friendsMode === 'family' && familyRequestsOutgoing.length > 0 ? (
+                      <>
+                        <Text style={styles.sectionTitle}>{isKo ? '보낸 가족 요청' : 'Sent Family Requests'}</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
+                          {familyRequestsOutgoing.map((req) => (
+                            <View key={req.requestId} style={styles.requestCard}>
+                              <Text style={styles.itemTitle}>{req.peerName}</Text>
+                              <Text style={styles.sub}>
+                                {isKo ? '가족 그룹 초대를 보냈어요.' : 'Family group invitation sent.'}
+                              </Text>
+                              <Pressable
+                                style={[styles.requestBtn, !!familyActionKey && styles.off]}
+                                disabled={!!familyActionKey}
+                                onPress={() => void cancelFamilyUpgradeRequest(req.requestId)}
+                              >
+                                <Text style={styles.requestBtnText}>{isKo ? '요청 취소' : 'Cancel Request'}</Text>
+                              </Pressable>
+                            </View>
+                          ))}
+                        </ScrollView>
+                      </>
+                    ) : null}
+                    {friendsMode === 'friends' && friendRequestsIncoming.length > 0 ? (
                       <>
                         <Text style={styles.sectionTitle}>{s.friendIncoming}</Text>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
@@ -4832,7 +5472,7 @@ function App() {
                         </ScrollView>
                       </>
                     ) : null}
-                    {friendRequestsOutgoing.length > 0 ? (
+                    {friendsMode === 'friends' && friendRequestsOutgoing.length > 0 ? (
                       <>
                         <Text style={styles.sectionTitle}>{s.friendOutgoing}</Text>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
@@ -4845,7 +5485,7 @@ function App() {
                         </ScrollView>
                       </>
                     ) : null}
-                    {friends.length === 0 ? (
+                    {friendsMode === 'friends' && friends.length === 0 ? (
                       <View style={[styles.empty, styles.emptyCove]}>
                         <Pressable onPress={openFriendModal}>
                           <Text style={[styles.h1, { textDecorationLine: 'underline' }]}>{s.noFriends}</Text>
@@ -4855,6 +5495,29 @@ function App() {
                           <Text style={styles.smallBtnText}>{s.addFriend}</Text>
                         </Pressable>
                       </View>
+                    ) : friendsMode === 'family' ? (
+                      familyFriends.length === 0 ? (
+                        <View style={[styles.empty, styles.emptyCove]}>
+                          <Text style={styles.h1}>{isKo ? '가족이 아직 없어요' : 'No Family Links Yet'}</Text>
+                          <Text style={styles.sub}>
+                            {isKo
+                              ? '가족 연결로 초대 요청을 보내면 여기에서 가족만 따로 볼 수 있어요.'
+                              : 'Send a family-group invitation and your linked family will appear here.'}
+                          </Text>
+                          <Pressable
+                            style={[styles.smallBtn, connectableFamilyFriends.length === 0 && styles.off]}
+                            disabled={connectableFamilyFriends.length === 0}
+                            onPress={openFamilyPickerModal}
+                          >
+                            <Text style={styles.smallBtnText}>{isKo ? '가족 연결' : 'Connect Family'}</Text>
+                          </Pressable>
+                        </View>
+                      ) : (
+                        <>
+                          <Text style={styles.sectionTitle}>{isKo ? '가족' : 'Family'}</Text>
+                          {familyFriends.map(renderFriendRow)}
+                        </>
+                      )
                     ) : (
                       <>
                         {favoriteFriends.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '즐겨찾기' : 'Favorites'}</Text> : null}
@@ -4953,13 +5616,15 @@ function App() {
               </View>
 
               <View style={styles.tabs}>
-                <Pressable style={[styles.tab, tab === 'friends' && styles.tabOn]} onPress={() => setTab('friends')}>
+                <Pressable style={[styles.tab, tab === 'friends' && styles.tabOn]} onPress={handleFriendsTabPress}>
                   <Ionicons name="people" size={18} color={tab === 'friends' ? FOREST.text : FOREST.textMuted} />
-                  <Text style={styles.tabText}>{s.tabsFriends}</Text>
+                  <Text style={styles.tabText}>{friendsTabLabel}</Text>
+                  <Text style={styles.tabHint}>{friendsTabHint}</Text>
                 </Pressable>
-                <Pressable style={[styles.tab, tab === 'chats' && styles.tabOn]} onPress={() => setTab('chats')}>
+                <Pressable style={[styles.tab, tab === 'chats' && styles.tabOn]} onPress={handleChatsTabPress}>
                   <Ionicons name="chatbubbles" size={18} color={tab === 'chats' ? FOREST.text : FOREST.textMuted} />
-                  <Text style={styles.tabText}>{s.tabsChats}</Text>
+                  <Text style={styles.tabText}>{chatsTabLabel}</Text>
+                  <Text style={styles.tabHint}>{chatsTabHint}</Text>
                 </Pressable>
                 <Pressable style={[styles.tab, tab === 'profile' && styles.tabOn]} onPress={() => setTab('profile')}>
                   <Ionicons name="person" size={18} color={tab === 'profile' ? FOREST.text : FOREST.textMuted} />
@@ -5081,6 +5746,142 @@ function App() {
         </Modal>
 
         <Modal
+          visible={showFamilyPickerModal}
+          transparent
+          animationType="slide"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={closeFamilyPickerModal}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={closeFamilyPickerModal} />
+            <KeyboardAvoidingView
+              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset + 12 }]}
+              behavior="padding"
+              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+            >
+              <ScrollView
+                contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheet}>
+                  <Text style={styles.h1}>{isKo ? '가족으로 연결할 친구 선택' : 'Choose A Friend For Family Link'}</Text>
+                  <Text style={styles.sub}>
+                    {isKo
+                      ? '가족은 먼저 친구가 된 뒤에 연결할 수 있어요. 아래 친구를 선택하면 가족 연결 요청을 보낼 수 있어요.'
+                      : 'Family links start from existing friends. Pick a friend below to send a family-group request.'}
+                  </Text>
+                  {connectableFamilyFriends.length === 0 ? (
+                    <View style={[styles.empty, styles.emptyCove]}>
+                      <Text style={styles.h1}>{isKo ? '연결 가능한 친구가 없어요' : 'No Eligible Friends Yet'}</Text>
+                      <Text style={styles.sub}>
+                        {isKo
+                          ? '먼저 친구를 추가하거나 이미 가족으로 연결된 친구를 확인해 보세요.'
+                          : 'Add a friend first, or check the friends already connected as family.'}
+                      </Text>
+                    </View>
+                  ) : (
+                    connectableFamilyFriends.map((friend) => (
+                      <Pressable
+                        key={friend.id}
+                        style={styles.item}
+                        onPress={() => selectFamilyUpgradeFriend(friend)}
+                      >
+                        <View style={styles.row}>
+                          <View style={styles.listAvatar}>
+                            {friend.avatarUri ? (
+                              <Image source={{ uri: friend.avatarUri }} style={styles.listAvatarImage} />
+                            ) : (
+                              <Text style={styles.listAvatarText}>{friend.name.slice(0, 1).toUpperCase()}</Text>
+                            )}
+                          </View>
+                          <View style={styles.familyOptionCopy}>
+                            <Text style={styles.itemTitle}>{friend.name}</Text>
+                            <Text style={styles.sub} numberOfLines={1}>
+                              {friend.status || (isKo ? '친구 관계에서 가족 그룹으로 연결' : 'Upgrade from friend to family group')}
+                            </Text>
+                          </View>
+                        </View>
+                        <Ionicons name="chevron-forward" size={18} color={FOREST.text} />
+                      </Pressable>
+                    ))
+                  )}
+                  <Pressable style={styles.smallBtn} onPress={closeFamilyPickerModal}>
+                    <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                  </Pressable>
+                </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={showFamilyUpgradeModal}
+          transparent
+          animationType="slide"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={closeFamilyUpgradeModal}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={closeFamilyUpgradeModal} />
+            <KeyboardAvoidingView
+              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset + 12 }]}
+              behavior="padding"
+              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+            >
+              <ScrollView
+                contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheet}>
+                  <Text style={styles.h1}>{isKo ? '가족으로 연결' : 'Upgrade To Family'}</Text>
+                  <Text style={styles.sub}>
+                    {familyUpgradeTarget
+                      ? isKo
+                        ? `${familyUpgradeTarget.name} 님을 가족 그룹에 초대할까요? 역할이나 호칭은 나중에 그룹 안에서 따로 정리할 수 있어요.`
+                        : `Invite ${familyUpgradeTarget.name} into your family group? Roles and titles can be sorted out later inside the group.`
+                      : isKo
+                        ? '가족 그룹 초대를 보낼까요?'
+                        : 'Send a family-group invitation?'}
+                  </Text>
+                  <View style={[styles.item, styles.familyOptionItem]}>
+                    <View style={styles.familyOptionCopy}>
+                      <Text style={styles.itemTitle}>{isKo ? '가족 그룹 초대' : 'Family Group Invite'}</Text>
+                      <Text style={styles.sub}>
+                        {isKo
+                          ? '지금은 가족 그룹 생성과 멤버 연결에 집중하고, 세부 역할과 권한은 이후 서비스 확장에 맞춰 조정합니다.'
+                          : 'For now, this focuses on creating the family group and linking members. Detailed roles and permissions come later.'}
+                      </Text>
+                    </View>
+                    <Ionicons name="people-circle-outline" size={18} color={FOREST.text} />
+                  </View>
+                  <View style={styles.row}>
+                    <Pressable style={styles.smallBtn} onPress={closeFamilyUpgradeModal}>
+                      <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[
+                        styles.smallBtn,
+                        (!familyUpgradeTargetId || !!familyActionKey) && styles.off,
+                      ]}
+                      disabled={!familyUpgradeTargetId || !!familyActionKey}
+                      onPress={() => {
+                        void sendFamilyUpgradeRequest();
+                      }}
+                    >
+                      <Text style={styles.smallBtnText}>{isKo ? '요청 보내기' : 'Send Request'}</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
+        <Modal
           visible={showGroupModal}
           transparent
           animationType="slide"
@@ -5145,38 +5946,45 @@ function App() {
             <Pressable style={styles.backdrop} onPress={() => setShowProfileModal(false)} />
             <KeyboardAvoidingView
               style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
-              behavior={kbBehavior}
+              behavior="padding"
+              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
             >
-              <View style={styles.sheet}>
-                <Text style={styles.h1}>{s.profileEdit}</Text>
-                {renderProfilePhotoEditor()}
-                <TextInput
-                  style={styles.field}
-                  value={nameDraft}
-                  onChangeText={setNameDraft}
-                  placeholder={s.displayName}
-                  placeholderTextColor={FOREST.placeholder}
-                />
-                <TextInput
-                  style={styles.field}
-                  value={statusDraft}
-                  onChangeText={setStatusDraft}
-                  placeholder={s.myStatus}
-                  placeholderTextColor={FOREST.placeholder}
-                />
-                <View style={styles.row}>
-                  <Pressable style={styles.smallBtn} onPress={() => setShowProfileModal(false)}>
-                    <Text style={styles.smallBtnText}>{s.cancel}</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.smallBtn, !nameDraft.trim() && styles.off]}
-                    disabled={!nameDraft.trim()}
-                    onPress={saveProfile}
-                  >
-                    <Text style={styles.smallBtnText}>{s.save}</Text>
-                  </Pressable>
+              <ScrollView
+                contentContainerStyle={styles.sheetScrollContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheet}>
+                  <Text style={styles.h1}>{s.profileEdit}</Text>
+                  {renderProfilePhotoEditor()}
+                  <TextInput
+                    style={styles.field}
+                    value={nameDraft}
+                    onChangeText={setNameDraft}
+                    placeholder={s.displayName}
+                    placeholderTextColor={FOREST.placeholder}
+                  />
+                  <TextInput
+                    style={styles.field}
+                    value={statusDraft}
+                    onChangeText={setStatusDraft}
+                    placeholder={s.myStatus}
+                    placeholderTextColor={FOREST.placeholder}
+                  />
+                  <View style={styles.row}>
+                    <Pressable style={styles.smallBtn} onPress={() => setShowProfileModal(false)}>
+                      <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.smallBtn, !nameDraft.trim() && styles.off]}
+                      disabled={!nameDraft.trim()}
+                      onPress={saveProfile}
+                    >
+                      <Text style={styles.smallBtnText}>{s.save}</Text>
+                    </Pressable>
+                  </View>
                 </View>
-              </View>
+              </ScrollView>
             </KeyboardAvoidingView>
           </View>
         </Modal>
@@ -5530,6 +6338,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  iconPlaceholder: {
+    width: 36,
+    height: 36,
+  },
   main: {
     flex: 1,
     marginHorizontal: 12,
@@ -5657,6 +6469,12 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 10,
   },
+  familyOptionItem: { alignItems: 'center' },
+  familyOptionItemSelected: {
+    borderColor: FOREST.buttonBorder,
+    backgroundColor: 'rgba(139, 149, 255, 0.12)',
+  },
+  familyOptionCopy: { flex: 1, gap: 4 },
   itemTitle: { color: FOREST.text, fontSize: 15, fontWeight: '700' },
   itemRight: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   roomItem: {
@@ -5700,6 +6518,8 @@ const styles = StyleSheet.create({
   },
   moodChipText: { color: FOREST.textSoft, fontSize: 11, fontWeight: '700' },
   trustPill: { backgroundColor: 'rgba(255, 210, 122, 0.18)' },
+  familyPill: { backgroundColor: 'rgba(140, 205, 180, 0.18)' },
+  familyPillText: { color: FOREST.text, fontSize: 11, fontWeight: '800' },
   listAvatar: {
     width: 42,
     height: 42,
@@ -5821,6 +6641,7 @@ const styles = StyleSheet.create({
     borderColor: FOREST.border,
   },
   tabText: { color: FOREST.text, fontSize: 14, fontWeight: '700' },
+  tabHint: { color: FOREST.textMuted, fontSize: 10, fontWeight: '700' },
   bubbleRow: { width: '100%' },
   mineRow: { alignItems: 'flex-end' },
   otherRow: { alignItems: 'flex-start' },
@@ -6047,6 +6868,7 @@ const styles = StyleSheet.create({
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: FOREST.overlay },
   sheetWrap: { width: '100%', flex: 1, justifyContent: 'flex-end' },
   sheetScrollContent: { flexGrow: 1, justifyContent: 'flex-end' },
+  sheetScrollContentRoomy: { paddingTop: 20, paddingBottom: 20 },
   sheet: {
     margin: 12,
     borderRadius: 18,
