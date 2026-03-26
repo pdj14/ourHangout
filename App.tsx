@@ -61,10 +61,12 @@ type Stage = 'login' | 'setup_name' | 'setup_intro' | 'app';
 type Tab = 'chats' | 'friends' | 'profile';
 type FriendsMode = 'friends' | 'family';
 type ChatsMode = 'direct' | 'group';
+type CreateRoomKind = 'group' | 'family';
 type MsgKind = 'text' | 'image' | 'video' | 'system';
 type Delivery = 'sending' | 'sent' | 'read';
 type FamilyLabel = 'mother' | 'father' | 'guardian' | 'child';
 type FamilyRelationshipType = 'parent_child';
+type RoomType = 'direct' | 'group' | 'family';
 
 type Message = {
   id: string;
@@ -111,6 +113,7 @@ type FamilyUpgradeRequestItem = {
 };
 type Room = {
   id: string;
+  type: RoomType;
   title: string;
   members: string[];
   isGroup: boolean;
@@ -257,6 +260,7 @@ type BotSummary = {
 };
 type BackendRoom = {
   id?: string;
+  type?: RoomType;
   title?: string;
   members?: string[];
   isGroup?: boolean;
@@ -404,6 +408,31 @@ const normalizeBackendErrorMessage = (message: string, isKo: boolean): string =>
       'Group room requires at least 2 members.',
       '\uADF8\uB8F9\uBC29\uC740 \uCD5C\uC18C 2\uBA85 \uC774\uC0C1\uC774\uC5B4\uC57C \uD574\uC694.',
       'Group rooms require at least 2 members.',
+    ],
+    [
+      'Family room title must be 1-100 characters.',
+      '가족방 이름은 1자 이상 100자 이하로 입력해 주세요.',
+      'Family room title must be between 1 and 100 characters.',
+    ],
+    [
+      'Family room requires at least 2 members.',
+      '가족방은 최소 2명 이상이어야 해요.',
+      'Family rooms require at least 2 members.',
+    ],
+    [
+      'Family room members must already be friends.',
+      '가족방 멤버는 먼저 친구여야 해요.',
+      'Family room members must already be friends.',
+    ],
+    [
+      'Only group/family room title can be changed.',
+      '그룹방이나 가족방 이름만 바꿀 수 있어요.',
+      'Only group or family room titles can be changed.',
+    ],
+    [
+      'Shared room title must be 1-100 characters.',
+      '공유 방 이름은 1자 이상 100자 이하로 입력해 주세요.',
+      'Shared room title must be between 1 and 100 characters.',
     ],
     [
       'Users are already connected as family.',
@@ -948,6 +977,14 @@ const TEXT = {
     groupName: 'Group name',
     groupHint: 'Select at least 2 friends',
     createRoom: 'Create room',
+    createRoomTitle: 'Create new room',
+    createRoomGroupLabel: 'Group',
+    createRoomGroupBody: 'Start a shared chat with friends right away.',
+    createRoomFamilyLabel: 'Family',
+    createRoomFamilyBody: 'Make a family room for titles, permissions, and shared features.',
+    createRoomFamilyHint: 'Select at least 1 friend for your family room',
+    createRoomFamilyName: 'Family room name',
+    createFamilyRoomAction: 'Create family room',
     directRoomFallback: 'Chat',
     me: 'Me',
   },
@@ -1092,6 +1129,14 @@ const TEXT = {
     groupName: '그룹방 이름',
     groupHint: '친구를 2명 이상 선택해요',
     createRoom: '방 만들기',
+    createRoomTitle: '새 방 만들기',
+    createRoomGroupLabel: '일반 그룹',
+    createRoomGroupBody: '친구들과 바로 대화를 시작하는 공유 방이에요.',
+    createRoomFamilyLabel: '가족방',
+    createRoomFamilyBody: '호칭, 권한, 공유 기능이 붙는 가족 전용 방이에요.',
+    createRoomFamilyHint: '가족방은 친구를 1명 이상 선택해요',
+    createRoomFamilyName: '가족방 이름',
+    createFamilyRoomAction: '가족방 만들기',
     directRoomFallback: '대화',
     me: '나',
   },
@@ -1337,6 +1382,7 @@ function App() {
   const [showFriendActionsModal, setShowFriendActionsModal] = useState(false);
   const [friendActionsTargetId, setFriendActionsTargetId] = useState('');
   const [showGroupModal, setShowGroupModal] = useState(false);
+  const [createRoomType, setCreateRoomType] = useState<CreateRoomKind>('group');
   const [groupNameDraft, setGroupNameDraft] = useState('');
   const [groupPick, setGroupPick] = useState<string[]>([]);
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -1431,13 +1477,13 @@ function App() {
   const getBot = (botUserId: string) => bots.find((bot) => bot.userId === botUserId);
   const isOpenClawAssistantBotUser = (botUserId: string) => getBot(botUserId)?.botKey === 'openclaw-assistant';
   const roomAvatarUri = (room: Room) => {
-    if (room.isGroup) return '';
+    if (room.type !== 'direct') return '';
     const peerId = room.members.find((member) => member !== currentUserId) ?? '';
     return getFriend(peerId)?.avatarUri || '';
   };
   const messageAvatarUri = (message: Message) => getFriend(message.senderId)?.avatarUri || '';
   const roomTitle = (room: Room) =>
-    room.isGroup
+    room.type !== 'direct'
       ? room.title
       : getFriend(room.members.find((m) => m !== currentUserId) ?? '')?.name ??
         getBot(room.members.find((m) => m !== currentUserId) ?? '')?.name ??
@@ -1544,27 +1590,26 @@ function App() {
         .sort((a, b) => a.name.localeCompare(b.name)),
     [filteredFriends]
   );
-  const nonFamilyFriends = useMemo(
-    () => filteredFriends.filter((friend) => !friend.family?.isFamily),
-    [filteredFriends]
-  );
   const connectableFamilyFriends = useMemo(
     () =>
       [...friends.filter((friend) => !friend.family?.isFamily)].sort((a, b) => a.name.localeCompare(b.name)),
     [friends]
   );
-  const directRooms = useMemo(() => filteredRooms.filter((room) => !room.isGroup), [filteredRooms]);
-  const groupRooms = useMemo(() => filteredRooms.filter((room) => room.isGroup), [filteredRooms]);
+  const directRooms = useMemo(() => filteredRooms.filter((room) => room.type === 'direct'), [filteredRooms]);
+  const groupRooms = useMemo(() => filteredRooms.filter((room) => room.type === 'group'), [filteredRooms]);
+  const familyRooms = useMemo(() => filteredRooms.filter((room) => room.type === 'family'), [filteredRooms]);
   const favoriteDirectRooms = useMemo(() => directRooms.filter((room) => room.favorite), [directRooms]);
   const otherDirectRooms = useMemo(() => directRooms.filter((room) => !room.favorite), [directRooms]);
   const favoriteGroupRooms = useMemo(() => groupRooms.filter((room) => room.favorite), [groupRooms]);
   const otherGroupRooms = useMemo(() => groupRooms.filter((room) => !room.favorite), [groupRooms]);
+  const favoriteFamilyRooms = useMemo(() => familyRooms.filter((room) => room.favorite), [familyRooms]);
+  const otherFamilyRooms = useMemo(() => familyRooms.filter((room) => !room.favorite), [familyRooms]);
   const sortedFriendsByTrust = useMemo(
     () =>
-      [...nonFamilyFriends].sort((a, b) =>
+      [...filteredFriends].sort((a, b) =>
         a.trusted === b.trusted ? a.name.localeCompare(b.name) : a.trusted ? -1 : 1
       ),
-    [nonFamilyFriends]
+    [filteredFriends]
   );
   const favoriteFriends = useMemo(() => sortedFriendsByTrust.filter((friend) => friend.trusted), [sortedFriendsByTrust]);
   const otherFriends = useMemo(() => sortedFriendsByTrust.filter((friend) => !friend.trusted), [sortedFriendsByTrust]);
@@ -1603,15 +1648,8 @@ function App() {
     () => friends.find((friend) => friend.id === friendActionsTargetId) ?? null,
     [friendActionsTargetId, friends]
   );
-  const friendsTabLabel = friendsMode === 'family' ? (isKo ? '가족' : 'Family') : s.tabsFriends;
-  const friendsTabHint =
-    friendsMode === 'family'
-      ? isKo
-        ? '다시 누르면 친구'
-        : 'Tap again: Friends'
-      : isKo
-        ? '다시 누르면 가족'
-        : 'Tap again: Family';
+  const friendsTabLabel = s.tabsFriends;
+  const friendsTabHint = isKo ? '친구 목록' : 'Friend list';
   const chatsTabLabel =
     chatsMode === 'group' ? (isKo ? '그룹' : 'Groups') : isKo ? '1:1' : 'Direct';
   const chatsTabHint =
@@ -1670,10 +1708,6 @@ function App() {
   };
   const handleFriendsTabPress = () => {
     if (activeRoomRef.current) return;
-    if (tab === 'friends') {
-      setFriendsMode((prev) => (prev === 'friends' ? 'family' : 'friends'));
-      return;
-    }
     setTab('friends');
   };
   const handleChatsTabPress = () => {
@@ -1707,14 +1741,12 @@ function App() {
     let cancelled = false;
     const run = async () => {
       try {
-        const [storedFriendsMode, storedChatsMode] = await Promise.all([
+        const [, storedChatsMode] = await Promise.all([
           AsyncStorage.getItem(FRIENDS_TAB_MODE_STORAGE_KEY),
           AsyncStorage.getItem(CHATS_TAB_MODE_STORAGE_KEY),
         ]);
         if (cancelled) return;
-        if (storedFriendsMode === 'friends' || storedFriendsMode === 'family') {
-          setFriendsMode(storedFriendsMode);
-        }
+        setFriendsMode('friends');
         if (storedChatsMode === 'direct' || storedChatsMode === 'group') {
           setChatsMode(storedChatsMode);
         }
@@ -1798,6 +1830,13 @@ function App() {
           <Text style={[styles.itemTitle, { flex: 1 }]}>{roomTitle(room)}</Text>
           <Text style={styles.roomItemTime}>{roomTimeLabel(room.updatedAt)}</Text>
         </View>
+        {room.type === 'family' ? (
+          <View style={styles.friendMetaRow}>
+            <View style={[styles.moodChip, styles.familyPill]}>
+              <Text style={styles.familyPillText}>{isKo ? '가족방' : 'Family room'}</Text>
+            </View>
+          </View>
+        ) : null}
         <Text style={styles.roomPreview} numberOfLines={1}>
           {room.preview || roomMembers(room) || s.startChat}
         </Text>
@@ -1847,13 +1886,6 @@ function App() {
         </Pressable>
         <View style={styles.friendItemCopy}>
           <Text style={styles.itemTitle}>{friend.name}</Text>
-          <View style={styles.friendMetaRow}>
-            {friend.family?.isFamily ? (
-              <View style={[styles.moodChip, styles.familyPill]}>
-                <Text style={styles.familyPillText}>{isKo ? '가족' : 'Family'}</Text>
-              </View>
-            ) : null}
-          </View>
           <Text style={styles.friendStatusText} numberOfLines={1}>
             {subtitle}
           </Text>
@@ -2180,20 +2212,30 @@ function App() {
     return [];
   };
 
-  const mapBackendRoom = (room: BackendRoom, fallbackUserId?: string): Room => ({
-    id: String(room.id || uid()),
-    title: String(room.title || s.directRoomFallback),
-    members:
-      Array.isArray(room.members) && room.members.length
-        ? room.members.map((member) => String(member))
-        : [(fallbackUserId || currentUserId || MY_ID).trim() || MY_ID],
-    isGroup: !!room.isGroup,
-    favorite: !!room.favorite,
-    muted: !!room.muted,
-    unread: Math.max(0, Number(room.unread || 0)),
-    preview: String(room.preview || ''),
-    updatedAt: parseTimestamp(room.updatedAt),
-  });
+  const mapBackendRoom = (room: BackendRoom, fallbackUserId?: string): Room => {
+    const roomType: RoomType =
+      room.type === 'direct' || room.type === 'group' || room.type === 'family'
+        ? room.type
+        : room.isGroup
+          ? 'group'
+          : 'direct';
+
+    return {
+      id: String(room.id || uid()),
+      type: roomType,
+      title: String(room.title || s.directRoomFallback),
+      members:
+        Array.isArray(room.members) && room.members.length
+          ? room.members.map((member) => String(member))
+          : [(fallbackUserId || currentUserId || MY_ID).trim() || MY_ID],
+      isGroup: roomType !== 'direct',
+      favorite: !!room.favorite,
+      muted: !!room.muted,
+      unread: Math.max(0, Number(room.unread || 0)),
+      preview: String(room.preview || ''),
+      updatedAt: parseTimestamp(room.updatedAt),
+    };
+  };
 
   const mapBackendMessage = (message: BackendRoomMessage): Message => {
     const senderId = String(message.senderId || '');
@@ -3436,6 +3478,7 @@ function App() {
     const rid = uid();
     const room: Room = {
       id: rid,
+      type: 'direct',
       title: getFriend(fid)?.name ?? s.directRoomFallback,
       members: [currentUserId, fid],
       isGroup: false,
@@ -3559,6 +3602,12 @@ function App() {
     setFriendLookupResults([]);
     setFriendLookupMsg('');
     setShowFriendModal(true);
+  };
+  const openCreateRoomModal = (kind: CreateRoomKind = 'group') => {
+    setCreateRoomType(kind);
+    setGroupNameDraft('');
+    setGroupPick([]);
+    setShowGroupModal(true);
   };
   const openFamilyUpgradeModal = (friend: Friend) => {
     if (friend.family?.isFamily) return;
@@ -3879,8 +3928,9 @@ function App() {
     };
   }, []);
 
-  const createGroup = async () => {
-    if (groupPick.length < 2) return;
+  const createSharedRoom = async () => {
+    const minPickCount = createRoomType === 'family' ? 1 : 2;
+    if (groupPick.length < minPickCount) return;
     const title =
       groupNameDraft.trim() ||
       groupPick
@@ -3893,10 +3943,10 @@ function App() {
     if (token) {
       try {
         const backRoom = await backendRequest<BackendRoom>(
-          '/v1/rooms/group',
+          '/v1/rooms',
           {
             method: 'POST',
-            body: JSON.stringify({ title, memberUserIds: groupPick }),
+            body: JSON.stringify({ type: createRoomType, title, memberUserIds: groupPick }),
           },
           token
         );
@@ -3917,6 +3967,7 @@ function App() {
     const rid = uid();
     const room: Room = {
       id: rid,
+      type: createRoomType,
       title,
       members: [currentUserId, ...groupPick],
       isGroup: true,
@@ -4857,7 +4908,7 @@ function App() {
   };
   const openRoomTitleEditor = (rid: string) => {
     const room = rooms.find((item) => item.id === rid);
-    if (!room || !room.isGroup) return;
+    if (!room || room.type === 'direct') return;
     setRoomTitleDraft(room.title);
     setShowRoomTitleModal(true);
     setRoomMenuId(null);
@@ -5224,7 +5275,11 @@ function App() {
                   <Text style={styles.title}>{roomTitle(activeRoom)}</Text>
                   {activeRoom.isGroup ? (
                     <Text style={styles.headerMeta}>
-                      {`${activeRoomCompanions} ${isKo ? '명과 함께' : 'companions nearby'}`}
+                      {activeRoom.type === 'family'
+                        ? isKo
+                          ? `${activeRoomCompanions}명과 함께하는 가족방`
+                          : `Family room with ${activeRoomCompanions} others`
+                        : `${activeRoomCompanions} ${isKo ? '명과 함께' : 'companions nearby'}`}
                     </Text>
                   ) : null}
                 </View>
@@ -5410,22 +5465,12 @@ function App() {
                   </View>
                 </View>
                 {tab === 'friends' ? (
-                  friendsMode === 'family' ? (
-                    <Pressable
-                      style={[styles.iconDark, connectableFamilyFriends.length === 0 && styles.off]}
-                      disabled={connectableFamilyFriends.length === 0}
-                      onPress={openFamilyPickerModal}
-                    >
-                      <Ionicons name="people-outline" size={18} color={FOREST.text} />
-                    </Pressable>
-                  ) : (
-                    <Pressable style={styles.iconDark} onPress={openFriendModal}>
-                      <Ionicons name="person-add" size={18} color={FOREST.text} />
-                    </Pressable>
-                  )
+                  <Pressable style={styles.iconDark} onPress={openFriendModal}>
+                    <Ionicons name="person-add" size={18} color={FOREST.text} />
+                  </Pressable>
                 ) : tab === 'chats' ? (
                   chatsMode === 'group' ? (
-                    <Pressable style={styles.iconDark} onPress={() => setShowGroupModal(true)}>
+                    <Pressable style={styles.iconDark} onPress={() => openCreateRoomModal('group')}>
                       <Ionicons name="add" size={20} color={FOREST.text} />
                     </Pressable>
                   ) : (
@@ -5456,7 +5501,7 @@ function App() {
                           {isKo ? '친구와 대화를 시작하면 여기에서 바로 이어져요.' : 'Start a chat with a friend and it will appear here.'}
                         </Text>
                       </View>
-                    ) : chatsMode === 'group' && groupRooms.length === 0 ? (
+                    ) : chatsMode === 'group' && groupRooms.length === 0 && familyRooms.length === 0 ? (
                       <View style={[styles.empty, styles.emptyCove]}>
                         <Text style={styles.h1}>{isKo ? '그룹 대화가 없어요' : 'No Group Chats Yet'}</Text>
                         <Text style={styles.sub}>
@@ -5497,6 +5542,10 @@ function App() {
                           <>
                             {favoriteGroupRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '즐겨찾기' : 'Favorites'}</Text> : null}
                             {favoriteGroupRooms.map(renderRoomRow)}
+                            {favoriteFamilyRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '가족방 즐겨찾기' : 'Favorite Family Rooms'}</Text> : null}
+                            {favoriteFamilyRooms.map(renderRoomRow)}
+                            {otherFamilyRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '가족방' : 'Family Rooms'}</Text> : null}
+                            {otherFamilyRooms.map(renderRoomRow)}
                             {otherGroupRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '그룹 대화' : 'Group Chats'}</Text> : null}
                             {otherGroupRooms.map(renderRoomRow)}
                           </>
@@ -5509,7 +5558,7 @@ function App() {
                 {tab === 'friends' ? (
                   <ScrollView contentContainerStyle={styles.list}>
                     {isFriendSyncing ? <Text style={styles.sub}>{s.friendLoading}</Text> : null}
-                    {friendsMode === 'family' && familyRequestsIncoming.length > 0 ? (
+                    {familyRequestsIncoming.length > 0 ? (
                       <>
                         <Text style={styles.sectionTitle}>{isKo ? '가족 요청' : 'Family Requests'}</Text>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
@@ -5540,7 +5589,7 @@ function App() {
                         </ScrollView>
                       </>
                     ) : null}
-                    {friendsMode === 'family' && familyRequestsOutgoing.length > 0 ? (
+                    {familyRequestsOutgoing.length > 0 ? (
                       <>
                         <Text style={styles.sectionTitle}>{isKo ? '보낸 가족 요청' : 'Sent Family Requests'}</Text>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
@@ -5562,7 +5611,7 @@ function App() {
                         </ScrollView>
                       </>
                     ) : null}
-                    {friendsMode === 'friends' && friendRequestsIncoming.length > 0 ? (
+                    {friendRequestsIncoming.length > 0 ? (
                       <>
                         <Text style={styles.sectionTitle}>{s.friendIncoming}</Text>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
@@ -5593,7 +5642,7 @@ function App() {
                         </ScrollView>
                       </>
                     ) : null}
-                    {friendsMode === 'friends' && friendRequestsOutgoing.length > 0 ? (
+                    {friendRequestsOutgoing.length > 0 ? (
                       <>
                         <Text style={styles.sectionTitle}>{s.friendOutgoing}</Text>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
@@ -5606,7 +5655,7 @@ function App() {
                         </ScrollView>
                       </>
                     ) : null}
-                    {friendsMode === 'friends' && friends.length === 0 ? (
+                    {friends.length === 0 ? (
                       <View style={[styles.empty, styles.emptyCove]}>
                         <Pressable onPress={openFriendModal}>
                           <Text style={[styles.h1, { textDecorationLine: 'underline' }]}>{s.noFriends}</Text>
@@ -6164,15 +6213,53 @@ function App() {
               behavior={kbBehavior}
             >
               <View style={styles.sheet}>
-                <Text style={styles.h1}>{s.groupTitle}</Text>
+                <Text style={styles.h1}>{s.createRoomTitle}</Text>
+                <View style={{ gap: 10 }}>
+                  <Pressable
+                    style={[
+                      styles.item,
+                      styles.familyOptionItem,
+                      createRoomType === 'group' && styles.familyOptionItemSelected,
+                    ]}
+                    onPress={() => setCreateRoomType('group')}
+                  >
+                    <View style={styles.familyOptionCopy}>
+                      <Text style={styles.itemTitle}>{s.createRoomGroupLabel}</Text>
+                      <Text style={styles.sub}>{s.createRoomGroupBody}</Text>
+                    </View>
+                    <Ionicons
+                      name={createRoomType === 'group' ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={18}
+                      color={FOREST.text}
+                    />
+                  </Pressable>
+                  <Pressable
+                    style={[
+                      styles.item,
+                      styles.familyOptionItem,
+                      createRoomType === 'family' && styles.familyOptionItemSelected,
+                    ]}
+                    onPress={() => setCreateRoomType('family')}
+                  >
+                    <View style={styles.familyOptionCopy}>
+                      <Text style={styles.itemTitle}>{s.createRoomFamilyLabel}</Text>
+                      <Text style={styles.sub}>{s.createRoomFamilyBody}</Text>
+                    </View>
+                    <Ionicons
+                      name={createRoomType === 'family' ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={18}
+                      color={FOREST.text}
+                    />
+                  </Pressable>
+                </View>
                 <TextInput
                   style={styles.field}
-                  placeholder={s.groupName}
+                  placeholder={createRoomType === 'family' ? s.createRoomFamilyName : s.groupName}
                   placeholderTextColor={FOREST.placeholder}
                   value={groupNameDraft}
                   onChangeText={setGroupNameDraft}
                 />
-                <Text style={styles.sub}>{s.groupHint}</Text>
+                <Text style={styles.sub}>{createRoomType === 'family' ? s.createRoomFamilyHint : s.groupHint}</Text>
                 <ScrollView style={{ maxHeight: 180 }}>
                   {friends.map((f) => (
                     <Pressable key={f.id} style={styles.item} onPress={() => toggleGroupPick(f.id)}>
@@ -6186,13 +6273,18 @@ function App() {
                     <Text style={styles.smallBtnText}>{s.cancel}</Text>
                   </Pressable>
                   <Pressable
-                    style={[styles.smallBtn, groupPick.length < 2 && styles.off]}
-                    disabled={groupPick.length < 2}
+                    style={[
+                      styles.smallBtn,
+                      groupPick.length < (createRoomType === 'family' ? 1 : 2) && styles.off,
+                    ]}
+                    disabled={groupPick.length < (createRoomType === 'family' ? 1 : 2)}
                     onPress={() => {
-                      void createGroup();
+                      void createSharedRoom();
                     }}
                   >
-                    <Text style={styles.smallBtnText}>{s.createRoom}</Text>
+                    <Text style={styles.smallBtnText}>
+                      {createRoomType === 'family' ? s.createFamilyRoomAction : s.createRoom}
+                    </Text>
                   </Pressable>
                 </View>
               </View>
