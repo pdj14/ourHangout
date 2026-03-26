@@ -188,3 +188,25 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+def releaseOutputFileName = "ourhangout_${buildVersionInfo.versionName}-release.apk"
+def namedReleaseDirPath = file("$buildDir/outputs/release-named")
+
+tasks.register("copyNamedReleaseApk", Copy) {
+    dependsOn("assembleRelease")
+    from(file("$buildDir/outputs/apk/release/app-release.apk"))
+    into(namedReleaseDirPath)
+    rename { releaseOutputFileName }
+}
+
+tasks.register("cleanNamedReleaseApk", Delete) {
+    delete(namedReleaseDirPath)
+}
+
+tasks.matching { it.name == "copyNamedReleaseApk" }.configureEach {
+    dependsOn("cleanNamedReleaseApk")
+}
+
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    finalizedBy("copyNamedReleaseApk")
+}
