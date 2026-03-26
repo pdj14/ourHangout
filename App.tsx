@@ -3562,6 +3562,7 @@ function App() {
     setFamilyActionKey(actionKey);
     try {
       await backendRequest(`/v1/family/upgrade-requests/${requestId}/accept`, { method: 'POST' }, token);
+      setFamilyRequestsIncoming((prev) => prev.filter((item) => item.requestId !== requestId));
       await refreshFriendTabData();
       await refreshRoomsFromBackend(token).catch(() => null);
       Alert.alert(isKo ? '가족 관계가 연결됐어요.' : 'Family link created.');
@@ -3579,6 +3580,7 @@ function App() {
     setFamilyActionKey(actionKey);
     try {
       await backendRequest(`/v1/family/upgrade-requests/${requestId}/reject`, { method: 'POST' }, token);
+      setFamilyRequestsIncoming((prev) => prev.filter((item) => item.requestId !== requestId));
       await refreshFriendTabData();
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
@@ -3594,6 +3596,7 @@ function App() {
     setFamilyActionKey(actionKey);
     try {
       await backendRequest(`/v1/family/upgrade-requests/${requestId}/cancel`, { method: 'POST' }, token);
+      setFamilyRequestsOutgoing((prev) => prev.filter((item) => item.requestId !== requestId));
       await refreshFriendTabData();
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
@@ -3821,6 +3824,7 @@ function App() {
     setFriendActionKey(actionKey);
     try {
       await backendRequest(`/v1/friends/requests/${requestId}/accept`, { method: 'POST' }, token);
+      setFriendRequestsIncoming((prev) => prev.filter((item) => item.id !== requestId));
       await Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token)]);
       Alert.alert(s.friendRequestAcceptedDone);
     } catch (err) {
@@ -3838,6 +3842,7 @@ function App() {
     setFriendActionKey(actionKey);
     try {
       await backendRequest(`/v1/friends/requests/${requestId}/reject`, { method: 'POST' }, token);
+      setFriendRequestsIncoming((prev) => prev.filter((item) => item.id !== requestId));
       await refreshFriendsAndRequests(token);
       Alert.alert(s.friendRequestRejectedDone);
     } catch (err) {
@@ -3853,6 +3858,19 @@ function App() {
     if (!accessToken.trim()) return;
     void refreshFriendTabData();
   }, [tab, accessToken]);
+  useEffect(() => {
+    if (tab !== 'friends') return;
+    if (appVisibility !== 'active') return;
+    if (isSessionRestoring) return;
+    if (backendState !== 'ready') return;
+    const token = accessToken.trim();
+    if (!token) return;
+
+    const interval = setInterval(() => {
+      void refreshFriendTabData();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [tab, appVisibility, isSessionRestoring, backendState, accessToken]);
 
   const createGroup = async () => {
     if (groupPick.length < 2) return;
