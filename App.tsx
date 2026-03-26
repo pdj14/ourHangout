@@ -3,6 +3,7 @@ import type { ComponentProps, ReactNode } from 'react';
 import {
   Alert,
   AppState,
+  BackHandler,
   Image,
   KeyboardAvoidingView,
   LayoutChangeEvent,
@@ -1333,6 +1334,8 @@ function App() {
   const [showFriendAliasModal, setShowFriendAliasModal] = useState(false);
   const [friendAliasTargetId, setFriendAliasTargetId] = useState('');
   const [friendAliasDraft, setFriendAliasDraft] = useState('');
+  const [showFriendActionsModal, setShowFriendActionsModal] = useState(false);
+  const [friendActionsTargetId, setFriendActionsTargetId] = useState('');
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [groupNameDraft, setGroupNameDraft] = useState('');
   const [groupPick, setGroupPick] = useState<string[]>([]);
@@ -1374,6 +1377,8 @@ function App() {
   const registeredPushTokenRef = useRef('');
   const notificationResponseSubRef = useRef<Notifications.EventSubscription | null>(null);
   const appUpdateCheckKeyRef = useRef('');
+  const friendTabRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const friendTabRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const backendBaseUrl = normalizeBackendBaseUrl(backendOverrideUrl) || defaultBackendBaseUrl;
   const backendOrigin = useMemo(() => {
     try {
@@ -1593,6 +1598,10 @@ function App() {
   const familyUpgradeTarget = useMemo(
     () => friends.find((friend) => friend.id === familyUpgradeTargetId) ?? null,
     [familyUpgradeTargetId, friends]
+  );
+  const friendActionsTarget = useMemo(
+    () => friends.find((friend) => friend.id === friendActionsTargetId) ?? null,
+    [friendActionsTargetId, friends]
   );
   const friendsTabLabel = friendsMode === 'family' ? (isKo ? '가족' : 'Family') : s.tabsFriends;
   const friendsTabHint =
@@ -1901,6 +1910,14 @@ function App() {
     });
     return () => sub.remove();
   }, []);
+  useEffect(() => {
+    if (!activeRoomId) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      void closeActiveRoom();
+      return true;
+    });
+    return () => sub.remove();
+  }, [activeRoomId, accessToken]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState) => {
@@ -1909,7 +1926,7 @@ function App() {
       if (backendState !== 'ready') return;
       const token = accessToken.trim();
       if (!token) return;
-      void Promise.all([refreshFriendTabData(), refreshRoomsFromBackend(token)]).catch(() => null);
+      void Promise.all([refreshFriendTabData({ silent: true }), refreshRoomsFromBackend(token)]).catch(() => null);
       if (activeRoomRef.current) {
         void syncRoomReadState(token, activeRoomRef.current, { refreshMessages: true }).catch(() => null);
       }
@@ -2827,12 +2844,14 @@ function App() {
         }
 
         if (payload.event === 'friend.updated') {
-          void Promise.all([refreshFriendTabData(), refreshRoomsFromBackend(token)]).catch(() => null);
+          scheduleFriendTabRefresh(120);
+          void refreshRoomsFromBackend(token).catch(() => null);
           return;
         }
 
         if (payload.event === 'family.updated') {
-          void Promise.all([refreshFriendTabData(), refreshRoomsFromBackend(token)]).catch(() => null);
+          scheduleFriendTabRefresh(120);
+          void refreshRoomsFromBackend(token).catch(() => null);
         }
       } catch {
         // Ignore malformed websocket payloads and keep the socket alive.
@@ -3490,18 +3509,49 @@ function App() {
     setActiveRoomId(null);
   };
 
-  const refreshFriendTabData = async () => {
+  const refreshFriendTabData = async (options?: { silent?: boolean }) => {
     const token = accessToken.trim();
     if (!token) return;
-    setIsFriendSyncing(true);
-    try {
-      await Promise.all([refreshFriendsAndRequests(token), refreshFamilyUpgradeRequests(token)]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : '';
-      if (msg) Alert.alert(msg);
-    } finally {
-      setIsFriendSyncing(false);
+    if (friendTabRefreshInFlightRef.current) {
+      return friendTabRefreshInFlightRef.current;
     }
+    const silent = options?.silent ?? false;
+    const request = (async () => {
+      if (!silent) {
+        setIsFriendSyncing(true);
+      }
+      try {
+        await Promise.all([refreshFriendsAndRequests(token), refreshFamilyUpgradeRequests(token)]);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        if (!silent && msg) Alert.alert(msg);
+      } finally {
+        if (!silent) {
+          setIsFriendSyncing(false);
+        }
+      }
+    })();
+    friendTabRefreshInFlightRef.current = request;
+    try {
+      await request;
+    } finally {
+      if (friendTabRefreshInFlightRef.current === request) {
+        friendTabRefreshInFlightRef.current = null;
+      }
+    }
+  };
+  const scheduleFriendTabRefresh = (delayMs = 250) => {
+    if (friendTabRefreshTimerRef.current) {
+      clearTimeout(friendTabRefreshTimerRef.current);
+    }
+    friendTabRefreshTimerRef.current = setTimeout(() => {
+      friendTabRefreshTimerRef.current = null;
+      if (tab !== 'friends') return;
+      if (appVisibility !== 'active') return;
+      if (isSessionRestoring) return;
+      if (backendState !== 'ready') return;
+      void refreshFriendTabData({ silent: true });
+    }, delayMs);
   };
 
   const openFriendModal = () => {
@@ -3640,6 +3690,25 @@ function App() {
     setFriendAliasDraft(friend.aliasName || '');
     setShowFriendAliasModal(true);
   };
+  const removeFriendAlias = async (friendUserId: string) => {
+    const token = requireAccessToken();
+    if (!token) return;
+    const actionKey = `alias:${friendUserId}`;
+    setFriendActionKey(actionKey);
+    try {
+      await backendRequest(
+        `/v1/friends/${friendUserId}/alias`,
+        { method: 'PATCH', body: JSON.stringify({ alias: null }) },
+        token
+      );
+      await refreshFriendTabData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setFriendActionKey('');
+    }
+  };
   const closeFriendAliasModal = () => {
     setShowFriendAliasModal(false);
     setFriendAliasTargetId('');
@@ -3673,69 +3742,12 @@ function App() {
     }
   };
   const openFriendActions = (friend: Friend) => {
-    const buttons = [
-      {
-        text: friend.aliasName ? (isKo ? '이름 수정' : 'Edit Alias') : isKo ? '이름 지정' : 'Set Alias',
-        onPress: () => openFriendAliasModal(friend),
-      },
-      ...(friend.aliasName
-        ? [
-            {
-              text: isKo ? '이름 삭제' : 'Remove Alias',
-              onPress: () => {
-                setFriendAliasTargetId(friend.id);
-                setFriendAliasDraft('');
-                void (async () => {
-                  const token = requireAccessToken();
-                  if (!token) return;
-                  const actionKey = `alias:${friend.id}`;
-                  setFriendActionKey(actionKey);
-                  try {
-                    await backendRequest(
-                      `/v1/friends/${friend.id}/alias`,
-                      { method: 'PATCH', body: JSON.stringify({ alias: null }) },
-                      token
-                    );
-                    await refreshFriendTabData();
-                  } catch (err) {
-                    const msg = err instanceof Error ? err.message : '';
-                    Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
-                  } finally {
-                    setFriendActionKey('');
-                  }
-                })();
-              },
-            },
-          ]
-        : []),
-      {
-        text: isKo ? '취소' : 'Cancel',
-        style: 'cancel' as const,
-      },
-      ...(friend.family?.isFamily && friend.family.relationshipId
-        ? [
-            {
-              text: isKo ? '가족 해제' : 'Remove Family Link',
-              style: 'destructive' as const,
-              onPress: () => {
-                void removeFamilyLink(friend.family!.relationshipId);
-              },
-            },
-          ]
-        : []),
-      {
-        text: isKo ? '친구 삭제' : 'Remove Friend',
-        style: 'destructive' as const,
-        onPress: () => {
-          void removeFriendConnection(friend.id);
-        },
-      },
-    ];
-    Alert.alert(
-      friend.name,
-      isKo ? '이 친구의 연결 상태를 관리할 수 있어요.' : 'Manage this connection.',
-      buttons
-    );
+    setFriendActionsTargetId(friend.id);
+    setShowFriendActionsModal(true);
+  };
+  const closeFriendActionsModal = () => {
+    setShowFriendActionsModal(false);
+    setFriendActionsTargetId('');
   };
 
   const searchFriendCandidates = async () => {
@@ -3859,18 +3871,13 @@ function App() {
     void refreshFriendTabData();
   }, [tab, accessToken]);
   useEffect(() => {
-    if (tab !== 'friends') return;
-    if (appVisibility !== 'active') return;
-    if (isSessionRestoring) return;
-    if (backendState !== 'ready') return;
-    const token = accessToken.trim();
-    if (!token) return;
-
-    const interval = setInterval(() => {
-      void refreshFriendTabData();
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [tab, appVisibility, isSessionRestoring, backendState, accessToken]);
+    return () => {
+      if (friendTabRefreshTimerRef.current) {
+        clearTimeout(friendTabRefreshTimerRef.current);
+        friendTabRefreshTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const createGroup = async () => {
     if (groupPick.length < 2) return;
@@ -4919,6 +4926,11 @@ function App() {
 
   const resetForLogout = () => {
     setSessionTokens('', '');
+    if (friendTabRefreshTimerRef.current) {
+      clearTimeout(friendTabRefreshTimerRef.current);
+      friendTabRefreshTimerRef.current = null;
+    }
+    friendTabRefreshInFlightRef.current = null;
     roomReadCutoffRef.current = {};
     pushTokenRef.current = '';
     registeredPushTokenRef.current = '';
@@ -4955,9 +4967,11 @@ function App() {
     setShowFamilyPickerModal(false);
     setShowFamilyUpgradeModal(false);
     setShowFriendAliasModal(false);
+    setShowFriendActionsModal(false);
     setShowGroupModal(false);
     setFriendAliasTargetId('');
     setFriendAliasDraft('');
+    setFriendActionsTargetId('');
     setFamilyUpgradeTargetId('');
     setRoomMenuId(null);
     setLoginErr('');
@@ -6037,6 +6051,98 @@ function App() {
                       <Text style={styles.smallBtnText}>{s.save}</Text>
                     </Pressable>
                   </View>
+                </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={showFriendActionsModal}
+          transparent
+          animationType="slide"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={closeFriendActionsModal}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={closeFriendActionsModal} />
+            <KeyboardAvoidingView
+              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset + 12 }]}
+              behavior="padding"
+              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+            >
+              <ScrollView
+                contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheet}>
+                  <Text style={styles.h1}>{friendActionsTarget?.name || (isKo ? '친구 관리' : 'Manage Friend')}</Text>
+                  <Text style={styles.sub}>
+                    {isKo
+                      ? '이 친구의 닉네임과 관계를 관리할 수 있어요.'
+                      : 'Manage this friend nickname and connection.'}
+                  </Text>
+                  <Pressable
+                    style={styles.item}
+                    onPress={() => {
+                      if (!friendActionsTarget) return;
+                      closeFriendActionsModal();
+                      openFriendAliasModal(friendActionsTarget);
+                    }}
+                  >
+                    <Text style={styles.itemTitle}>
+                      {friendActionsTarget?.aliasName
+                        ? isKo
+                          ? '닉네임 수정'
+                          : 'Edit Nickname'
+                        : isKo
+                          ? '닉네임 지정'
+                          : 'Set Nickname'}
+                    </Text>
+                  </Pressable>
+                  {friendActionsTarget?.aliasName ? (
+                    <Pressable
+                      style={styles.item}
+                      onPress={() => {
+                        if (!friendActionsTarget) return;
+                        closeFriendActionsModal();
+                        void removeFriendAlias(friendActionsTarget.id);
+                      }}
+                    >
+                      <Text style={styles.itemTitle}>{isKo ? '닉네임 삭제' : 'Remove Nickname'}</Text>
+                    </Pressable>
+                  ) : null}
+                  {friendActionsTarget?.family?.isFamily && friendActionsTarget.family.relationshipId ? (
+                    <Pressable
+                      style={styles.item}
+                      onPress={() => {
+                        if (!friendActionsTarget?.family?.relationshipId) return;
+                        closeFriendActionsModal();
+                        void removeFamilyLink(friendActionsTarget.family.relationshipId);
+                      }}
+                    >
+                      <Text style={[styles.itemTitle, { color: '#D05E85' }]}>
+                        {isKo ? '가족 관계 해제' : 'Remove Family Relationship'}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                  <Pressable
+                    style={styles.item}
+                    onPress={() => {
+                      if (!friendActionsTarget) return;
+                      closeFriendActionsModal();
+                      void removeFriendConnection(friendActionsTarget.id);
+                    }}
+                  >
+                    <Text style={[styles.itemTitle, { color: '#D05E85' }]}>
+                      {isKo ? '친구 삭제' : 'Remove Friend'}
+                    </Text>
+                  </Pressable>
+                  <Pressable style={styles.smallBtn} onPress={closeFriendActionsModal}>
+                    <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                  </Pressable>
                 </View>
               </ScrollView>
             </KeyboardAvoidingView>
