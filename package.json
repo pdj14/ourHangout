@@ -10,6 +10,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "config:check": "expo config --type public",
+    "version:print": "node scripts/build-version.js",
     "build:apk": "npx eas-cli build -p android --profile preview"
   },
   "dependencies": {

@@ -1,6 +1,12 @@
 import type { ExpoConfig } from '@expo/config-types';
+const { getBuildVersionInfo } = require('./scripts/build-version');
 
 type AppExtra = {
+  buildVersion?: {
+    name?: string;
+    code?: number;
+    source?: string;
+  };
   googleAuth?: {
     androidClientId?: string;
     iosClientId?: string;
@@ -33,16 +39,24 @@ if (!plugins.includes('expo-media-library')) {
 const backendBaseUrl = pick(process.env.EXPO_PUBLIC_BACKEND_BASE_URL, defaultBackend.baseUrl)
   .replace(/\/+$/, '');
 const androidGoogleServicesFile = trim(process.env.ANDROID_GOOGLE_SERVICES_FILE);
+const buildVersion = getBuildVersionInfo();
 
 const config: ExpoConfig = {
   ...baseConfig,
+  version: buildVersion.versionName,
   plugins,
   android: {
     ...baseConfig.android,
+    versionCode: buildVersion.versionCode,
     ...(androidGoogleServicesFile ? { googleServicesFile: androidGoogleServicesFile } : {})
   },
   extra: {
     ...defaultExtra,
+    buildVersion: {
+      name: buildVersion.versionName,
+      code: buildVersion.versionCode,
+      source: buildVersion.source
+    },
     googleAuth: {
       ...defaultGoogle,
       androidClientId: pick(

@@ -313,6 +313,7 @@ type BackendRoomRead = {
   lastReadMessageId?: string;
 };
 type AppExtra = {
+  buildVersion?: { name?: string; code?: number; source?: string };
   googleAuth?: { androidClientId?: string; iosClientId?: string; webClientId?: string };
   backend?: { baseUrl?: string };
 };
@@ -356,7 +357,7 @@ const URL_REGEX = /https?:\/\/\S+/gi;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const PROFILE_CROP_BOX = 260;
 const PROFILE_PHOTO_MAX_OUTPUT = 2048;
-const DEFAULT_APP_VERSION = '1.0.1';
+const DEFAULT_APP_VERSION = '0';
 const APP_PACKAGE_ID = 'com.ourhangout';
 const APP_UPDATE_APK_MIME_TYPE = 'application/vnd.android.package-archive';
 const INTENT_FLAG_GRANT_READ_URI_PERMISSION = 1;
@@ -675,12 +676,13 @@ const buildDevBackendBaseUrl = (prodBaseUrl: string): string => {
 };
 const getRuntimeAppVersion = (): string => {
   const constantsAny = Constants as unknown as {
-    expoConfig?: { version?: string };
+    expoConfig?: { version?: string; extra?: { buildVersion?: { name?: string } } };
     manifest2?: { version?: string };
     manifest?: { version?: string };
   };
 
   return (
+    constantsAny.expoConfig?.extra?.buildVersion?.name ||
     constantsAny.expoConfig?.version ||
     constantsAny.manifest2?.version ||
     constantsAny.manifest?.version ||

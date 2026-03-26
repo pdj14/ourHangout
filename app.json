@@ -7,7 +7,6 @@
       "com.googleusercontent.apps.599659668409-311tkiv1ikkk55apu33h9j9pfk2rkvof",
       "com.googleusercontent.apps.599659668409-jo6tdh99iht1tle9mf089k8ba3en08ou"
     ],
-    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -20,7 +19,6 @@
       "supportsTablet": true
     },
     "android": {
-      "versionCode": 6,
       "permissions": [
         "REQUEST_INSTALL_PACKAGES"
       ],
