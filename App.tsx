@@ -90,6 +90,8 @@ type FriendFamilySummary = {
 type Friend = {
   id: string;
   name: string;
+  profileName: string;
+  aliasName?: string;
   status: string;
   avatarUri: string;
   trusted: boolean;
@@ -169,6 +171,8 @@ type BackendProfile = {
 type BackendFriend = {
   id?: string;
   name?: string;
+  profileName?: string;
+  aliasName?: string;
   status?: string;
   avatarUri?: string;
   trusted?: boolean;
@@ -1326,6 +1330,9 @@ function App() {
   const [showFamilyPickerModal, setShowFamilyPickerModal] = useState(false);
   const [showFamilyUpgradeModal, setShowFamilyUpgradeModal] = useState(false);
   const [familyUpgradeTargetId, setFamilyUpgradeTargetId] = useState('');
+  const [showFriendAliasModal, setShowFriendAliasModal] = useState(false);
+  const [friendAliasTargetId, setFriendAliasTargetId] = useState('');
+  const [friendAliasDraft, setFriendAliasDraft] = useState('');
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [groupNameDraft, setGroupNameDraft] = useState('');
   const [groupPick, setGroupPick] = useState<string[]>([]);
@@ -1524,7 +1531,7 @@ function App() {
   const filteredFriends = useMemo(() => {
     const q = friendQuery.trim().toLowerCase();
     if (!q) return friends;
-    return friends.filter((f) => `${f.name} ${f.status}`.toLowerCase().includes(q));
+    return friends.filter((f) => `${f.name} ${f.profileName} ${f.status}`.toLowerCase().includes(q));
   }, [friendQuery, friends]);
   const familyFriends = useMemo(
     () =>
@@ -1810,6 +1817,12 @@ function App() {
       ? familyActionKey === `family-remove:${friend.family.relationshipId}`
       : false;
     const removeFriendBusy = friendActionKey === `friend-remove:${friend.id}`;
+    const aliasBusy = friendActionKey === `alias:${friend.id}`;
+    const subtitle = friend.aliasName
+      ? friend.status
+        ? `${friend.profileName} · ${friend.status}`
+        : friend.profileName
+      : friend.status || friend.profileName || s.startChat;
     return (
       <View key={friend.id} style={styles.friendItem}>
         <Pressable
@@ -1833,7 +1846,7 @@ function App() {
             ) : null}
           </View>
           <Text style={styles.friendStatusText} numberOfLines={1}>
-            {friend.status || s.startChat}
+            {subtitle}
           </Text>
         </View>
         <Pressable
@@ -1856,7 +1869,7 @@ function App() {
           <Ionicons name="chatbubble-ellipses" size={16} color={FOREST.text} />
         </Pressable>
         <Pressable
-          style={[styles.iconLight, (removeFamilyBusy || removeFriendBusy || !!friendActionKey || !!familyActionKey) && styles.off]}
+          style={[styles.iconLight, (aliasBusy || removeFamilyBusy || removeFriendBusy || !!friendActionKey || !!familyActionKey) && styles.off]}
           disabled={!!friendActionKey || !!familyActionKey}
           onPress={() => openFriendActions(friend)}
         >
@@ -2547,6 +2560,8 @@ function App() {
             .map((f) => ({
               id: String(f.id),
               name: String(f.name),
+              profileName: String(f.profileName || f.name || ''),
+              ...(f.aliasName ? { aliasName: String(f.aliasName) } : {}),
               status: String(f.status || ''),
               avatarUri: resolveBackendMediaUrl(String(f.avatarUri || '')),
               trusted: !!f.trusted,
@@ -3617,8 +3632,79 @@ function App() {
       setFriendActionKey('');
     }
   };
+  const openFriendAliasModal = (friend: Friend) => {
+    setFriendAliasTargetId(friend.id);
+    setFriendAliasDraft(friend.aliasName || '');
+    setShowFriendAliasModal(true);
+  };
+  const closeFriendAliasModal = () => {
+    setShowFriendAliasModal(false);
+    setFriendAliasTargetId('');
+    setFriendAliasDraft('');
+  };
+  const saveFriendAlias = async () => {
+    const token = requireAccessToken();
+    if (!token) return;
+    const friendUserId = friendAliasTargetId.trim();
+    if (!friendUserId) return;
+    const actionKey = `alias:${friendUserId}`;
+    setFriendActionKey(actionKey);
+    try {
+      await backendRequest(
+        `/v1/friends/${friendUserId}/alias`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({
+            alias: friendAliasDraft.trim() ? friendAliasDraft.trim() : null,
+          }),
+        },
+        token
+      );
+      closeFriendAliasModal();
+      await refreshFriendTabData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setFriendActionKey('');
+    }
+  };
   const openFriendActions = (friend: Friend) => {
     const buttons = [
+      {
+        text: friend.aliasName ? (isKo ? '이름 수정' : 'Edit Alias') : isKo ? '이름 지정' : 'Set Alias',
+        onPress: () => openFriendAliasModal(friend),
+      },
+      ...(friend.aliasName
+        ? [
+            {
+              text: isKo ? '이름 삭제' : 'Remove Alias',
+              onPress: () => {
+                setFriendAliasTargetId(friend.id);
+                setFriendAliasDraft('');
+                void (async () => {
+                  const token = requireAccessToken();
+                  if (!token) return;
+                  const actionKey = `alias:${friend.id}`;
+                  setFriendActionKey(actionKey);
+                  try {
+                    await backendRequest(
+                      `/v1/friends/${friend.id}/alias`,
+                      { method: 'PATCH', body: JSON.stringify({ alias: null }) },
+                      token
+                    );
+                    await refreshFriendTabData();
+                  } catch (err) {
+                    const msg = err instanceof Error ? err.message : '';
+                    Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+                  } finally {
+                    setFriendActionKey('');
+                  }
+                })();
+              },
+            },
+          ]
+        : []),
       {
         text: isKo ? '취소' : 'Cancel',
         style: 'cancel' as const,
@@ -4850,7 +4936,10 @@ function App() {
     setShowFriendModal(false);
     setShowFamilyPickerModal(false);
     setShowFamilyUpgradeModal(false);
+    setShowFriendAliasModal(false);
     setShowGroupModal(false);
+    setFriendAliasTargetId('');
+    setFriendAliasDraft('');
     setFamilyUpgradeTargetId('');
     setRoomMenuId(null);
     setLoginErr('');
@@ -5873,6 +5962,61 @@ function App() {
                       }}
                     >
                       <Text style={styles.smallBtnText}>{isKo ? '요청 보내기' : 'Send Request'}</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={showFriendAliasModal}
+          transparent
+          animationType="slide"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={closeFriendAliasModal}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={closeFriendAliasModal} />
+            <KeyboardAvoidingView
+              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset + 12 }]}
+              behavior="padding"
+              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+            >
+              <ScrollView
+                contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheet}>
+                  <Text style={styles.h1}>{isKo ? '내가 부르는 이름' : 'My Name For This Person'}</Text>
+                  <Text style={styles.sub}>
+                    {isKo
+                      ? '상대 프로필명과 별개로 내가 부르는 이름을 저장할 수 있어요. 비워두면 공식 프로필명이 보여요.'
+                      : 'Save the name you want to use for this person. Leave it empty to fall back to their profile name.'}
+                  </Text>
+                  <TextInput
+                    style={styles.field}
+                    value={friendAliasDraft}
+                    onChangeText={setFriendAliasDraft}
+                    placeholder={isKo ? '예: 엄마, 큰딸, 외할머니' : 'Examples: Mom, Eldest Daughter, Grandma'}
+                    placeholderTextColor={FOREST.placeholder}
+                    maxLength={100}
+                  />
+                  <View style={styles.row}>
+                    <Pressable style={styles.smallBtn} onPress={closeFriendAliasModal}>
+                      <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.smallBtn, !!friendActionKey && styles.off]}
+                      disabled={!!friendActionKey}
+                      onPress={() => {
+                        void saveFriendAlias();
+                      }}
+                    >
+                      <Text style={styles.smallBtnText}>{s.save}</Text>
                     </Pressable>
                   </View>
                 </View>
