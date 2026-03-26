@@ -1424,7 +1424,6 @@ function App() {
   const pushTokenRef = useRef('');
   const registeredPushTokenRef = useRef('');
   const notificationResponseSubRef = useRef<Notifications.EventSubscription | null>(null);
-  const appUpdateCheckKeyRef = useRef('');
   const friendTabRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const friendTabRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const backendBaseUrl = normalizeBackendBaseUrl(backendOverrideUrl) || defaultBackendBaseUrl;
@@ -3020,10 +3019,7 @@ function App() {
     if (!isBackendConfigReady) return;
     if (backendState !== 'ready') return;
     if (!canCheckForAppUpdate) return;
-
-    const checkKey = `${backendBaseUrl}|${currentAppVersion}`;
-    if (appUpdateCheckKeyRef.current === checkKey) return;
-    appUpdateCheckKeyRef.current = checkKey;
+    if (tab !== 'profile') return;
 
     let cancelled = false;
     const run = async () => {
@@ -3081,13 +3077,13 @@ function App() {
       cancelled = true;
     };
   }, [
-    appUpdateCheckKeyRef,
     backendBaseUrl,
     backendState,
     canCheckForAppUpdate,
     currentAppVersion,
     isBackendConfigReady,
     isKo,
+    tab,
   ]);
 
   useEffect(() => {
