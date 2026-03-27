@@ -1643,6 +1643,7 @@ function App() {
   const [familyStructureAliasDrafts, setFamilyStructureAliasDrafts] = useState<Record<string, string>>({});
   const [familyStructureTargetId, setFamilyStructureTargetId] = useState('');
   const [familyStructureRequestAs, setFamilyStructureRequestAs] = useState<'guardian' | 'child'>('guardian');
+  const [familyStructureSelectedMemberId, setFamilyStructureSelectedMemberId] = useState('');
   const [isFamilyStructureLoading, setIsFamilyStructureLoading] = useState(false);
   const [familyStructureActionKey, setFamilyStructureActionKey] = useState('');
   const [wsRetryTick, setWsRetryTick] = useState(0);
@@ -1934,6 +1935,13 @@ function App() {
   const familyStructureProfileMap = useMemo(
     () => new Map(familyStructureProfiles.map((profile) => [profile.userId, profile])),
     [familyStructureProfiles]
+  );
+  const familyStructureSelectedMember = useMemo(
+    () =>
+      familyStructureSelectedMemberId
+        ? familyStructureProfiles.find((profile) => profile.userId === familyStructureSelectedMemberId) ?? null
+        : null,
+    [familyStructureSelectedMemberId, familyStructureProfiles]
   );
   const familyStructureCanManage = false;
   const familyStructureGuardianId = '';
@@ -4118,6 +4126,46 @@ function App() {
     if (profile?.name) return profile.name;
     return fallbackName || '';
   };
+  const getFamilyStructureRelationshipWithMember = (memberUserId: string) => {
+    const active =
+      familyStructureRelationships.find(
+        (relationship) =>
+          (relationship.guardianUserId === currentUserId && relationship.childUserId === memberUserId) ||
+          (relationship.guardianUserId === memberUserId && relationship.childUserId === currentUserId)
+      ) ?? null;
+    const pendingIncoming =
+      familyStructurePendingIncoming.find(
+        (relationship) =>
+          (relationship.guardianUserId === currentUserId && relationship.childUserId === memberUserId) ||
+          (relationship.guardianUserId === memberUserId && relationship.childUserId === currentUserId)
+      ) ?? null;
+    const pendingOutgoing =
+      familyStructurePendingOutgoing.find(
+        (relationship) =>
+          (relationship.guardianUserId === currentUserId && relationship.childUserId === memberUserId) ||
+          (relationship.guardianUserId === memberUserId && relationship.childUserId === currentUserId)
+      ) ?? null;
+    return { active, pendingIncoming, pendingOutgoing };
+  };
+  const getFamilyStructureRelationshipSummary = (memberUserId: string) => {
+    const { active, pendingIncoming, pendingOutgoing } = getFamilyStructureRelationshipWithMember(memberUserId);
+    if (active) {
+      return active.guardianUserId === currentUserId
+        ? isKo
+          ? '내 자녀로 연결됨'
+          : 'Connected as my child'
+        : isKo
+          ? '내 보호자로 연결됨'
+          : 'Connected as my guardian';
+    }
+    if (pendingIncoming) {
+      return isKo ? '수락 대기 중' : 'Waiting for your response';
+    }
+    if (pendingOutgoing) {
+      return isKo ? '상대 수락 대기 중' : 'Waiting for the other person';
+    }
+    return isKo ? '관계 없음' : 'No relationship yet';
+  };
 
   const closeFamilyStructureModal = () => {
     setFamilyStructureRoomId(null);
@@ -4128,6 +4176,7 @@ function App() {
     setFamilyStructureAliasDrafts({});
     setFamilyStructureTargetId('');
     setFamilyStructureRequestAs('guardian');
+    setFamilyStructureSelectedMemberId('');
     setIsFamilyStructureLoading(false);
     setFamilyStructureActionKey('');
     setFamilyRoomLocations([]);
@@ -4196,11 +4245,16 @@ function App() {
     }
   };
 
-  const createFamilyGuardianLink = async () => {
+  const createFamilyGuardianLink = async (
+    targetUserIdOverride?: string,
+    requestAsOverride?: 'guardian' | 'child'
+  ) => {
     const token = requireAccessToken();
     const roomId = familyStructureRoomId || '';
-    if (!token || !roomId || !familyStructureTargetId) return;
-    const actionKey = `link-create:${familyStructureRequestAs}:${familyStructureTargetId}`;
+    const targetUserId = targetUserIdOverride || familyStructureTargetId;
+    const requestAs = requestAsOverride || familyStructureRequestAs;
+    if (!token || !roomId || !targetUserId) return;
+    const actionKey = `link-create:${requestAs}:${targetUserId}`;
     setFamilyStructureActionKey(actionKey);
     try {
       const created = await backendRequest<BackendFamilyRoomRelationship>(
@@ -4208,8 +4262,8 @@ function App() {
         {
           method: 'POST',
           body: JSON.stringify({
-            targetUserId: familyStructureTargetId,
-            as: familyStructureRequestAs,
+            targetUserId,
+            as: requestAs,
           }),
         },
         token
@@ -5376,12 +5430,35 @@ function App() {
 
   const openExternalUrl = async (url: string) => {
     try {
-      const canOpen = await Linking.canOpenURL(url);
-      if (!canOpen) {
-        Alert.alert(s.linkUnavailableTitle, s.linkUnavailableBody);
-        return;
+      if (/^https?:\/\//i.test(url)) {
+        try {
+          await WebBrowser.openBrowserAsync(url);
+          return;
+        } catch {
+          // Fall through to Linking fallback.
+        }
       }
       await Linking.openURL(url);
+    } catch {
+      Alert.alert(s.linkFailedTitle, s.linkFailedBody);
+    }
+  };
+
+  const openLocationMap = async (latitude: number, longitude: number) => {
+    const appUrl =
+      Platform.OS === 'android'
+        ? `geo:${latitude},${longitude}?q=${latitude},${longitude}`
+        : `http://maps.apple.com/?ll=${latitude},${longitude}`;
+    try {
+      await Linking.openURL(appUrl);
+      return;
+    } catch {
+      // Fall through to browser fallback.
+    }
+
+    try {
+      await WebBrowser.openBrowserAsync(`https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`);
+      return;
     } catch {
       Alert.alert(s.linkFailedTitle, s.linkFailedBody);
     }
@@ -7546,6 +7623,65 @@ function App() {
                     <Text style={styles.sub}>{isKo ? '불러오는 중...' : 'Loading...'}</Text>
                   ) : (
                     <>
+                      <Text style={styles.sectionTitle}>{isKo ? '나의 호칭' : 'My alias'}</Text>
+                      <View style={styles.familyStructureCard}>
+                        <Text style={styles.itemTitle}>
+                          {displayFamilyStructureName(currentUserId, profile.name || s.me) || profile.name || s.me}
+                        </Text>
+                        <TextInput
+                          style={[styles.field, styles.familyAliasInput, !!familyStructureActionKey && styles.off]}
+                          value={familyStructureAliasDrafts[currentUserId] ?? familyStructureProfileMap.get(currentUserId)?.alias ?? ''}
+                          editable={!familyStructureActionKey}
+                          onChangeText={(value) =>
+                            setFamilyStructureAliasDrafts((prev) => ({
+                              ...prev,
+                              [currentUserId]: value,
+                            }))
+                          }
+                          placeholder={isKo ? '이 방에서 보일 나의 호칭' : 'My alias in this room'}
+                          placeholderTextColor={FOREST.placeholder}
+                        />
+                        <View style={styles.row}>
+                          <Pressable
+                            style={[styles.smallBtn, familyStructureActionKey === `alias:${currentUserId}` && styles.off]}
+                            disabled={!!familyStructureActionKey}
+                            onPress={() => {
+                              void saveFamilyStructureAlias(currentUserId);
+                            }}
+                          >
+                            <Text style={styles.smallBtnText}>{s.save}</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+
+                      <Text style={styles.sectionTitle}>{isKo ? '멤버' : 'Members'}</Text>
+                      {familyStructureProfiles
+                        .filter((profile) => profile.userId !== currentUserId)
+                        .map((member) => {
+                          const memberLocation = familyRoomLocations.find((item) => item.userId === member.userId) ?? null;
+                          return (
+                            <Pressable
+                              key={`simple-member-${member.userId}`}
+                              style={styles.familyStructureCard}
+                              onPress={() => setFamilyStructureSelectedMemberId(member.userId)}
+                            >
+                              <View style={styles.familyStructureHeader}>
+                                <Text style={styles.itemTitle}>
+                                  {displayFamilyStructureName(member.userId, member.name) || member.name}
+                                </Text>
+                                <Ionicons name="chevron-forward" size={18} color={FOREST.textMuted} />
+                              </View>
+                              <Text style={styles.sub}>{getFamilyStructureRelationshipSummary(member.userId)}</Text>
+                              {memberLocation ? (
+                                <Text style={styles.sub}>
+                                  {`${isKo ? '최근 위치' : 'Recent location'} · ${roomTimeLabel(memberLocation.capturedAt)}`}
+                                </Text>
+                              ) : null}
+                            </Pressable>
+                          );
+                        })}
+
+                      <View style={{ display: 'none' }}>
                       <Text style={styles.sectionTitle}>{isKo ? '호칭' : 'Aliases'}</Text>
                       {familyStructureProfiles.map((profile) => {
                         const canEditAlias = profile.userId === currentUserId;
@@ -7820,6 +7956,8 @@ function App() {
                         ))
                       )}
 
+                      </View>
+                      <View style={{ display: 'none' }}>
                       <Text style={styles.sectionTitle}>{isKo ? '최근 위치' : 'Recent locations'}</Text>
                       {isFamilyRoomLocationsLoading ? (
                         <Text style={styles.sub}>{isKo ? '위치를 불러오는 중...' : 'Loading locations...'}</Text>
@@ -7842,9 +7980,7 @@ function App() {
                               <Pressable
                                 style={styles.smallBtn}
                                 onPress={() => {
-                                  void openExternalUrl(
-                                    `https://www.google.com/maps/search/?api=1&query=${locationItem.latitude},${locationItem.longitude}`
-                                  );
+                                  void openLocationMap(locationItem.latitude, locationItem.longitude);
                                 }}
                               >
                                 <Text style={styles.smallBtnText}>{isKo ? '지도 열기' : 'Open map'}</Text>
@@ -7865,6 +8001,7 @@ function App() {
                           </View>
                         ))
                       )}
+                      </View>
                     </>
                   )}
                   <View style={styles.row}>
@@ -8009,6 +8146,137 @@ function App() {
                 </View>
               </ScrollView>
             </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={!!familyStructureSelectedMember}
+          transparent
+          animationType="fade"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={() => setFamilyStructureSelectedMemberId('')}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={() => setFamilyStructureSelectedMemberId('')} />
+            <View style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}>
+              <View style={styles.sheet}>
+                <Text style={styles.h1}>
+                  {familyStructureSelectedMember
+                    ? displayFamilyStructureName(
+                        familyStructureSelectedMember.userId,
+                        familyStructureSelectedMember.name
+                      ) || familyStructureSelectedMember.name
+                    : ''}
+                </Text>
+                {familyStructureSelectedMember ? (
+                  <>
+                    <Text style={styles.sub}>
+                      {getFamilyStructureRelationshipSummary(familyStructureSelectedMember.userId)}
+                    </Text>
+                    {(() => {
+                      const { active, pendingIncoming, pendingOutgoing } =
+                        getFamilyStructureRelationshipWithMember(familyStructureSelectedMember.userId);
+                      const locationItem =
+                        familyRoomLocations.find((item) => item.userId === familyStructureSelectedMember.userId) ?? null;
+                      return (
+                        <>
+                          {pendingIncoming ? (
+                            <>
+                              <Pressable
+                                style={styles.item}
+                                onPress={() => {
+                                  void respondFamilyGuardianLink(pendingIncoming.id, 'accept');
+                                  setFamilyStructureSelectedMemberId('');
+                                }}
+                              >
+                                <Text style={styles.itemTitle}>{isKo ? '보호자 관계 수락' : 'Accept relationship'}</Text>
+                              </Pressable>
+                              <Pressable
+                                style={styles.item}
+                                onPress={() => {
+                                  void respondFamilyGuardianLink(pendingIncoming.id, 'reject');
+                                  setFamilyStructureSelectedMemberId('');
+                                }}
+                              >
+                                <Text style={styles.itemTitle}>{isKo ? '보호자 관계 거절' : 'Reject relationship'}</Text>
+                              </Pressable>
+                            </>
+                          ) : pendingOutgoing ? (
+                            <Pressable
+                              style={styles.item}
+                              onPress={() => {
+                                void deleteFamilyGuardianLink(pendingOutgoing.id);
+                                setFamilyStructureSelectedMemberId('');
+                              }}
+                            >
+                              <Text style={styles.itemTitle}>{isKo ? '요청 취소' : 'Cancel request'}</Text>
+                            </Pressable>
+                          ) : active ? (
+                            <Pressable
+                              style={styles.item}
+                              onPress={() => {
+                                void deleteFamilyGuardianLink(active.id);
+                                setFamilyStructureSelectedMemberId('');
+                              }}
+                            >
+                              <Text style={styles.itemTitle}>{isKo ? '보호자 관계 삭제' : 'Delete relationship'}</Text>
+                            </Pressable>
+                          ) : (
+                            <>
+                              <Pressable
+                                style={styles.item}
+                                onPress={() => {
+                                  void createFamilyGuardianLink(familyStructureSelectedMember.userId, 'guardian');
+                                  setFamilyStructureSelectedMemberId('');
+                                }}
+                              >
+                                <Text style={styles.itemTitle}>{isKo ? '내 자녀로 지정 요청' : 'Request as my child'}</Text>
+                              </Pressable>
+                              <Pressable
+                                style={styles.item}
+                                onPress={() => {
+                                  void createFamilyGuardianLink(familyStructureSelectedMember.userId, 'child');
+                                  setFamilyStructureSelectedMemberId('');
+                                }}
+                              >
+                                <Text style={styles.itemTitle}>{isKo ? '내 보호자로 지정 요청' : 'Request as my guardian'}</Text>
+                              </Pressable>
+                            </>
+                          )}
+                          {locationItem ? (
+                            <>
+                              <Pressable
+                                style={styles.item}
+                                onPress={() => {
+                                  void openLocationMap(locationItem.latitude, locationItem.longitude);
+                                }}
+                              >
+                                <Text style={styles.itemTitle}>{isKo ? '지도 열기' : 'Open map'}</Text>
+                              </Pressable>
+                              <Pressable
+                                style={styles.item}
+                                onPress={() => {
+                                  void requestFamilyRoomLocationPrecisionRefresh(
+                                    familyStructureRoomId || '',
+                                    familyStructureSelectedMember.userId
+                                  );
+                                }}
+                              >
+                                <Text style={styles.itemTitle}>{isKo ? '정확히 새로고침' : 'Precise refresh'}</Text>
+                              </Pressable>
+                            </>
+                          ) : null}
+                        </>
+                      );
+                    })()}
+                  </>
+                ) : null}
+                <Pressable style={styles.smallBtn} onPress={() => setFamilyStructureSelectedMemberId('')}>
+                  <Text style={styles.smallBtnText}>{isKo ? '닫기' : 'Close'}</Text>
+                </Pressable>
+              </View>
+            </View>
           </View>
         </Modal>
       </LinearGradient>
