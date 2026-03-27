@@ -5,6 +5,7 @@ import {
   AppState,
   BackHandler,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   LayoutChangeEvent,
   Linking,
@@ -26,6 +27,8 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
 import * as MediaLibrary from 'expo-media-library';
+import * as Location from 'expo-location';
+import * as TaskManager from 'expo-task-manager';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
@@ -123,7 +126,14 @@ type Room = {
   preview: string;
   updatedAt: number;
 };
-type Profile = { name: string; status: string; email: string; avatarUri: string; localeTag: string };
+type Profile = {
+  name: string;
+  status: string;
+  email: string;
+  avatarUri: string;
+  localeTag: string;
+  locationSharingEnabled: boolean;
+};
 type DraftMedia = { kind: 'image' | 'video'; uri: string; mimeType: string };
 type MediaViewer = { kind: 'image' | 'video'; uri: string };
 type AvatarViewer = { uri: string; title: string };
@@ -171,6 +181,7 @@ type BackendProfile = {
   email?: string;
   avatarUri?: string;
   locale?: string;
+  locationSharingEnabled?: boolean;
 };
 type BackendFriend = {
   id?: string;
@@ -294,6 +305,35 @@ type BackendCompletedMedia = {
 type BackendRoomRead = {
   unread?: number;
   lastReadMessageId?: string;
+};
+type BackendLocationRefreshRequest = {
+  pending?: boolean;
+  requestId?: string;
+  requestedAt?: string;
+  expiresAt?: string;
+};
+type BackendUserLocation = {
+  userId?: string;
+  latitude?: number;
+  longitude?: number;
+  accuracyM?: number;
+  capturedAt?: string;
+  source?: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
+  name?: string;
+  avatarUri?: string;
+};
+type BackendFamilyRoomLocationList = {
+  items?: BackendUserLocation[];
+};
+type UserLocationCard = {
+  userId: string;
+  name: string;
+  avatarUri: string;
+  latitude: number;
+  longitude: number;
+  accuracyM: number | null;
+  capturedAt: number;
+  source: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
 };
 type BackendFamilyRoomMemberProfile = {
   userId?: string;
@@ -792,6 +832,69 @@ const buildDevBackendBaseUrl = (prodBaseUrl: string): string => {
     return 'http://wowjini0228.synology.me:7084';
   }
 };
+const LOCATION_BACKGROUND_TASK = 'ourhangout.location.heartbeat';
+const LOCATION_HEARTBEAT_MS = 10 * 60 * 1000;
+const LOCATION_PRECISION_REFRESH_POLL_MS = 30 * 1000;
+const MODULE_BACKEND_BASE_URL =
+  normalizeBackendBaseUrl(
+    String(
+      ((Constants.expoConfig?.extra as { backend?: { baseUrl?: string } } | undefined)?.backend?.baseUrl as string | undefined) ||
+        ''
+    )
+  ) || 'http://wowjini0228.synology.me:7083';
+const getStoredBackendBaseUrlForLocation = async (): Promise<string> => {
+  const override = await readBackendOverrideFromStorage().catch(() => '');
+  return normalizeBackendBaseUrl(override) || MODULE_BACKEND_BASE_URL;
+};
+const uploadLocationToBackend = async (params: {
+  latitude: number;
+  longitude: number;
+  accuracyM?: number | null;
+  capturedAt?: string;
+  source: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
+}): Promise<void> => {
+  const session = await readSessionFromStorage().catch(() => null);
+  const token = (session?.accessToken || '').trim();
+  if (!token) return;
+  const backendBaseUrl = await getStoredBackendBaseUrlForLocation();
+  if (!backendBaseUrl) return;
+  await fetch(`${backendBaseUrl}/v1/me/location`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      latitude: params.latitude,
+      longitude: params.longitude,
+      ...(typeof params.accuracyM === 'number' ? { accuracyM: params.accuracyM } : {}),
+      ...(params.capturedAt ? { capturedAt: params.capturedAt } : {}),
+      source: params.source,
+    }),
+  }).catch(() => null);
+};
+
+try {
+  if (!TaskManager.isTaskDefined(LOCATION_BACKGROUND_TASK)) {
+    TaskManager.defineTask(LOCATION_BACKGROUND_TASK, async ({ data, error }) => {
+      if (error || !data) return;
+      const payload = data as { locations?: Array<{ coords?: { latitude?: number; longitude?: number; accuracy?: number | null }; timestamp?: number }> };
+      const latest = Array.isArray(payload.locations) ? payload.locations[payload.locations.length - 1] : null;
+      const latitude = Number(latest?.coords?.latitude ?? Number.NaN);
+      const longitude = Number(latest?.coords?.longitude ?? Number.NaN);
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+      await uploadLocationToBackend({
+        latitude,
+        longitude,
+        accuracyM: typeof latest?.coords?.accuracy === 'number' ? latest.coords.accuracy : null,
+        capturedAt: latest?.timestamp ? new Date(latest.timestamp).toISOString() : new Date().toISOString(),
+        source: 'heartbeat',
+      });
+    });
+  }
+} catch {
+  // Ignore task registration issues during hot reload or unsupported runtimes.
+}
 const getRuntimeAppVersion = (): string => {
   const constantsAny = Constants as unknown as {
     expoConfig?: { version?: string; extra?: { buildVersion?: { name?: string } } };
@@ -1430,7 +1533,14 @@ function App() {
   const [stage, setStage] = useState<Stage>('login');
   const [tab, setTab] = useState<Tab>('friends');
   const [chatsMode, setChatsMode] = useState<ChatsMode>('direct');
-  const [profile, setProfile] = useState<Profile>({ name: '', status: '', email: '', avatarUri: '', localeTag: appLocaleTag });
+  const [profile, setProfile] = useState<Profile>({
+    name: '',
+    status: '',
+    email: '',
+    avatarUri: '',
+    localeTag: appLocaleTag,
+    locationSharingEnabled: false
+  });
   const [nameDraft, setNameDraft] = useState('');
   const [statusDraft, setStatusDraft] = useState('');
   const [profilePhotoDraft, setProfilePhotoDraft] = useState('');
@@ -1505,6 +1615,10 @@ function App() {
   const [groupNameDraft, setGroupNameDraft] = useState('');
   const [groupPick, setGroupPick] = useState<string[]>([]);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [isUpdatingLocationSharing, setIsUpdatingLocationSharing] = useState(false);
+  const [familyRoomLocations, setFamilyRoomLocations] = useState<UserLocationCard[]>([]);
+  const [isFamilyRoomLocationsLoading, setIsFamilyRoomLocationsLoading] = useState(false);
+  const [familyRoomLocationActionKey, setFamilyRoomLocationActionKey] = useState('');
   const [showRoomTitleModal, setShowRoomTitleModal] = useState(false);
   const [roomTitleDraft, setRoomTitleDraft] = useState('');
   const [mediaViewer, setMediaViewer] = useState<MediaViewer | null>(null);
@@ -1520,6 +1634,7 @@ function App() {
   const [roomMembersCanKickMembers, setRoomMembersCanKickMembers] = useState(false);
   const [isRoomMembersLoading, setIsRoomMembersLoading] = useState(false);
   const [roomMembersActionKey, setRoomMembersActionKey] = useState('');
+  const [keyboardInset, setKeyboardInset] = useState(0);
   const [familyStructureRoomId, setFamilyStructureRoomId] = useState<string | null>(null);
   const [familyStructureProfiles, setFamilyStructureProfiles] = useState<FamilyRoomMemberProfile[]>([]);
   const [familyStructureRelationships, setFamilyStructureRelationships] = useState<FamilyRoomRelationship[]>([]);
@@ -1935,6 +2050,21 @@ function App() {
   useEffect(() => {
     void AsyncStorage.setItem(CHATS_TAB_MODE_STORAGE_KEY, chatsMode).catch(() => null);
   }, [chatsMode]);
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, (event) => {
+      const nextInset = Math.max(0, event.endCoordinates?.height ?? 0);
+      setKeyboardInset(nextInset);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardInset(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const renderNookHero = ({
     title,
@@ -2730,6 +2860,145 @@ function App() {
     }
   };
 
+  const requestLocationPermissionsForSharing = async (): Promise<boolean> => {
+    const foreground = await Location.requestForegroundPermissionsAsync();
+    if (foreground.status !== 'granted') {
+      Alert.alert(
+        isKo ? '위치 권한이 필요해요' : 'Location permission required',
+        isKo ? '위치 공유를 켜려면 위치 권한을 허용해 주세요.' : 'Allow location access to enable location sharing.'
+      );
+      return false;
+    }
+
+    if (Platform.OS === 'android') {
+      const background = await Location.requestBackgroundPermissionsAsync();
+      if (background.status !== 'granted') {
+        Alert.alert(
+          isKo ? '백그라운드 위치 권한이 필요해요' : 'Background location required',
+          isKo
+            ? '10분마다 위치를 업데이트하려면 백그라운드 위치 권한을 허용해 주세요.'
+            : 'Allow background location so the app can update every 10 minutes.'
+        );
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  const stopLocationHeartbeat = async () => {
+    const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_BACKGROUND_TASK).catch(() => false);
+    if (hasStarted) {
+      await Location.stopLocationUpdatesAsync(LOCATION_BACKGROUND_TASK).catch(() => null);
+    }
+  };
+
+  const startLocationHeartbeat = async () => {
+    const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_BACKGROUND_TASK).catch(() => false);
+    if (hasStarted) return;
+
+    await Location.startLocationUpdatesAsync(LOCATION_BACKGROUND_TASK, {
+      accuracy: Location.Accuracy.Balanced,
+      timeInterval: LOCATION_HEARTBEAT_MS,
+      distanceInterval: 0,
+      pausesUpdatesAutomatically: false,
+      ...(Platform.OS === 'android'
+        ? {
+            foregroundService: {
+              notificationTitle: isKo ? 'ourHangout 위치 공유' : 'ourHangout location sharing',
+              notificationBody: isKo ? '10분마다 최근 위치를 업데이트하고 있어요.' : 'Updating your recent location every 10 minutes.',
+            },
+          }
+        : {}),
+    });
+  };
+
+  const runOneShotLocationUpdate = async (
+    source: 'heartbeat' | 'precision_refresh' | 'manual_refresh',
+    precise = false
+  ) => {
+    const token = accessToken.trim();
+    if (!token) return;
+
+    const position = await Location.getCurrentPositionAsync({
+      accuracy: precise ? Location.Accuracy.Highest : Location.Accuracy.Balanced,
+    });
+
+    await backendRequest<BackendUserLocation>(
+      '/v1/me/location',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracyM: position.coords.accuracy,
+          capturedAt: new Date(position.timestamp).toISOString(),
+          source,
+        }),
+      },
+      token
+    );
+  };
+
+  const syncLocationSharingRuntime = async (enabled: boolean, options?: { immediate?: boolean }) => {
+    if (!enabled) {
+      await stopLocationHeartbeat();
+      return;
+    }
+
+    const granted = await requestLocationPermissionsForSharing();
+    if (!granted) {
+      throw new Error('Location permission was not granted.');
+    }
+
+    await startLocationHeartbeat();
+    if (options?.immediate) {
+      await runOneShotLocationUpdate('manual_refresh').catch(() => null);
+    }
+  };
+
+  const checkPendingPrecisionLocationRefresh = async () => {
+    const token = accessToken.trim();
+    if (!token || !profile.locationSharingEnabled) return;
+    const refresh = await backendRequest<BackendLocationRefreshRequest>(
+      '/v1/me/location/refresh-request',
+      { method: 'GET' },
+      token
+    ).catch(() => null);
+    if (!refresh?.pending) return;
+    await runOneShotLocationUpdate('precision_refresh', true).catch(() => null);
+  };
+
+  const refreshFamilyRoomLocations = async (roomId: string) => {
+    const token = accessToken.trim();
+    if (!token || !roomId) return;
+    setIsFamilyRoomLocationsLoading(true);
+    try {
+      const raw = await backendRequest<BackendFamilyRoomLocationList>(`/v1/rooms/${roomId}/locations`, { method: 'GET' }, token);
+      setFamilyRoomLocations(mapUserLocations(raw.items));
+    } catch {
+      setFamilyRoomLocations([]);
+    } finally {
+      setIsFamilyRoomLocationsLoading(false);
+    }
+  };
+
+  const requestFamilyRoomLocationPrecisionRefresh = async (roomId: string, targetUserId: string) => {
+    const token = accessToken.trim();
+    if (!token || !roomId || !targetUserId) return;
+    const actionKey = `location-refresh:${targetUserId}`;
+    setFamilyRoomLocationActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/rooms/${roomId}/locations/${targetUserId}/refresh`, { method: 'POST' }, token);
+      Alert.alert(isKo ? '정확한 위치 새로고침을 요청했어요.' : 'Requested a precise location refresh.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setFamilyRoomLocationActionKey('');
+    }
+  };
+
   const mapFriendRequests = (value: BackendFriendRequest[] | undefined): FriendRequestItem[] => {
     if (!Array.isArray(value)) return [];
     return value
@@ -2772,6 +3041,30 @@ function App() {
         createdAt: parseTimestamp(item.createdAt),
       }))
       .sort((a, b) => a.createdAt - b.createdAt);
+  };
+  const mapUserLocations = (value: BackendUserLocation[] | undefined): UserLocationCard[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter(
+        (item) =>
+          !!item?.userId &&
+          !!item?.name &&
+          Number.isFinite(item.latitude) &&
+          Number.isFinite(item.longitude) &&
+          !!item?.capturedAt &&
+          !!item?.source
+      )
+      .map((item) => ({
+        userId: String(item.userId),
+        name: String(item.name),
+        avatarUri: resolveBackendMediaUrl(String(item.avatarUri || '')),
+        latitude: Number(item.latitude),
+        longitude: Number(item.longitude),
+        accuracyM: typeof item.accuracyM === 'number' ? item.accuracyM : null,
+        capturedAt: parseTimestamp(item.capturedAt),
+        source: item.source as 'heartbeat' | 'precision_refresh' | 'manual_refresh',
+      }))
+      .sort((a, b) => b.capturedAt - a.capturedAt);
   };
   const mapRoomMembers = (value: BackendRoomMember[] | undefined): RoomMember[] => {
     if (!Array.isArray(value)) return [];
@@ -2954,6 +3247,7 @@ function App() {
       email: (me?.email || fallbackUser?.email || tokenPayload.email || prev.email || '').trim(),
       avatarUri: resolveBackendMediaUrl(me?.avatarUri || fallbackUser?.avatarUri || prev.avatarUri || ''),
       localeTag: (me?.locale || prev.localeTag || appLocaleTag).trim() || appLocaleTag,
+      locationSharingEnabled: typeof me?.locationSharingEnabled === 'boolean' ? !!me.locationSharingEnabled : prev.locationSharingEnabled,
     }));
     setNameDraft(resolvedName);
 
@@ -3091,6 +3385,13 @@ function App() {
           void refreshRoomsFromBackend(token).catch(() => null);
           return;
         }
+
+        if (payload.event === 'location.precision.requested') {
+          if (profile.locationSharingEnabled) {
+            void runOneShotLocationUpdate('precision_refresh', true).catch(() => null);
+          }
+          return;
+        }
       } catch {
         // Ignore malformed websocket payloads and keep the socket alive.
       }
@@ -3142,6 +3443,45 @@ function App() {
       cancelled = true;
     };
   }, [accessToken, backendState]);
+
+  useEffect(() => {
+    const token = accessToken.trim();
+    if (backendState !== 'ready' || !token) return;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        await syncLocationSharingRuntime(profile.locationSharingEnabled, { immediate: profile.locationSharingEnabled });
+      } catch (error) {
+        if (cancelled) return;
+        if (profile.locationSharingEnabled) {
+          setProfile((prev) => ({ ...prev, locationSharingEnabled: false }));
+          await backendRequest(
+            '/v1/me',
+            {
+              method: 'PATCH',
+              body: JSON.stringify({ locationSharingEnabled: false }),
+            },
+            token
+          ).catch(() => null);
+        }
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, backendState, profile.locationSharingEnabled]);
+
+  useEffect(() => {
+    const token = accessToken.trim();
+    if (backendState !== 'ready' || !token || !profile.locationSharingEnabled) return;
+    if (appVisibility !== 'active') return;
+    void checkPendingPrecisionLocationRefresh().catch(() => null);
+    const interval = setInterval(() => {
+      void checkPendingPrecisionLocationRefresh().catch(() => null);
+    }, LOCATION_PRECISION_REFRESH_POLL_MS);
+    return () => clearInterval(interval);
+  }, [accessToken, backendState, appVisibility, profile.locationSharingEnabled]);
 
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
@@ -3760,6 +4100,9 @@ function App() {
     setFamilyStructureRequestAs('guardian');
     setIsFamilyStructureLoading(false);
     setFamilyStructureActionKey('');
+    setFamilyRoomLocations([]);
+    setIsFamilyRoomLocationsLoading(false);
+    setFamilyRoomLocationActionKey('');
   };
 
   const loadFamilyStructure = async (token: string, roomId: string) => {
@@ -3793,6 +4136,7 @@ function App() {
       Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
       closeFamilyStructureModal();
     });
+    await refreshFamilyRoomLocations(roomId).catch(() => null);
   };
 
   const saveFamilyStructureAlias = async (targetUserId: string) => {
@@ -4911,7 +5255,12 @@ function App() {
     }
   };
 
-  const persistProfile = async (nextProfile: { name: string; status: string; avatarUri: string }) => {
+  const persistProfile = async (nextProfile: {
+    name: string;
+    status: string;
+    avatarUri: string;
+    locationSharingEnabled?: boolean;
+  }) => {
     const token = accessToken.trim();
     if (!token) {
       setProfile((p) => ({ ...p, ...nextProfile }));
@@ -4931,6 +5280,11 @@ function App() {
       status: String(saved.status || nextProfile.status),
       email: String(saved.email || p.email),
       avatarUri: resolveBackendMediaUrl(String(saved.avatarUri || nextProfile.avatarUri)),
+      ...(typeof saved.locationSharingEnabled === 'boolean'
+        ? { locationSharingEnabled: !!saved.locationSharingEnabled }
+        : typeof nextProfile.locationSharingEnabled === 'boolean'
+          ? { locationSharingEnabled: nextProfile.locationSharingEnabled }
+          : {}),
     }));
     setNameDraft(String(saved.name || nextProfile.name));
     setStatusDraft(String(saved.status || nextProfile.status));
@@ -4952,12 +5306,41 @@ function App() {
         name: n,
         status: statusDraft.trim(),
         avatarUri: nextAvatarUri,
+        locationSharingEnabled: profile.locationSharingEnabled,
       };
       await persistProfile(nextProfile);
       setShowProfileModal(false);
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
       Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    }
+  };
+
+  const toggleLocationSharing = async () => {
+    const token = requireAccessToken();
+    if (!token || isUpdatingLocationSharing) return;
+    const nextEnabled = !profile.locationSharingEnabled;
+    setIsUpdatingLocationSharing(true);
+    try {
+      await syncLocationSharingRuntime(nextEnabled, { immediate: nextEnabled });
+      const saved = await backendRequest<BackendProfile>(
+        '/v1/me',
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ locationSharingEnabled: nextEnabled }),
+        },
+        token
+      );
+      setProfile((prev) => ({
+        ...prev,
+        locationSharingEnabled:
+          typeof saved.locationSharingEnabled === 'boolean' ? !!saved.locationSharingEnabled : nextEnabled,
+      }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setIsUpdatingLocationSharing(false);
     }
   };
 
@@ -5469,7 +5852,7 @@ function App() {
     setStage('login');
     setTab('chats');
     setActiveRoomId(null);
-    setProfile({ name: '', status: '', email: '', avatarUri: '', localeTag: appLocaleTag });
+    setProfile({ name: '', status: '', email: '', avatarUri: '', localeTag: appLocaleTag, locationSharingEnabled: false });
     setNameDraft('');
     setStatusDraft('');
     setProfilePhotoDraft('');
@@ -5582,6 +5965,8 @@ function App() {
 
   const kbBehavior = Platform.OS === 'ios' ? 'padding' : 'height';
   const sheetBottomInset = Math.max(insets.bottom, 12);
+  const sheetKeyboardPadding = sheetBottomInset + (Platform.OS === 'android' ? keyboardInset : 0);
+  const sheetKeyboardPaddingRoomy = sheetKeyboardPadding + 12;
   const ForestBackdrop = () => (
     <>
       <View pointerEvents="none" style={styles.bgOrbTop} />
@@ -6298,9 +6683,9 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={() => setShowFriendModal(false)} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
-              behavior="padding"
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPadding }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
               <ScrollView
                 contentContainerStyle={styles.sheetScrollContent}
@@ -6408,9 +6793,9 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={closeFamilyPickerModal} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset + 12 }]}
-              behavior="padding"
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPaddingRoomy }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
               <ScrollView
                 contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
@@ -6479,9 +6864,9 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={closeFamilyUpgradeModal} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset + 12 }]}
-              behavior="padding"
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPaddingRoomy }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
               <ScrollView
                 contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
@@ -6544,9 +6929,9 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={closeFriendAliasModal} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset + 12 }]}
-              behavior="padding"
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPaddingRoomy }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
               <ScrollView
                 contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
@@ -6599,9 +6984,9 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={closeFriendActionsModal} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset + 12 }]}
-              behavior="padding"
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPaddingRoomy }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
               <ScrollView
                 contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
@@ -6691,85 +7076,91 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={() => setShowGroupModal(false)} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPadding }]}
               behavior={kbBehavior}
             >
-              <View style={styles.sheet}>
-                <Text style={styles.h1}>{s.createRoomTitle}</Text>
-                <View style={{ gap: 10 }}>
-                  <Pressable
-                    style={[
-                      styles.item,
-                      styles.familyOptionItem,
-                      createRoomType === 'group' && styles.familyOptionItemSelected,
-                    ]}
-                    onPress={() => setCreateRoomType('group')}
-                  >
-                    <View style={styles.familyOptionCopy}>
-                      <Text style={styles.itemTitle}>{s.createRoomGroupLabel}</Text>
-                      <Text style={styles.sub}>{s.createRoomGroupBody}</Text>
-                    </View>
-                    <Ionicons
-                      name={createRoomType === 'group' ? 'checkmark-circle' : 'ellipse-outline'}
-                      size={18}
-                      color={FOREST.text}
-                    />
-                  </Pressable>
-                  <Pressable
-                    style={[
-                      styles.item,
-                      styles.familyOptionItem,
-                      createRoomType === 'family' && styles.familyOptionItemSelected,
-                    ]}
-                    onPress={() => setCreateRoomType('family')}
-                  >
-                    <View style={styles.familyOptionCopy}>
-                      <Text style={styles.itemTitle}>{s.createRoomFamilyLabel}</Text>
-                      <Text style={styles.sub}>{s.createRoomFamilyBody}</Text>
-                    </View>
-                    <Ionicons
-                      name={createRoomType === 'family' ? 'checkmark-circle' : 'ellipse-outline'}
-                      size={18}
-                      color={FOREST.text}
-                    />
-                  </Pressable>
-                </View>
-                <TextInput
-                  style={styles.field}
-                  placeholder={createRoomType === 'family' ? s.createRoomFamilyName : s.groupName}
-                  placeholderTextColor={FOREST.placeholder}
-                  value={groupNameDraft}
-                  onChangeText={setGroupNameDraft}
-                />
-                <Text style={styles.sub}>{createRoomType === 'family' ? s.createRoomFamilyHint : s.groupHint}</Text>
-                <ScrollView style={{ maxHeight: 180 }}>
-                  {friends.map((f) => (
-                    <Pressable key={f.id} style={styles.item} onPress={() => toggleGroupPick(f.id)}>
-                      <Text style={styles.itemTitle}>{f.name}</Text>
-                      <Ionicons name={groupPick.includes(f.id) ? 'checkmark-circle' : 'ellipse-outline'} size={18} color={FOREST.text} />
+              <ScrollView
+                contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheet}>
+                  <Text style={styles.h1}>{s.createRoomTitle}</Text>
+                  <View style={{ gap: 10 }}>
+                    <Pressable
+                      style={[
+                        styles.item,
+                        styles.familyOptionItem,
+                        createRoomType === 'group' && styles.familyOptionItemSelected,
+                      ]}
+                      onPress={() => setCreateRoomType('group')}
+                    >
+                      <View style={styles.familyOptionCopy}>
+                        <Text style={styles.itemTitle}>{s.createRoomGroupLabel}</Text>
+                        <Text style={styles.sub}>{s.createRoomGroupBody}</Text>
+                      </View>
+                      <Ionicons
+                        name={createRoomType === 'group' ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={18}
+                        color={FOREST.text}
+                      />
                     </Pressable>
-                  ))}
-                </ScrollView>
-                <View style={styles.row}>
-                  <Pressable style={styles.smallBtn} onPress={() => setShowGroupModal(false)}>
-                    <Text style={styles.smallBtnText}>{s.cancel}</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[
-                      styles.smallBtn,
-                      groupPick.length < (createRoomType === 'family' ? 1 : 2) && styles.off,
-                    ]}
-                    disabled={groupPick.length < (createRoomType === 'family' ? 1 : 2)}
-                    onPress={() => {
-                      void createSharedRoom();
-                    }}
-                  >
-                    <Text style={styles.smallBtnText}>
-                      {createRoomType === 'family' ? s.createFamilyRoomAction : s.createRoom}
-                    </Text>
-                  </Pressable>
+                    <Pressable
+                      style={[
+                        styles.item,
+                        styles.familyOptionItem,
+                        createRoomType === 'family' && styles.familyOptionItemSelected,
+                      ]}
+                      onPress={() => setCreateRoomType('family')}
+                    >
+                      <View style={styles.familyOptionCopy}>
+                        <Text style={styles.itemTitle}>{s.createRoomFamilyLabel}</Text>
+                        <Text style={styles.sub}>{s.createRoomFamilyBody}</Text>
+                      </View>
+                      <Ionicons
+                        name={createRoomType === 'family' ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={18}
+                        color={FOREST.text}
+                      />
+                    </Pressable>
+                  </View>
+                  <TextInput
+                    style={styles.field}
+                    placeholder={createRoomType === 'family' ? s.createRoomFamilyName : s.groupName}
+                    placeholderTextColor={FOREST.placeholder}
+                    value={groupNameDraft}
+                    onChangeText={setGroupNameDraft}
+                  />
+                  <Text style={styles.sub}>{createRoomType === 'family' ? s.createRoomFamilyHint : s.groupHint}</Text>
+                  <ScrollView style={{ maxHeight: 180 }} keyboardShouldPersistTaps="handled">
+                    {friends.map((f) => (
+                      <Pressable key={f.id} style={styles.item} onPress={() => toggleGroupPick(f.id)}>
+                        <Text style={styles.itemTitle}>{f.name}</Text>
+                        <Ionicons name={groupPick.includes(f.id) ? 'checkmark-circle' : 'ellipse-outline'} size={18} color={FOREST.text} />
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                  <View style={styles.row}>
+                    <Pressable style={styles.smallBtn} onPress={() => setShowGroupModal(false)}>
+                      <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[
+                        styles.smallBtn,
+                        groupPick.length < (createRoomType === 'family' ? 1 : 2) && styles.off,
+                      ]}
+                      disabled={groupPick.length < (createRoomType === 'family' ? 1 : 2)}
+                      onPress={() => {
+                        void createSharedRoom();
+                      }}
+                    >
+                      <Text style={styles.smallBtnText}>
+                        {createRoomType === 'family' ? s.createFamilyRoomAction : s.createRoom}
+                      </Text>
+                    </Pressable>
+                  </View>
                 </View>
-              </View>
+              </ScrollView>
             </KeyboardAvoidingView>
           </View>
         </Modal>
@@ -6787,9 +7178,9 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={() => setShowProfileModal(false)} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
-              behavior="padding"
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPadding }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
               <ScrollView
                 contentContainerStyle={styles.sheetScrollContent}
@@ -6799,6 +7190,33 @@ function App() {
                 <View style={styles.sheet}>
                   <Text style={styles.h1}>{s.profileEdit}</Text>
                   {renderProfilePhotoEditor()}
+                  <Pressable
+                    style={[styles.item, isUpdatingLocationSharing && styles.off]}
+                    disabled={isUpdatingLocationSharing}
+                    onPress={() => {
+                      void toggleLocationSharing();
+                    }}
+                  >
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <Text style={styles.itemTitle}>
+                        {isKo ? '위치 확인 공유' : 'Location sharing'}
+                      </Text>
+                      <Text style={styles.sub}>
+                        {profile.locationSharingEnabled
+                          ? isKo
+                            ? '보호자와 guardian 웹에서 최근 위치를 확인할 수 있어요.'
+                            : 'Guardians and Guardian Console can see your latest shared location.'
+                          : isKo
+                            ? '켜면 10분마다 최근 위치를 공유해요.'
+                            : 'When enabled, your latest location is shared every 10 minutes.'}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={profile.locationSharingEnabled ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={18}
+                      color={FOREST.text}
+                    />
+                  </Pressable>
                   <TextInput
                     style={styles.field}
                     value={nameDraft}
@@ -6964,31 +7382,37 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={() => setShowRoomTitleModal(false)} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPadding }]}
               behavior={kbBehavior}
             >
-              <View style={styles.sheet}>
-                <Text style={styles.h1}>{s.editRoomTitle}</Text>
-                <TextInput
-                  style={styles.field}
-                  value={roomTitleDraft}
-                  onChangeText={setRoomTitleDraft}
-                  placeholder={s.roomTitlePlaceholder}
-                  placeholderTextColor={FOREST.placeholder}
-                />
-                <View style={styles.row}>
-                  <Pressable style={styles.smallBtn} onPress={() => setShowRoomTitleModal(false)}>
-                    <Text style={styles.smallBtnText}>{s.cancel}</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.smallBtn, !roomTitleDraft.trim() && styles.off]}
-                    disabled={!roomTitleDraft.trim()}
-                    onPress={() => void saveRoomTitle()}
-                  >
-                    <Text style={styles.smallBtnText}>{s.save}</Text>
-                  </Pressable>
+              <ScrollView
+                contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheet}>
+                  <Text style={styles.h1}>{s.editRoomTitle}</Text>
+                  <TextInput
+                    style={styles.field}
+                    value={roomTitleDraft}
+                    onChangeText={setRoomTitleDraft}
+                    placeholder={s.roomTitlePlaceholder}
+                    placeholderTextColor={FOREST.placeholder}
+                  />
+                  <View style={styles.row}>
+                    <Pressable style={styles.smallBtn} onPress={() => setShowRoomTitleModal(false)}>
+                      <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.smallBtn, !roomTitleDraft.trim() && styles.off]}
+                      disabled={!roomTitleDraft.trim()}
+                      onPress={() => void saveRoomTitle()}
+                    >
+                      <Text style={styles.smallBtnText}>{s.save}</Text>
+                    </Pressable>
+                  </View>
                 </View>
-              </View>
+              </ScrollView>
             </KeyboardAvoidingView>
           </View>
         </Modal>
@@ -7062,9 +7486,9 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={closeFamilyStructureModal} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset + 12 }]}
-              behavior="padding"
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPaddingRoomy }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
               <ScrollView
                 contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
@@ -7357,6 +7781,52 @@ function App() {
                           </View>
                         ))
                       )}
+
+                      <Text style={styles.sectionTitle}>{isKo ? '최근 위치' : 'Recent locations'}</Text>
+                      {isFamilyRoomLocationsLoading ? (
+                        <Text style={styles.sub}>{isKo ? '위치를 불러오는 중...' : 'Loading locations...'}</Text>
+                      ) : familyRoomLocations.length === 0 ? (
+                        <Text style={styles.sub}>
+                          {isKo
+                            ? '현재 이 가족방에서 볼 수 있는 공유 위치가 없어요.'
+                            : 'No shared locations are visible in this family room yet.'}
+                        </Text>
+                      ) : (
+                        familyRoomLocations.map((locationItem) => (
+                          <View key={`location-${locationItem.userId}`} style={styles.familyStructureCard}>
+                            <Text style={styles.itemTitle}>{locationItem.name}</Text>
+                            <Text style={styles.sub}>
+                              {`${locationItem.latitude.toFixed(5)}, ${locationItem.longitude.toFixed(5)} · ${isKo ? '업데이트' : 'Updated'} ${roomTimeLabel(
+                                locationItem.capturedAt
+                              )}`}
+                            </Text>
+                            <View style={styles.row}>
+                              <Pressable
+                                style={styles.smallBtn}
+                                onPress={() => {
+                                  void openExternalUrl(
+                                    `https://www.google.com/maps/search/?api=1&query=${locationItem.latitude},${locationItem.longitude}`
+                                  );
+                                }}
+                              >
+                                <Text style={styles.smallBtnText}>{isKo ? '지도 열기' : 'Open map'}</Text>
+                              </Pressable>
+                              <Pressable
+                                style={[
+                                  styles.smallBtn,
+                                  familyRoomLocationActionKey === `location-refresh:${locationItem.userId}` && styles.off,
+                                ]}
+                                disabled={!!familyRoomLocationActionKey}
+                                onPress={() => {
+                                  void requestFamilyRoomLocationPrecisionRefresh(familyStructureRoomId || '', locationItem.userId);
+                                }}
+                              >
+                                <Text style={styles.smallBtnText}>{isKo ? '정확히 새로고침' : 'Precise refresh'}</Text>
+                              </Pressable>
+                            </View>
+                          </View>
+                        ))
+                      )}
                     </>
                   )}
                   <View style={styles.row}>
@@ -7381,9 +7851,9 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={closeRoomMembersModal} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset + 12 }]}
-              behavior="padding"
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPaddingRoomy }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
               <ScrollView
                 contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
