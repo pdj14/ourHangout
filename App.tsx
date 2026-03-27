@@ -2263,6 +2263,11 @@ function App() {
     const totalUnread = rooms.reduce((sum, room) => sum + Math.max(0, room.unread), 0);
     void syncAppBadgeCount(totalUnread);
   }, [rooms]);
+  useEffect(() => {
+    if (appVisibility !== 'active') return;
+    const totalUnread = rooms.reduce((sum, room) => sum + Math.max(0, room.unread), 0);
+    void syncAppBadgeCount(totalUnread);
+  }, [appVisibility, rooms]);
 
   useEffect(() => {
     currentUserIdRef.current = currentUserId.trim();
@@ -2738,6 +2743,13 @@ function App() {
     await Notifications.setBadgeCountAsync(Math.max(0, totalUnread)).catch(() => null);
     if (totalUnread === 0) {
       await Notifications.dismissAllNotificationsAsync().catch(() => null);
+      const presented = await Notifications.getPresentedNotificationsAsync().catch(() => []);
+      await Promise.all(
+        presented.map((notification) =>
+          Notifications.dismissNotificationAsync(notification.request.identifier).catch(() => null)
+        )
+      );
+      await Notifications.setBadgeCountAsync(0).catch(() => null);
     }
   };
 
@@ -2865,7 +2877,16 @@ function App() {
     if (foreground.status !== 'granted') {
       Alert.alert(
         isKo ? '위치 권한이 필요해요' : 'Location permission required',
-        isKo ? '위치 공유를 켜려면 위치 권한을 허용해 주세요.' : 'Allow location access to enable location sharing.'
+        isKo ? '위치 공유를 켜려면 위치 권한을 허용해 주세요.' : 'Allow location access to enable location sharing.',
+        [
+          { text: isKo ? '취소' : 'Cancel', style: 'cancel' },
+          {
+            text: isKo ? '설정 열기' : 'Open settings',
+            onPress: () => {
+              void Linking.openSettings().catch(() => null);
+            },
+          },
+        ]
       );
       return false;
     }
@@ -2874,10 +2895,19 @@ function App() {
       const background = await Location.requestBackgroundPermissionsAsync();
       if (background.status !== 'granted') {
         Alert.alert(
-          isKo ? '백그라운드 위치 권한이 필요해요' : 'Background location required',
+          isKo ? '항상 허용이 필요해요' : 'Always allow is required',
           isKo
-            ? '10분마다 위치를 업데이트하려면 백그라운드 위치 권한을 허용해 주세요.'
-            : 'Allow background location so the app can update every 10 minutes.'
+            ? '10분마다 위치를 업데이트하려면 Android 위치 권한을 항상 허용으로 바꿔 주세요.'
+            : 'Set Android location access to Always Allow so the app can update every 10 minutes.',
+          [
+            { text: isKo ? '취소' : 'Cancel', style: 'cancel' },
+            {
+              text: isKo ? '설정 열기' : 'Open settings',
+              onPress: () => {
+                void Linking.openSettings().catch(() => null);
+              },
+            },
+          ]
         );
         return false;
       }
@@ -7216,6 +7246,14 @@ function App() {
                       size={18}
                       color={FOREST.text}
                     />
+                  </Pressable>
+                  <Pressable
+                    style={styles.item}
+                    onPress={() => {
+                      void Linking.openSettings().catch(() => null);
+                    }}
+                  >
+                    <Text style={styles.itemTitle}>{isKo ? '위치 권한 설정 열기' : 'Open location settings'}</Text>
                   </Pressable>
                   <TextInput
                     style={styles.field}
