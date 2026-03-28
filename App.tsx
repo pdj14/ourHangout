@@ -5,10 +5,12 @@ import {
   AppState,
   BackHandler,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   LayoutChangeEvent,
   Linking,
   Modal,
+  NativeModules,
   PanResponder,
   Platform,
   Pressable,
@@ -26,6 +28,9 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
 import * as MediaLibrary from 'expo-media-library';
+import * as Location from 'expo-location';
+import * as BackgroundTask from 'expo-background-task';
+import * as TaskManager from 'expo-task-manager';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
@@ -59,7 +64,6 @@ Notifications.setNotificationHandler({
 
 type Stage = 'login' | 'setup_name' | 'setup_intro' | 'app';
 type Tab = 'chats' | 'friends' | 'profile';
-type FriendsMode = 'friends' | 'family';
 type ChatsMode = 'direct' | 'group';
 type CreateRoomKind = 'group' | 'family';
 type MsgKind = 'text' | 'image' | 'video' | 'system';
@@ -85,8 +89,8 @@ type Message = {
 type FriendFamilySummary = {
   isFamily: true;
   relationshipId: string;
-  relationshipType: FamilyRelationshipType;
-  displayLabel: FamilyLabel;
+  relationshipType: string;
+  displayLabel: string;
   familyGroupId?: string;
   status: 'active';
 };
@@ -116,6 +120,7 @@ type Room = {
   type: RoomType;
   title: string;
   members: string[];
+  ownerUserId: string;
   isGroup: boolean;
   favorite: boolean;
   muted: boolean;
@@ -123,7 +128,14 @@ type Room = {
   preview: string;
   updatedAt: number;
 };
-type Profile = { name: string; status: string; email: string; avatarUri: string; localeTag: string };
+type Profile = {
+  name: string;
+  status: string;
+  email: string;
+  avatarUri: string;
+  localeTag: string;
+  locationSharingEnabled: boolean;
+};
 type DraftMedia = { kind: 'image' | 'video'; uri: string; mimeType: string };
 type MediaViewer = { kind: 'image' | 'video'; uri: string };
 type AvatarViewer = { uri: string; title: string };
@@ -171,6 +183,7 @@ type BackendProfile = {
   email?: string;
   avatarUri?: string;
   locale?: string;
+  locationSharingEnabled?: boolean;
 };
 type BackendFriend = {
   id?: string;
@@ -183,8 +196,8 @@ type BackendFriend = {
   family?: {
     isFamily?: boolean;
     relationshipId?: string;
-    relationshipType?: FamilyRelationshipType;
-    displayLabel?: FamilyLabel;
+    relationshipType?: string;
+    displayLabel?: string;
     familyGroupId?: string;
     status?: 'active';
   };
@@ -208,24 +221,6 @@ type BackendFriendRequest = {
 type BackendFriendRequestList = {
   incoming?: BackendFriendRequest[];
   outgoing?: BackendFriendRequest[];
-};
-type BackendFamilyUpgradeRequestPeer = {
-  userId?: string;
-  name?: string;
-  avatarUri?: string;
-};
-type BackendFamilyUpgradeRequest = {
-  requestId?: string;
-  peer?: BackendFamilyUpgradeRequestPeer;
-  relationshipType?: FamilyRelationshipType;
-  requesterLabel?: FamilyLabel;
-  targetLabel?: FamilyLabel;
-  note?: string;
-  createdAt?: string;
-};
-type BackendFamilyUpgradeRequestList = {
-  incoming?: BackendFamilyUpgradeRequest[];
-  outgoing?: BackendFamilyUpgradeRequest[];
 };
 type FriendRequestItem = {
   id: string;
@@ -263,6 +258,7 @@ type BackendRoom = {
   type?: RoomType;
   title?: string;
   members?: string[];
+  ownerUserId?: string;
   isGroup?: boolean;
   favorite?: boolean;
   muted?: boolean;
@@ -312,6 +308,133 @@ type BackendRoomRead = {
   unread?: number;
   lastReadMessageId?: string;
 };
+type BackendLocationRefreshRequest = {
+  pending?: boolean;
+  requestId?: string;
+  requestedAt?: string;
+  expiresAt?: string;
+};
+type BackendUserLocation = {
+  userId?: string;
+  latitude?: number;
+  longitude?: number;
+  accuracyM?: number;
+  capturedAt?: string;
+  source?: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
+  name?: string;
+  avatarUri?: string;
+};
+type BackendFamilyRoomLocationList = {
+  items?: BackendUserLocation[];
+};
+type UserLocationCard = {
+  userId: string;
+  name: string;
+  avatarUri: string;
+  latitude: number;
+  longitude: number;
+  accuracyM: number | null;
+  capturedAt: number;
+  source: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
+};
+type BackendFamilyRoomMemberProfile = {
+  userId?: string;
+  name?: string;
+  avatarUri?: string;
+  alias?: string;
+  locationSharingEnabled?: boolean;
+};
+type BackendFamilyRoomMemberProfileList = {
+  canManage?: boolean;
+  items?: BackendFamilyRoomMemberProfile[];
+};
+type BackendFamilyRoomRelationship = {
+  id?: string;
+  guardianUserId?: string;
+  guardianName?: string;
+  childUserId?: string;
+  childName?: string;
+  requestedByUserId?: string;
+  requestedByName?: string;
+  createdAt?: string;
+};
+type BackendFamilyRoomRelationshipList = {
+  items?: BackendFamilyRoomRelationship[];
+  pendingIncoming?: BackendFamilyRoomRelationship[];
+  pendingOutgoing?: BackendFamilyRoomRelationship[];
+};
+type FamilyRoomMemberProfile = {
+  userId: string;
+  name: string;
+  avatarUri: string;
+  alias: string;
+  locationSharingEnabled: boolean;
+};
+type FamilyRoomRelationship = {
+  id: string;
+  guardianUserId: string;
+  guardianName: string;
+  childUserId: string;
+  childName: string;
+  requestedByUserId: string;
+  requestedByName: string;
+  createdAt: number;
+};
+type BackendRoomMember = {
+  userId?: string;
+  name?: string;
+  avatarUri?: string;
+  alias?: string;
+  role?: 'admin' | 'member';
+  isOwner?: boolean;
+};
+type BackendRoomMemberList = {
+  roomId?: string;
+  ownerUserId?: string;
+  myRole?: 'admin' | 'member';
+  canTransferOwnership?: boolean;
+  canManageAdmins?: boolean;
+  canKickMembers?: boolean;
+  items?: BackendRoomMember[];
+};
+type BackendRoomInvitation = {
+  id?: string;
+  roomId?: string;
+  roomType?: RoomType;
+  roomTitle?: string;
+  inviterUserId?: string;
+  inviterName?: string;
+  inviterAvatarUri?: string;
+  targetUserId?: string;
+  targetName?: string;
+  status?: 'pending' | 'accepted' | 'rejected' | 'canceled' | 'expired';
+  createdAt?: string;
+};
+type BackendRoomInvitationList = {
+  incoming?: BackendRoomInvitation[];
+  outgoing?: BackendRoomInvitation[];
+};
+type RoomMember = {
+  userId: string;
+  name: string;
+  avatarUri: string;
+  alias: string;
+  role: 'admin' | 'member';
+  isOwner: boolean;
+};
+type RoomInvitationItem = {
+  id: string;
+  roomId: string;
+  roomType: RoomType;
+  roomTitle: string;
+  inviterUserId: string;
+  inviterName: string;
+  inviterAvatarUri: string;
+  targetUserId: string;
+  targetName: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'canceled' | 'expired';
+  createdAt: number;
+};
 type AppExtra = {
   buildVersion?: { name?: string; code?: number; source?: string };
   googleAuth?: { androidClientId?: string; iosClientId?: string; webClientId?: string };
@@ -320,6 +443,16 @@ type AppExtra = {
 type PersistedSession = {
   accessToken: string;
   refreshToken?: string;
+};
+type PersistedAppSnapshot = {
+  profile?: Profile;
+  friends?: Friend[];
+  bots?: BotSummary[];
+  rooms?: Room[];
+  currentUserId?: string;
+  tab?: Tab;
+  chatsMode?: ChatsMode;
+  directReadCutoffs?: Record<string, number>;
 };
 type BackendSyncOptions = {
   strict?: boolean;
@@ -357,6 +490,7 @@ const URL_REGEX = /https?:\/\/\S+/gi;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const PROFILE_CROP_BOX = 260;
 const PROFILE_PHOTO_MAX_OUTPUT = 2048;
+const PROFILE_PHOTO_MAX_SOURCE = 4096;
 const DEFAULT_APP_VERSION = '0';
 const APP_PACKAGE_ID = 'com.ourhangout';
 const APP_UPDATE_APK_MIME_TYPE = 'application/vnd.android.package-archive';
@@ -424,6 +558,111 @@ const normalizeBackendErrorMessage = (message: string, isKo: boolean): string =>
       'Family room members must already be friends.',
       '가족방 멤버는 먼저 친구여야 해요.',
       'Family room members must already be friends.',
+    ],
+    [
+      'Room invitations require an existing friend relationship.',
+      '방 초대는 먼저 친구여야 보낼 수 있어요.',
+      'Room invitations require an existing friend relationship.',
+    ],
+    [
+      'A pending room invitation already exists.',
+      '이미 대기 중인 방 초대가 있어요.',
+      'A room invitation is already pending.',
+    ],
+    [
+      'Pending room invitation not found.',
+      '대기 중인 방 초대를 찾을 수 없어요.',
+      'The pending room invitation was not found.',
+    ],
+    [
+      'Only the invited member can accept this room invitation.',
+      '초대받은 멤버만 이 방 초대를 수락할 수 있어요.',
+      'Only the invited member can accept this room invitation.',
+    ],
+    [
+      'Only the invited member can reject this room invitation.',
+      '초대받은 멤버만 이 방 초대를 거절할 수 있어요.',
+      'Only the invited member can reject this room invitation.',
+    ],
+    [
+      'Target user is already in this room.',
+      '이미 이 방에 들어와 있는 멤버예요.',
+      'That user is already in this room.',
+    ],
+    [
+      'You cannot invite yourself to this room.',
+      '자기 자신은 초대할 수 없어요.',
+      'You cannot invite yourself to this room.',
+    ],
+    [
+      'Transfer room ownership before leaving this room.',
+      '이 방을 나가기 전에 먼저 방장을 넘겨 주세요.',
+      'Transfer ownership before leaving this room.',
+    ],
+    [
+      'Only the room owner can delete this room.',
+      '이 방은 현재 방장만 삭제할 수 있어요.',
+      'Only the room owner can delete this room.',
+    ],
+    [
+      'Only the room owner can transfer ownership.',
+      '방장만 다른 멤버에게 방장을 넘길 수 있어요.',
+      'Only the room owner can transfer ownership.',
+    ],
+    [
+      'Only the room owner can manage admins.',
+      '방장만 관리자를 지정하거나 해제할 수 있어요.',
+      'Only the room owner can manage admins.',
+    ],
+    [
+      'Only the room owner or admins can remove members.',
+      '방장이나 관리자인 경우에만 멤버를 내보낼 수 있어요.',
+      'Only the room owner or admins can remove members.',
+    ],
+    [
+      'Only the room owner can remove another admin.',
+      '다른 관리자는 방장만 내보낼 수 있어요.',
+      'Only the room owner can remove another admin.',
+    ],
+    [
+      'The room owner cannot be removed.',
+      '현재 방장은 내보낼 수 없어요. 먼저 방장을 넘겨 주세요.',
+      'The room owner cannot be removed.',
+    ],
+    [
+      'The room owner role must be transferred, not downgraded.',
+      '방장을 일반 멤버로 바꾸려면 먼저 다른 멤버에게 방장을 넘겨야 해요.',
+      'Transfer ownership before downgrading the owner.',
+    ],
+    [
+      'Members can edit only their own alias.',
+      '호칭은 각자 자신의 것만 바꿀 수 있어요.',
+      'Members can edit only their own alias.',
+    ],
+    [
+      'A pending guardian-child request already exists.',
+      '이미 대기 중인 보호자 관계 요청이 있어요.',
+      'A guardian-child request is already pending.',
+    ],
+    [
+      'Pending guardian-child request not found.',
+      '대기 중인 보호자 관계 요청을 찾을 수 없어요.',
+      'Pending guardian-child request not found.',
+    ],
+    [
+      'The requester cannot accept their own guardian-child request.',
+      '요청을 보낸 사람은 직접 수락할 수 없어요.',
+      'The requester cannot accept their own guardian-child request.',
+    ],
+    [
+      'Only the target member can respond to this guardian-child request.',
+      '이 요청은 상대 멤버만 수락하거나 거절할 수 있어요.',
+      'Only the target member can respond to this guardian-child request.',
+    ],
+    [
+      'Users are already connected by a guardian-child relationship.',
+      '이미 보호자 관계로 연결되어 있어요.',
+      'Users are already connected by a guardian-child relationship.',
     ],
     [
       'Only group/family room title can be changed.',
@@ -516,12 +755,28 @@ const isSessionInvalidError = (error: unknown): boolean => {
   if (!(error instanceof Error)) return false;
   const status = typeof (error as BackendRequestError).status === 'number' ? (error as BackendRequestError).status : 0;
   const code = String((error as BackendRequestError).code || '').trim();
-  return code === 'AUTH_REFRESH_INVALID' || code === 'AUTH_UNAUTHORIZED' || (status === 401 && !code);
+  const message = String(error.message || '').trim().toLowerCase();
+  return (
+    code === 'AUTH_REFRESH_INVALID' ||
+    code === 'AUTH_UNAUTHORIZED' ||
+    (status === 401 && !code) ||
+    message.includes('refresh token is invalid or expired')
+  );
+};
+const isSessionInvalidMessage = (message: string): boolean => {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes('refresh token is invalid or expired') ||
+    normalized.includes('session validation failed') ||
+    normalized.includes('auth_refresh_invalid')
+  );
 };
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : '');
 const SESSION_STORAGE_KEY = 'ourhangout.session.v1';
+const APP_SNAPSHOT_STORAGE_KEY = 'ourhangout.app-snapshot.v1';
 const BACKEND_OVERRIDE_STORAGE_KEY = 'ourhangout.backend-override.v1';
-const FRIENDS_TAB_MODE_STORAGE_KEY = 'ourhangout.friends-tab-mode.v1';
+const ACTIVE_BACKEND_STORAGE_KEY = 'ourhangout.active-backend.v1';
 const CHATS_TAB_MODE_STORAGE_KEY = 'ourhangout.chats-tab-mode.v1';
 const HIDDEN_SERVER_MENU_TAP_COUNT = 5;
 const HIDDEN_SERVER_MENU_TAP_WINDOW_MS = 1200;
@@ -597,24 +852,76 @@ const parsePersistedSession = (raw: string | null | undefined): PersistedSession
     return null;
   }
 };
+const readNativeSessionFromModule = async (): Promise<PersistedSession | null> => {
+  const nativeModule = NativeModules.LocationCaptureModule as
+    | {
+        readSession?: () => Promise<{ accessToken?: string; refreshToken?: string } | null>;
+      }
+    | undefined;
+  if (!nativeModule?.readSession) return null;
+  try {
+    const raw = await nativeModule.readSession();
+    const accessToken = String(raw?.accessToken || '').trim();
+    const refreshToken = String(raw?.refreshToken || '').trim();
+    if (!accessToken) return null;
+    return {
+      accessToken,
+      ...(refreshToken ? { refreshToken } : {}),
+    };
+  } catch {
+    return null;
+  }
+};
+const syncNativeSessionModule = async (session: PersistedSession): Promise<void> => {
+  const nativeModule = NativeModules.LocationCaptureModule as
+    | {
+        storeSession?: (accessToken: string, refreshToken?: string) => Promise<boolean>;
+      }
+    | undefined;
+  if (!nativeModule?.storeSession) return;
+  await nativeModule.storeSession(session.accessToken, session.refreshToken || '').catch(() => null);
+};
+const clearNativeSessionModule = async (): Promise<void> => {
+  const nativeModule = NativeModules.LocationCaptureModule as
+    | {
+        clearSession?: () => Promise<boolean>;
+      }
+    | undefined;
+  if (!nativeModule?.clearSession) return;
+  await nativeModule.clearSession().catch(() => null);
+};
 const readSessionFromStorage = async (): Promise<PersistedSession | null> => {
+  let stored: PersistedSession | null = null;
   if (canUseSecureStore) {
     try {
       const secureRaw = await SecureStore.getItemAsync(SESSION_STORAGE_KEY);
       const secure = parsePersistedSession(secureRaw);
       if (secure?.accessToken) {
-        return secure;
+        stored = secure;
       }
     } catch {
       // Ignore SecureStore read failure and fallback to AsyncStorage.
     }
   }
-  try {
-    const fallbackRaw = await AsyncStorage.getItem(SESSION_STORAGE_KEY);
-    return parsePersistedSession(fallbackRaw);
-  } catch {
-    return null;
+  if (!stored) {
+    try {
+      const fallbackRaw = await AsyncStorage.getItem(SESSION_STORAGE_KEY);
+      stored = parsePersistedSession(fallbackRaw);
+    } catch {
+      stored = null;
+    }
   }
+  const nativeSession = await readNativeSessionFromModule().catch(() => null);
+  if (
+    nativeSession?.accessToken &&
+    (!stored ||
+      nativeSession.accessToken !== stored.accessToken ||
+      (nativeSession.refreshToken || '') !== (stored.refreshToken || ''))
+  ) {
+    await writeSessionToStorage(nativeSession).catch(() => null);
+    return nativeSession;
+  }
+  return stored;
 };
 const writeSessionToStorage = async (session: PersistedSession): Promise<void> => {
   const payload = JSON.stringify(session);
@@ -630,6 +937,7 @@ const writeSessionToStorage = async (session: PersistedSession): Promise<void> =
   } catch {
     // Ignore fallback storage failure.
   }
+  await syncNativeSessionModule(session).catch(() => null);
 };
 const clearSessionInStorage = async (): Promise<void> => {
   if (canUseSecureStore) {
@@ -643,6 +951,30 @@ const clearSessionInStorage = async (): Promise<void> => {
     await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
   } catch {
     // Ignore cleanup failure.
+  }
+  await clearNativeSessionModule().catch(() => null);
+};
+const readAppSnapshotFromStorage = async (): Promise<PersistedAppSnapshot | null> => {
+  try {
+    const raw = await AsyncStorage.getItem(APP_SNAPSHOT_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as PersistedAppSnapshot;
+  } catch {
+    return null;
+  }
+};
+const writeAppSnapshotToStorage = async (snapshot: PersistedAppSnapshot): Promise<void> => {
+  try {
+    await AsyncStorage.setItem(APP_SNAPSHOT_STORAGE_KEY, JSON.stringify(snapshot));
+  } catch {
+    // Ignore snapshot persistence failure.
+  }
+};
+const clearAppSnapshotInStorage = async (): Promise<void> => {
+  try {
+    await AsyncStorage.removeItem(APP_SNAPSHOT_STORAGE_KEY);
+  } catch {
+    // Ignore snapshot cleanup failure.
   }
 };
 const readBackendOverrideFromStorage = async (): Promise<string> => {
@@ -664,6 +996,25 @@ const writeBackendOverrideToStorage = async (value: string): Promise<void> => {
     // Ignore override persistence failure.
   }
 };
+const readActiveBackendFromStorage = async (): Promise<string> => {
+  try {
+    return normalizeBackendBaseUrl(await AsyncStorage.getItem(ACTIVE_BACKEND_STORAGE_KEY));
+  } catch {
+    return '';
+  }
+};
+const writeActiveBackendToStorage = async (value: string): Promise<void> => {
+  const normalized = normalizeBackendBaseUrl(value);
+  try {
+    if (normalized) {
+      await AsyncStorage.setItem(ACTIVE_BACKEND_STORAGE_KEY, normalized);
+    } else {
+      await AsyncStorage.removeItem(ACTIVE_BACKEND_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore active backend persistence failure.
+  }
+};
 const buildDevBackendBaseUrl = (prodBaseUrl: string): string => {
   const normalized = normalizeBackendBaseUrl(prodBaseUrl);
   try {
@@ -674,6 +1025,228 @@ const buildDevBackendBaseUrl = (prodBaseUrl: string): string => {
     return 'http://wowjini0228.synology.me:7084';
   }
 };
+const LOCATION_PRECISION_REFRESH_POLL_MS = 30 * 1000;
+const LOCATION_VIEW_TIMEOUT_MS = 15 * 1000;
+const LOCATION_VIEW_POLL_MS = 1500;
+const LOCATION_VIEW_CAPTURE_GRACE_MS = 10 * 1000;
+const LOCATION_BACKGROUND_NOTIFICATION_TASK = 'ourhangout.location.notification';
+const LOCATION_BACKGROUND_SNAPSHOT_TASK = 'ourhangout.location.snapshot';
+const LOCATION_BACKGROUND_MIN_INTERVAL_MINUTES = 60;
+const NativeLocationCapture = NativeModules.LocationCaptureModule as
+  | {
+      startCapture: (
+        baseUrl: string,
+        accessToken: string,
+        refreshToken: string,
+        source: 'heartbeat' | 'precision_refresh' | 'manual_refresh',
+        precise: boolean
+      ) => Promise<boolean>;
+      startCaptureWithRequest: (
+        baseUrl: string,
+        requestToken: string,
+        source: 'precision_refresh' | 'manual_refresh',
+        precise: boolean
+      ) => Promise<boolean>;
+      readSession: () => Promise<{ accessToken?: string; refreshToken?: string } | null>;
+      storeSession: (accessToken: string, refreshToken?: string) => Promise<boolean>;
+      clearSession: () => Promise<boolean>;
+    }
+  | undefined;
+const MODULE_BACKEND_BASE_URL =
+  normalizeBackendBaseUrl(
+    String(
+      ((Constants.expoConfig?.extra as { backend?: { baseUrl?: string } } | undefined)?.backend?.baseUrl as string | undefined) ||
+        ''
+    )
+  ) || 'http://wowjini0228.synology.me:7083';
+const getStoredBackendBaseUrlForLocation = async (): Promise<string> => {
+  const activeBackend = await readActiveBackendFromStorage().catch(() => '');
+  const override = await readBackendOverrideFromStorage().catch(() => '');
+  return normalizeBackendBaseUrl(activeBackend) || normalizeBackendBaseUrl(override) || MODULE_BACKEND_BASE_URL;
+};
+const uploadLocationToBackend = async (params: {
+  latitude: number;
+  longitude: number;
+  accuracyM?: number | null;
+  capturedAt?: string;
+  source: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
+}): Promise<void> => {
+  const session = await readSessionFromStorage().catch(() => null);
+  const token = (session?.accessToken || '').trim();
+  if (!token) return;
+  const backendBaseUrl = await getStoredBackendBaseUrlForLocation();
+  logSessionTrace('location_upload:base_url', {
+    source: params.source,
+    backendBaseUrl,
+  });
+  if (!backendBaseUrl) return;
+  await fetch(`${backendBaseUrl}/v1/me`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      locationSharingEnabled: true,
+    }),
+  }).catch(() => null);
+  await fetch(`${backendBaseUrl}/v1/me/location`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      latitude: params.latitude,
+      longitude: params.longitude,
+      ...(typeof params.accuracyM === 'number' ? { accuracyM: params.accuracyM } : {}),
+      ...(params.capturedAt ? { capturedAt: params.capturedAt } : {}),
+      source: params.source,
+    }),
+  }).catch(() => null);
+};
+const consumeLocationPrecisionRequestToBackend = async (params: {
+  requestToken: string;
+  latitude: number;
+  longitude: number;
+  accuracyM?: number | null;
+  capturedAt?: string;
+  source?: 'precision_refresh' | 'manual_refresh';
+  backendBaseUrl?: string;
+}): Promise<void> => {
+  const backendBaseUrl = normalizeBackendBaseUrl(params.backendBaseUrl) || (await getStoredBackendBaseUrlForLocation());
+  if (!backendBaseUrl || !params.requestToken.trim()) return;
+  await fetch(`${backendBaseUrl}/v1/location-precision/consume`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      requestToken: params.requestToken.trim(),
+      latitude: params.latitude,
+      longitude: params.longitude,
+      ...(typeof params.accuracyM === 'number' ? { accuracyM: params.accuracyM } : {}),
+      ...(params.capturedAt ? { capturedAt: params.capturedAt } : {}),
+      source: params.source || 'precision_refresh',
+    }),
+  }).catch(() => null);
+};
+const captureAndUploadLocationInBackground = async (
+  source: 'heartbeat' | 'precision_refresh' | 'manual_refresh',
+  precise = false,
+  options?: {
+    requestToken?: string;
+    backendBaseUrl?: string;
+  }
+): Promise<boolean> => {
+  const permission =
+    Platform.OS === 'android'
+      ? await Location.getBackgroundPermissionsAsync().catch(() => null)
+      : await Location.getForegroundPermissionsAsync().catch(() => null);
+  if (permission?.status !== 'granted') {
+    return false;
+  }
+  const position = await Location.getCurrentPositionAsync({
+    accuracy: precise ? Location.Accuracy.Highest : Location.Accuracy.Balanced,
+  }).catch(() => null);
+  if (!position) return false;
+  if (options?.requestToken && (source === 'precision_refresh' || source === 'manual_refresh')) {
+    await consumeLocationPrecisionRequestToBackend({
+      requestToken: options.requestToken,
+      backendBaseUrl: options.backendBaseUrl,
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracyM: typeof position.coords.accuracy === 'number' ? position.coords.accuracy : null,
+      capturedAt: new Date().toISOString(),
+      source,
+    });
+  } else {
+    await uploadLocationToBackend({
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracyM: typeof position.coords.accuracy === 'number' ? position.coords.accuracy : null,
+      capturedAt: new Date(position.timestamp).toISOString(),
+      source,
+    });
+  }
+  return true;
+};
+const startManagedLocationCapture = async (
+  source: 'heartbeat' | 'precision_refresh' | 'manual_refresh',
+  precise = false,
+  options?: {
+    requestToken?: string;
+    backendBaseUrl?: string;
+  }
+): Promise<boolean> => {
+  if (Platform.OS !== 'android') {
+    return captureAndUploadLocationInBackground(source, precise, options);
+  }
+  const permission = await Location.getBackgroundPermissionsAsync().catch(() => null);
+  if (permission?.status !== 'granted') {
+    return false;
+  }
+  const requestToken = (options?.requestToken || '').trim();
+  const requestBackendBaseUrl = normalizeBackendBaseUrl(options?.backendBaseUrl) || (await getStoredBackendBaseUrlForLocation());
+  if (requestToken && NativeLocationCapture?.startCaptureWithRequest && requestBackendBaseUrl) {
+    const started = await NativeLocationCapture.startCaptureWithRequest(
+      requestBackendBaseUrl,
+      requestToken,
+      source === 'manual_refresh' ? 'manual_refresh' : 'precision_refresh',
+      precise
+    ).catch(() => false);
+    return !!started;
+  }
+  const session = await readSessionFromStorage().catch(() => null);
+  const accessToken = (session?.accessToken || '').trim();
+  const refreshToken = (session?.refreshToken || '').trim();
+  const backendBaseUrl = await getStoredBackendBaseUrlForLocation();
+  logSessionTrace('location_capture:start', {
+    source,
+    precise,
+    backendBaseUrl,
+    hasAccessToken: !!accessToken,
+    hasRefreshToken: !!refreshToken,
+  });
+  if ((!accessToken && !refreshToken) || !backendBaseUrl || !NativeLocationCapture?.startCapture) {
+    return false;
+  }
+  const started = await NativeLocationCapture.startCapture(backendBaseUrl, accessToken, refreshToken, source, precise).catch(
+    () => false
+  );
+  return !!started;
+};
+
+try {
+  if (!TaskManager.isTaskDefined(LOCATION_BACKGROUND_SNAPSHOT_TASK)) {
+    TaskManager.defineTask(LOCATION_BACKGROUND_SNAPSHOT_TASK, async () => {
+      try {
+        const ok = await startManagedLocationCapture('heartbeat', false);
+        return ok ? BackgroundTask.BackgroundTaskResult.Success : BackgroundTask.BackgroundTaskResult.Failed;
+      } catch {
+        return BackgroundTask.BackgroundTaskResult.Failed;
+      }
+    });
+  }
+  if (!TaskManager.isTaskDefined(LOCATION_BACKGROUND_NOTIFICATION_TASK)) {
+    TaskManager.defineTask<Notifications.NotificationTaskPayload>(LOCATION_BACKGROUND_NOTIFICATION_TASK, async ({ data }) => {
+      if ('actionIdentifier' in data) {
+        return Notifications.BackgroundNotificationTaskResult.NoData;
+      }
+      const payload = typeof data?.data?.dataString === 'string' ? JSON.parse(data.data.dataString) : data?.data || {};
+      if ((payload as { locationAction?: string }).locationAction !== 'refresh') {
+        return Notifications.BackgroundNotificationTaskResult.NoData;
+      }
+      const ok = await startManagedLocationCapture('precision_refresh', true, {
+        requestToken: String((payload as { requestToken?: string }).requestToken || ''),
+        backendBaseUrl: String((payload as { backendBaseUrl?: string }).backendBaseUrl || ''),
+      }).catch(() => false);
+      return ok ? Notifications.BackgroundNotificationTaskResult.NewData : Notifications.BackgroundNotificationTaskResult.Failed;
+    });
+  }
+} catch {
+  // Ignore duplicate registration and unsupported runtime cases.
+}
 const getRuntimeAppVersion = (): string => {
   const constantsAny = Constants as unknown as {
     expoConfig?: { version?: string; extra?: { buildVersion?: { name?: string } } };
@@ -1311,9 +1884,15 @@ function App() {
 
   const [stage, setStage] = useState<Stage>('login');
   const [tab, setTab] = useState<Tab>('friends');
-  const [friendsMode, setFriendsMode] = useState<FriendsMode>('friends');
   const [chatsMode, setChatsMode] = useState<ChatsMode>('direct');
-  const [profile, setProfile] = useState<Profile>({ name: '', status: '', email: '', avatarUri: '', localeTag: appLocaleTag });
+  const [profile, setProfile] = useState<Profile>({
+    name: '',
+    status: '',
+    email: '',
+    avatarUri: '',
+    localeTag: appLocaleTag,
+    locationSharingEnabled: false
+  });
   const [nameDraft, setNameDraft] = useState('');
   const [statusDraft, setStatusDraft] = useState('');
   const [profilePhotoDraft, setProfilePhotoDraft] = useState('');
@@ -1374,6 +1953,9 @@ function App() {
   const [familyRequestsOutgoing, setFamilyRequestsOutgoing] = useState<FamilyUpgradeRequestItem[]>([]);
   const [friendActionKey, setFriendActionKey] = useState('');
   const [familyActionKey, setFamilyActionKey] = useState('');
+  const [roomInvitationsIncoming, setRoomInvitationsIncoming] = useState<RoomInvitationItem[]>([]);
+  const [roomInvitationsOutgoing, setRoomInvitationsOutgoing] = useState<RoomInvitationItem[]>([]);
+  const [roomInvitationActionKey, setRoomInvitationActionKey] = useState('');
   const [isFriendSyncing, setIsFriendSyncing] = useState(false);
   const [showFamilyPickerModal, setShowFamilyPickerModal] = useState(false);
   const [showFamilyUpgradeModal, setShowFamilyUpgradeModal] = useState(false);
@@ -1388,12 +1970,38 @@ function App() {
   const [groupNameDraft, setGroupNameDraft] = useState('');
   const [groupPick, setGroupPick] = useState<string[]>([]);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [isUpdatingLocationSharing, setIsUpdatingLocationSharing] = useState(false);
+  const [locationPermissionGranted, setLocationPermissionGranted] = useState(false);
+  const [familyRoomLocations, setFamilyRoomLocations] = useState<UserLocationCard[]>([]);
+  const [isFamilyRoomLocationsLoading, setIsFamilyRoomLocationsLoading] = useState(false);
+  const [familyRoomLocationActionKey, setFamilyRoomLocationActionKey] = useState('');
   const [showRoomTitleModal, setShowRoomTitleModal] = useState(false);
   const [roomTitleDraft, setRoomTitleDraft] = useState('');
   const [mediaViewer, setMediaViewer] = useState<MediaViewer | null>(null);
   const [avatarViewer, setAvatarViewer] = useState<AvatarViewer | null>(null);
   const [isSavingMedia, setIsSavingMedia] = useState(false);
   const [roomMenuId, setRoomMenuId] = useState<string | null>(null);
+  const [roomMembersRoomId, setRoomMembersRoomId] = useState<string | null>(null);
+  const [roomMembers, setRoomMembers] = useState<RoomMember[]>([]);
+  const [roomOwnerUserId, setRoomOwnerUserId] = useState('');
+  const [roomMembersMyRole, setRoomMembersMyRole] = useState<'admin' | 'member'>('member');
+  const [roomMembersCanTransferOwnership, setRoomMembersCanTransferOwnership] = useState(false);
+  const [roomMembersCanManageAdmins, setRoomMembersCanManageAdmins] = useState(false);
+  const [roomMembersCanKickMembers, setRoomMembersCanKickMembers] = useState(false);
+  const [isRoomMembersLoading, setIsRoomMembersLoading] = useState(false);
+  const [roomMembersActionKey, setRoomMembersActionKey] = useState('');
+  const [keyboardInset, setKeyboardInset] = useState(0);
+  const [familyStructureRoomId, setFamilyStructureRoomId] = useState<string | null>(null);
+  const [familyStructureProfiles, setFamilyStructureProfiles] = useState<FamilyRoomMemberProfile[]>([]);
+  const [familyStructureRelationships, setFamilyStructureRelationships] = useState<FamilyRoomRelationship[]>([]);
+  const [familyStructurePendingIncoming, setFamilyStructurePendingIncoming] = useState<FamilyRoomRelationship[]>([]);
+  const [familyStructurePendingOutgoing, setFamilyStructurePendingOutgoing] = useState<FamilyRoomRelationship[]>([]);
+  const [familyStructureAliasDrafts, setFamilyStructureAliasDrafts] = useState<Record<string, string>>({});
+  const [familyStructureTargetId, setFamilyStructureTargetId] = useState('');
+  const [familyStructureRequestAs, setFamilyStructureRequestAs] = useState<'guardian' | 'child'>('guardian');
+  const [familyStructureSelectedMemberId, setFamilyStructureSelectedMemberId] = useState('');
+  const [isFamilyStructureLoading, setIsFamilyStructureLoading] = useState(false);
+  const [familyStructureActionKey, setFamilyStructureActionKey] = useState('');
   const [wsRetryTick, setWsRetryTick] = useState(0);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [appUpdateStatus, setAppUpdateStatus] = useState<AppUpdateCardState>({
@@ -1415,18 +2023,44 @@ function App() {
   const hiddenServerTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeRoomRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roomGroupRef = useRef<Record<string, boolean>>({});
   const sendLockRef = useRef(false);
+  const currentUserIdRef = useRef(currentUserId);
   const accessTokenRef = useRef('');
   const refreshTokenRef = useRef('');
   const refreshRequestRef = useRef<Promise<string> | null>(null);
   const roomReadCutoffRef = useRef<Record<string, number>>({});
   const pushTokenRef = useRef('');
   const registeredPushTokenRef = useRef('');
+  const sessionInvalidRecoveryInFlightRef = useRef(false);
   const notificationResponseSubRef = useRef<Notifications.EventSubscription | null>(null);
   const friendTabRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const friendTabRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const backendBaseUrl = normalizeBackendBaseUrl(backendOverrideUrl) || defaultBackendBaseUrl;
+
+  const applyPersistedAppSnapshot = (snapshot: PersistedAppSnapshot | null) => {
+    if (!snapshot) return;
+    if (snapshot.profile) {
+      setProfile((prev) => ({ ...prev, ...snapshot.profile }));
+      setNameDraft(snapshot.profile.name || '');
+      setStatusDraft(snapshot.profile.status || '');
+      setProfilePhotoDraft(snapshot.profile.avatarUri || '');
+    }
+    if (Array.isArray(snapshot.friends)) setFriends(snapshot.friends);
+    if (Array.isArray(snapshot.bots)) setBots(snapshot.bots);
+    if (Array.isArray(snapshot.rooms)) setRooms(snapshot.rooms);
+    if (snapshot.currentUserId) setCurrentUserId(snapshot.currentUserId);
+    if (snapshot.tab === 'friends' || snapshot.tab === 'chats' || snapshot.tab === 'profile') {
+      setTab(snapshot.tab);
+    }
+    if (snapshot.chatsMode === 'direct' || snapshot.chatsMode === 'group') {
+      setChatsMode(snapshot.chatsMode);
+    }
+    if (snapshot.directReadCutoffs) {
+      setDirectReadCutoffs(snapshot.directReadCutoffs);
+    }
+  };
   const backendOrigin = useMemo(() => {
     try {
       return new URL(backendBaseUrl).origin;
@@ -1474,8 +2108,10 @@ function App() {
   const resolveBackendApiUrl = (value?: string | null): string =>
     resolveBackendUrl(value, ['/v1/'], true);
 
-  const getFriend = (fid: string) => friends.find((f) => f.id === fid);
-  const getBot = (botUserId: string) => bots.find((bot) => bot.userId === botUserId);
+  const friendMapById = useMemo(() => new Map(friends.map((friend) => [friend.id, friend])), [friends]);
+  const botMapByUserId = useMemo(() => new Map(bots.map((bot) => [bot.userId, bot])), [bots]);
+  const getFriend = (fid: string) => friendMapById.get(fid);
+  const getBot = (botUserId: string) => botMapByUserId.get(botUserId);
   const isOpenClawAssistantBotUser = (botUserId: string) => getBot(botUserId)?.botKey === 'openclaw-assistant';
   const roomAvatarUri = (room: Room) => {
     if (room.type !== 'direct') return '';
@@ -1489,12 +2125,35 @@ function App() {
       : getFriend(room.members.find((m) => m !== currentUserId) ?? '')?.name ??
         getBot(room.members.find((m) => m !== currentUserId) ?? '')?.name ??
         room.title;
-  const roomMembers = (room: Room) =>
+  const roomMemberNames = (room: Room) =>
     room.members
       .filter((m) => m !== currentUserId)
       .map((m) => getFriend(m)?.name ?? getBot(m)?.name ?? '')
         .filter(Boolean)
         .join(', ');
+  const normalizeMessageOwnership = (message: Message): Message => {
+    const senderId = message.senderId?.trim() || '';
+    const mine = !!senderId && senderId === currentUserIdRef.current;
+    return message.mine === mine ? message : { ...message, mine };
+  };
+  const mergeRoomMessages = (prev: Message[], incoming: Message[]): Message[] => {
+    if (incoming.length === 0) {
+      return prev;
+    }
+
+    const next = [...prev];
+    incoming.forEach((item) => {
+      const normalized = normalizeMessageOwnership(item);
+      const existingIndex = next.findIndex((message) => message.id === normalized.id);
+      if (existingIndex >= 0) {
+        next[existingIndex] = { ...next[existingIndex], ...normalized };
+      } else {
+        next.push(normalized);
+      }
+    });
+    next.sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
+    return next;
+  };
   const openAvatarViewer = (uri: string, title: string) => {
     const normalizedUri = uri.trim();
     if (!normalizedUri) return;
@@ -1574,7 +2233,7 @@ function App() {
     if (!q) return sortedRooms;
     return sortedRooms.filter((room) => {
       const title = roomTitle(room).toLowerCase();
-      const members = roomMembers(room).toLowerCase();
+      const members = roomMemberNames(room).toLowerCase();
       const preview = room.preview.toLowerCase();
       return title.includes(q) || members.includes(q) || preview.includes(q);
     });
@@ -1634,11 +2293,7 @@ function App() {
   );
 
   const roomMap = useMemo(() => new Map(rooms.map((r) => [r.id, r])), [rooms]);
-  const knockCount =
-    friendRequestsIncoming.length +
-    friendRequestsOutgoing.length +
-    familyRequestsIncoming.length +
-    familyRequestsOutgoing.length;
+  const knockCount = friendRequestsIncoming.length + friendRequestsOutgoing.length + roomInvitationsIncoming.length;
   const activeRoomCompanions = activeRoom?.members.filter((m) => m !== currentUserId).length ?? 0;
   const topAvatarUri = tab === 'chats' && activeRoom ? roomAvatarUri(activeRoom) : profile.avatarUri;
   const familyUpgradeTarget = useMemo(
@@ -1649,6 +2304,45 @@ function App() {
     () => friends.find((friend) => friend.id === friendActionsTargetId) ?? null,
     [friendActionsTargetId, friends]
   );
+  const familyStructureRoom = useMemo(
+    () => (familyStructureRoomId ? roomMap.get(familyStructureRoomId) ?? null : null),
+    [familyStructureRoomId, roomMap]
+  );
+  const roomMembersRoom = useMemo(
+    () => (roomMembersRoomId ? roomMap.get(roomMembersRoomId) ?? null : null),
+    [roomMembersRoomId, roomMap]
+  );
+  const roomMembersPendingInvitations = useMemo(
+    () =>
+      roomMembersRoomId
+        ? roomInvitationsOutgoing.filter(
+            (invitation) => invitation.roomId === roomMembersRoomId && invitation.status === 'pending'
+          )
+        : [],
+    [roomInvitationsOutgoing, roomMembersRoomId]
+  );
+  const roomMembersInviteableFriends = useMemo(() => {
+    if (!roomMembersRoomId) return [];
+    const memberIds = new Set(roomMembers.map((member) => member.userId));
+    const pendingTargetIds = new Set(roomMembersPendingInvitations.map((invitation) => invitation.targetUserId));
+    return friends.filter((friend) => !memberIds.has(friend.id) && !pendingTargetIds.has(friend.id));
+  }, [friends, roomMembers, roomMembersPendingInvitations, roomMembersRoomId]);
+  const familyStructureProfileMap = useMemo(
+    () => new Map(familyStructureProfiles.map((profile) => [profile.userId, profile])),
+    [familyStructureProfiles]
+  );
+  const familyStructureSelectedMember = useMemo(
+    () =>
+      familyStructureSelectedMemberId
+        ? familyStructureProfiles.find((profile) => profile.userId === familyStructureSelectedMemberId) ?? null
+        : null,
+    [familyStructureSelectedMemberId, familyStructureProfiles]
+  );
+  const familyStructureCanManage = false;
+  const familyStructureGuardianId = '';
+  const familyStructureChildId = '';
+  const setFamilyStructureGuardianId = (_value: string) => undefined;
+  const setFamilyStructureChildId = (_value: string) => undefined;
   const friendsTabLabel = s.tabsFriends;
   const friendsTabHint = isKo ? '친구 목록' : 'Friend list';
   const chatsTabLabel =
@@ -1739,15 +2433,15 @@ function App() {
     };
   }, [defaultBackendBaseUrl]);
   useEffect(() => {
+    if (!isBackendConfigReady) return;
+    void writeActiveBackendToStorage(backendBaseUrl);
+  }, [backendBaseUrl, isBackendConfigReady]);
+  useEffect(() => {
     let cancelled = false;
     const run = async () => {
       try {
-        const [, storedChatsMode] = await Promise.all([
-          AsyncStorage.getItem(FRIENDS_TAB_MODE_STORAGE_KEY),
-          AsyncStorage.getItem(CHATS_TAB_MODE_STORAGE_KEY),
-        ]);
+        const storedChatsMode = await AsyncStorage.getItem(CHATS_TAB_MODE_STORAGE_KEY);
         if (cancelled) return;
-        setFriendsMode('friends');
         if (storedChatsMode === 'direct' || storedChatsMode === 'group') {
           setChatsMode(storedChatsMode);
         }
@@ -1761,11 +2455,23 @@ function App() {
     };
   }, []);
   useEffect(() => {
-    void AsyncStorage.setItem(FRIENDS_TAB_MODE_STORAGE_KEY, friendsMode).catch(() => null);
-  }, [friendsMode]);
-  useEffect(() => {
     void AsyncStorage.setItem(CHATS_TAB_MODE_STORAGE_KEY, chatsMode).catch(() => null);
   }, [chatsMode]);
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, (event) => {
+      const nextInset = Math.max(0, event.endCoordinates?.height ?? 0);
+      setKeyboardInset(nextInset);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardInset(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const renderNookHero = ({
     title,
@@ -1839,7 +2545,7 @@ function App() {
           </View>
         ) : null}
         <Text style={styles.roomPreview} numberOfLines={1}>
-          {room.preview || roomMembers(room) || s.startChat}
+          {room.preview || roomMemberNames(room) || s.startChat}
         </Text>
       </View>
       <View style={styles.itemRight}>
@@ -1861,10 +2567,6 @@ function App() {
 
   const renderFriendRow = (friend: Friend) => {
     const trustedBusy = friendActionKey === `trusted:${friend.id}`;
-    const familyBusy = familyActionKey === `create:${friend.id}`;
-    const removeFamilyBusy = friend.family?.relationshipId
-      ? familyActionKey === `family-remove:${friend.family.relationshipId}`
-      : false;
     const removeFriendBusy = friendActionKey === `friend-remove:${friend.id}`;
     const aliasBusy = friendActionKey === `alias:${friend.id}`;
     const subtitle = friend.aliasName
@@ -1898,21 +2600,12 @@ function App() {
         >
           <Ionicons name={friend.trusted ? 'star' : 'star-outline'} size={16} color={FOREST.text} />
         </Pressable>
-        {!friend.family?.isFamily ? (
-          <Pressable
-            style={[styles.iconLight, (familyBusy || !!familyActionKey) && styles.off]}
-            disabled={!!familyActionKey}
-            onPress={() => openFamilyUpgradeModal(friend)}
-          >
-            <Ionicons name="people-outline" size={16} color={FOREST.text} />
-          </Pressable>
-        ) : null}
         <Pressable style={styles.iconLight} onPress={() => void startDirectRoom(friend.id)}>
           <Ionicons name="chatbubble-ellipses" size={16} color={FOREST.text} />
         </Pressable>
         <Pressable
-          style={[styles.iconLight, (aliasBusy || removeFamilyBusy || removeFriendBusy || !!friendActionKey || !!familyActionKey) && styles.off]}
-          disabled={!!friendActionKey || !!familyActionKey}
+          style={[styles.iconLight, (aliasBusy || removeFriendBusy || !!friendActionKey) && styles.off]}
+          disabled={!!friendActionKey}
           onPress={() => openFriendActions(friend)}
         >
           <Ionicons name="ellipsis-horizontal" size={16} color={FOREST.text} />
@@ -1944,6 +2637,26 @@ function App() {
     return () => sub.remove();
   }, []);
   useEffect(() => {
+    if (appVisibility !== 'active') return;
+    let cancelled = false;
+    const run = async () => {
+      const stored = await readSessionFromStorage().catch(() => null);
+      if (cancelled || !stored?.accessToken) return;
+      const storedAccessToken = stored.accessToken.trim();
+      const storedRefreshToken = (stored.refreshToken || '').trim();
+      if (
+        storedAccessToken &&
+        (storedAccessToken !== accessTokenRef.current.trim() || storedRefreshToken !== refreshTokenRef.current.trim())
+      ) {
+        setSessionTokens(storedAccessToken, storedRefreshToken);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [appVisibility]);
+  useEffect(() => {
     if (!activeRoomId) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       void closeActiveRoom();
@@ -1959,7 +2672,11 @@ function App() {
       if (backendState !== 'ready') return;
       const token = accessToken.trim();
       if (!token) return;
-      void Promise.all([refreshFriendTabData({ silent: true }), refreshRoomsFromBackend(token)]).catch(() => null);
+      void Promise.all([
+        refreshFriendTabData({ silent: true }),
+        refreshRoomsFromBackend(token),
+        refreshRoomInvitations(token),
+      ]).catch(() => null);
       if (activeRoomRef.current) {
         void syncRoomReadState(token, activeRoomRef.current, { refreshMessages: true }).catch(() => null);
       }
@@ -1977,6 +2694,24 @@ function App() {
     const totalUnread = rooms.reduce((sum, room) => sum + Math.max(0, room.unread), 0);
     void syncAppBadgeCount(totalUnread);
   }, [rooms]);
+  useEffect(() => {
+    if (appVisibility !== 'active') return;
+    const totalUnread = rooms.reduce((sum, room) => sum + Math.max(0, room.unread), 0);
+    void syncAppBadgeCount(totalUnread);
+  }, [appVisibility, rooms]);
+
+  useEffect(() => {
+    currentUserIdRef.current = currentUserId.trim();
+  }, [currentUserId]);
+
+  useEffect(() => {
+    return () => {
+      if (activeRoomRefreshTimerRef.current) {
+        clearTimeout(activeRoomRefreshTimerRef.current);
+        activeRoomRefreshTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     accessTokenRef.current = accessToken.trim();
@@ -1985,6 +2720,21 @@ function App() {
   useEffect(() => {
     refreshTokenRef.current = refreshToken.trim();
   }, [refreshToken]);
+
+  useEffect(() => {
+    if (stage !== 'app') return;
+    if (isSessionRestoring) return;
+    void writeAppSnapshotToStorage({
+      profile,
+      friends,
+      bots,
+      rooms,
+      currentUserId,
+      tab,
+      chatsMode,
+      directReadCutoffs,
+    });
+  }, [stage, isSessionRestoring, profile, friends, bots, rooms, currentUserId, tab, chatsMode, directReadCutoffs]);
 
   useEffect(() => {
     if (tab !== 'chats') return;
@@ -2009,12 +2759,14 @@ function App() {
 
   useEffect(() => {
     const token = accessToken.trim();
-    if (!activeRoomId || !token) return;
-    if (!shouldAutoMarkRoomRead(activeRoomId)) return;
+    const roomId = activeRoomRef.current;
+    if (!roomId || !token) return;
+    if (!shouldAutoMarkRoomRead(roomId)) return;
+    if (appVisibility !== 'active') return;
     let cancelled = false;
     const run = async () => {
       try {
-        await syncRoomReadState(token, activeRoomId, { refreshMessages: true });
+        await syncRoomReadState(token, roomId, { refreshMessages: true });
       } catch {
         if (cancelled) return;
       }
@@ -2023,7 +2775,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeRoomId, accessToken, appVisibility]);
+  }, [accessToken, appVisibility]);
 
   useEffect(() => {
     const token = accessToken.trim();
@@ -2053,9 +2805,19 @@ function App() {
   };
 
   const refreshAccessToken = async (preferredRefreshToken?: string): Promise<string> => {
+    const persisted = await readSessionFromStorage().catch(() => null);
+    const persistedAccessToken = (persisted?.accessToken || '').trim();
+    const persistedRefreshToken = (persisted?.refreshToken || '').trim();
+    if (
+      persistedAccessToken &&
+      (persistedAccessToken !== accessTokenRef.current.trim() || persistedRefreshToken !== refreshTokenRef.current.trim())
+    ) {
+      setSessionTokens(persistedAccessToken, persistedRefreshToken);
+      return persistedAccessToken;
+    }
     const preferred = (preferredRefreshToken || '').trim();
     const current = refreshTokenRef.current.trim();
-    const tokenToUse = current || preferred;
+    const tokenToUse = persistedRefreshToken || current || preferred;
     if (!tokenToUse) {
       throw new Error('missing refresh token');
     }
@@ -2064,42 +2826,62 @@ function App() {
     }
 
     const request = (async () => {
-      let refreshed: Response;
-      try {
-        refreshed = await fetch(`${backendBaseUrl}/v1/auth/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken: tokenToUse }),
-        });
-      } catch (error) {
-        throw createBackendRequestError(errorMessage(error) || 'Network request failed.', {
-          code: 'NETWORK_ERROR',
-        });
-      }
-      const refreshText = await refreshed.text();
-      let refreshJson: unknown = null;
-      if (refreshText) {
+      const performRefresh = async (refreshTokenCandidate: string): Promise<string> => {
+        let refreshed: Response;
         try {
-          refreshJson = JSON.parse(refreshText);
-        } catch {
-          refreshJson = {};
+          refreshed = await fetch(`${backendBaseUrl}/v1/auth/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshToken: refreshTokenCandidate }),
+          });
+        } catch (error) {
+          throw createBackendRequestError(errorMessage(error) || 'Network request failed.', {
+            code: 'NETWORK_ERROR',
+          });
         }
+        const refreshText = await refreshed.text();
+        let refreshJson: unknown = null;
+        if (refreshText) {
+          try {
+            refreshJson = JSON.parse(refreshText);
+          } catch {
+            refreshJson = {};
+          }
+        }
+        if (!refreshed.ok) {
+          throw toBackendRequestError(refreshJson || {}, `HTTP ${refreshed.status}`, refreshed.status);
+        }
+        const refreshData = unwrapEnvelope<BackendAuthData>(refreshJson || {});
+        const nextAccessToken = (refreshData.accessToken || refreshData.tokens?.accessToken || '').trim();
+        const nextRefreshToken = (refreshData.refreshToken || refreshData.tokens?.refreshToken || refreshTokenCandidate).trim();
+        if (!nextAccessToken) {
+          throw new Error('missing access token');
+        }
+        setSessionTokens(nextAccessToken, nextRefreshToken);
+        await writeSessionToStorage({
+          accessToken: nextAccessToken,
+          ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {}),
+        });
+        return nextAccessToken;
+      };
+
+      try {
+        return await performRefresh(tokenToUse);
+      } catch (error) {
+        if (!isSessionInvalidError(error)) {
+          throw error;
+        }
+        const latestStored = await readSessionFromStorage().catch(() => null);
+        const latestRefreshToken = (latestStored?.refreshToken || refreshTokenRef.current.trim()).trim();
+        if (latestRefreshToken && latestRefreshToken !== tokenToUse) {
+          logSessionTrace('auth:refresh_retry_latest_token', {
+            previousTokenLength: tokenToUse.length,
+            latestTokenLength: latestRefreshToken.length,
+          });
+          return performRefresh(latestRefreshToken);
+        }
+        throw error;
       }
-      if (!refreshed.ok) {
-        throw toBackendRequestError(refreshJson || {}, `HTTP ${refreshed.status}`, refreshed.status);
-      }
-      const refreshData = unwrapEnvelope<BackendAuthData>(refreshJson || {});
-      const nextAccessToken = (refreshData.accessToken || refreshData.tokens?.accessToken || '').trim();
-      const nextRefreshToken = (refreshData.refreshToken || refreshData.tokens?.refreshToken || tokenToUse).trim();
-      if (!nextAccessToken) {
-        throw new Error('missing access token');
-      }
-      setSessionTokens(nextAccessToken, nextRefreshToken);
-      await writeSessionToStorage({
-        accessToken: nextAccessToken,
-        ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {}),
-      });
-      return nextAccessToken;
     })();
 
     refreshRequestRef.current = request;
@@ -2229,6 +3011,7 @@ function App() {
         Array.isArray(room.members) && room.members.length
           ? room.members.map((member) => String(member))
           : [(fallbackUserId || currentUserId || MY_ID).trim() || MY_ID],
+      ownerUserId: String(room.ownerUserId || fallbackUserId || currentUserId || MY_ID),
       isGroup: roomType !== 'direct',
       favorite: !!room.favorite,
       muted: !!room.muted,
@@ -2240,12 +3023,13 @@ function App() {
 
   const mapBackendMessage = (message: BackendRoomMessage): Message => {
     const senderId = String(message.senderId || '');
+    const mine = !!senderId && senderId === currentUserIdRef.current;
     return {
       id: String(message.id || uid()),
       roomId: String(message.roomId || activeRoomId || ''),
       senderId,
       senderName: String(message.senderName || getFriend(senderId)?.name || profile.name || s.me),
-      mine: !!senderId && senderId === currentUserId,
+      mine,
       kind: (message.kind || 'text') as MsgKind,
       ...(message.text ? { text: String(message.text) } : {}),
       ...(message.uri ? { uri: resolveBackendMediaUrl(String(message.uri)) } : {}),
@@ -2380,10 +3164,34 @@ function App() {
     return completedUrl;
   };
 
-  const requireAccessToken = (): string => {
-    const token = accessToken.trim();
+  const requireAccessToken = async (): Promise<string> => {
+    const token = accessTokenRef.current.trim() || accessToken.trim();
     if (token) return token;
-    Alert.alert(s.needsLoginTitle, s.needsLoginBody);
+
+    const stored = await readSessionFromStorage().catch(() => null);
+    const storedAccessToken = (stored?.accessToken || '').trim();
+    const storedRefreshToken = (stored?.refreshToken || '').trim();
+    if (storedAccessToken) {
+      setSessionTokens(storedAccessToken, storedRefreshToken);
+      return storedAccessToken;
+    }
+
+    const refreshTokenToUse = storedRefreshToken || refreshTokenRef.current.trim();
+    if (refreshTokenToUse) {
+      try {
+        const refreshedAccessToken = await refreshAccessToken(refreshTokenToUse);
+        if (refreshedAccessToken) {
+          return refreshedAccessToken;
+        }
+      } catch (error) {
+        logSessionTrace('auth:require_token_refresh_failed', {
+          message: errorMessage(error),
+        });
+        return '';
+      }
+    }
+
+    logSessionTrace('auth:require_token_missing');
     return '';
   };
 
@@ -2435,6 +3243,13 @@ function App() {
     await Notifications.setBadgeCountAsync(Math.max(0, totalUnread)).catch(() => null);
     if (totalUnread === 0) {
       await Notifications.dismissAllNotificationsAsync().catch(() => null);
+      const presented = await Notifications.getPresentedNotificationsAsync().catch(() => []);
+      await Promise.all(
+        presented.map((notification) =>
+          Notifications.dismissNotificationAsync(notification.request.identifier).catch(() => null)
+        )
+      );
+      await Notifications.setBadgeCountAsync(0).catch(() => null);
     }
   };
 
@@ -2451,8 +3266,8 @@ function App() {
     const unread = Math.max(0, Number(result?.unread ?? 0));
     setRooms((prev) => prev.map((room) => (room.id === roomId ? { ...room, unread } : room)));
     await dismissPresentedNotificationsForRoom(roomId).catch(() => null);
-    if (activeRoomRef.current === roomId) {
-      await syncRoomMessagesFromBackend(token, roomId).catch(() => null);
+    if (activeRoomRef.current === roomId && (roomGroupRef.current[roomId] ?? roomMap.get(roomId)?.isGroup ?? false)) {
+      scheduleActiveRoomMessagesRefresh(token, roomId);
     }
     return unread;
   };
@@ -2510,7 +3325,16 @@ function App() {
 
   const registerPushTokenWithBackend = async (pushToken: string, token: string) => {
     if (!pushToken || !token) return;
-    if (registeredPushTokenRef.current === pushToken) return;
+    const registrationKey = `${backendBaseUrl}|${pushPlatform}|${pushToken}`;
+    if (registeredPushTokenRef.current === registrationKey) {
+      logSessionTrace('push_token:register_skip', { backendBaseUrl, pushPlatform });
+      return;
+    }
+    logSessionTrace('push_token:register_start', {
+      backendBaseUrl,
+      pushPlatform,
+      pushTokenSuffix: pushToken.slice(-12),
+    });
     await backendRequest(
       '/v1/push-tokens',
       {
@@ -2522,11 +3346,19 @@ function App() {
       },
       token
     );
-    registeredPushTokenRef.current = pushToken;
+    registeredPushTokenRef.current = registrationKey;
+    logSessionTrace('push_token:register_done', {
+      backendBaseUrl,
+      pushPlatform,
+      pushTokenSuffix: pushToken.slice(-12),
+    });
   };
 
   const requestDevicePushToken = async (): Promise<string> => {
-    if (!Device.isDevice) return '';
+    if (!Device.isDevice) {
+      logSessionTrace('push_token:skip_simulator');
+      return '';
+    }
 
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync('messages', {
@@ -2537,23 +3369,363 @@ function App() {
       });
     }
 
-    const existing = await Notifications.getPermissionsAsync();
-    let status = existing.status;
-    if (status !== 'granted') {
-      const requested = await Notifications.requestPermissionsAsync();
-      status = requested.status;
+    const existing = await Notifications.getPermissionsAsync().catch(() => null);
+    let status = existing?.status ?? 'undetermined';
+    if (status === 'undetermined') {
+      const requested = await Notifications.requestPermissionsAsync().catch(() => null);
+      status = requested?.status ?? status;
     }
-    if (status !== 'granted') return '';
+    logSessionTrace('push_token:permission', { platform: Platform.OS, status });
+    if (Platform.OS !== 'android' && status !== 'granted') {
+      return '';
+    }
+    if (Platform.OS === 'android' && status !== 'granted') {
+      logSessionTrace('push_token:android_permission_not_granted', { status });
+    }
 
     try {
       const result = await Notifications.getDevicePushTokenAsync();
       const pushToken = typeof result.data === 'string' ? result.data.trim() : '';
       if (pushToken) {
         pushTokenRef.current = pushToken;
+        logSessionTrace('push_token:fetched', {
+          platform: Platform.OS,
+          pushTokenSuffix: pushToken.slice(-12),
+        });
+      } else {
+        logSessionTrace('push_token:empty', { platform: Platform.OS });
       }
       return pushToken;
-    } catch {
+    } catch (error) {
+      logSessionTrace('push_token:fetch_failed', {
+        platform: Platform.OS,
+        message: error instanceof Error ? error.message : 'unknown',
+      });
       return '';
+    }
+  };
+
+  const requestLocationPermissionsForSharingLegacy = async (request = false): Promise<boolean> => {
+    const current = await Location.getForegroundPermissionsAsync().catch(() => null);
+    let foregroundStatus = current?.status ?? 'undetermined';
+    if (request && foregroundStatus !== 'granted') {
+      const requested = await Location.requestForegroundPermissionsAsync().catch(() => null);
+      foregroundStatus = requested?.status ?? 'denied';
+    }
+    if (foregroundStatus === 'granted') {
+      return true;
+    }
+    if (!request) {
+      return false;
+    }
+    Alert.alert(
+        isKo ? '위치 권한이 필요해요' : 'Location permission required',
+        isKo ? '위치 공유를 켜려면 위치 권한을 허용해 주세요.' : 'Allow location access to enable location sharing.',
+        [
+          { text: isKo ? '취소' : 'Cancel', style: 'cancel' },
+          {
+            text: isKo ? '설정 열기' : 'Open settings',
+            onPress: () => {
+              void Linking.openSettings().catch(() => null);
+            },
+          },
+        ]
+      );
+      return false;
+/*
+    if (Platform.OS === 'android') {
+      const background = await Location.requestBackgroundPermissionsAsync();
+      if (background.status !== 'granted') {
+        Alert.alert(
+          isKo ? '항상 허용이 필요해요' : 'Always allow is required',
+          isKo
+            ? '10분마다 위치를 업데이트하려면 Android 위치 권한을 항상 허용으로 바꿔 주세요.'
+            : 'Set Android location access to Always Allow so the app can update every 10 minutes.',
+          [
+            { text: isKo ? '취소' : 'Cancel', style: 'cancel' },
+            {
+              text: isKo ? '설정 열기' : 'Open settings',
+              onPress: () => {
+                void Linking.openSettings().catch(() => null);
+              },
+            },
+          ]
+        );
+        return false;
+      }
+    }
+
+    return true;
+*/
+    return false;
+  };
+
+  const readLocationPermissionGrantedLegacy = async (): Promise<boolean> => {
+    if (Platform.OS === 'android') {
+      const background = await Location.getBackgroundPermissionsAsync().catch(() => null);
+      return background?.status === 'granted';
+    }
+    const current = await Location.getForegroundPermissionsAsync().catch(() => null);
+    return current?.status === 'granted';
+  };
+
+  const requestLocationPermissionsForSharing = async (request = false): Promise<boolean> => {
+    const current = await Location.getForegroundPermissionsAsync().catch(() => null);
+    let foregroundStatus = current?.status ?? 'undetermined';
+    if (request && foregroundStatus !== 'granted') {
+      const requested = await Location.requestForegroundPermissionsAsync().catch(() => null);
+      foregroundStatus = requested?.status ?? 'denied';
+    }
+    if (foregroundStatus !== 'granted') {
+      if (request) {
+        Alert.alert(
+          isKo ? '위치 권한이 필요해요' : 'Location permission required',
+          isKo ? '위치 공유를 사용하려면 위치 권한을 허용해 주세요.' : 'Allow location access to enable location sharing.',
+          [
+            { text: isKo ? '취소' : 'Cancel', style: 'cancel' },
+            {
+              text: isKo ? '설정 열기' : 'Open settings',
+              onPress: () => {
+                void Linking.openSettings().catch(() => null);
+              },
+            },
+          ]
+        );
+      }
+      return false;
+    }
+
+    if (Platform.OS === 'android') {
+      const background = await Location.getBackgroundPermissionsAsync().catch(() => null);
+      let backgroundStatus = background?.status ?? 'undetermined';
+      if (request && backgroundStatus !== 'granted') {
+        const requested = await Location.requestBackgroundPermissionsAsync().catch(() => null);
+        backgroundStatus = requested?.status ?? 'denied';
+      }
+      if (backgroundStatus !== 'granted') {
+        if (request) {
+          Alert.alert(
+            isKo ? '항상 허용이 필요해요' : 'Always allow is required',
+            isKo
+              ? '가족 위치 요청에 응답하려면 Android 위치 권한을 항상 허용으로 바꿔 주세요.'
+              : 'Set Android location access to Always Allow so the app can answer family location requests.',
+            [
+              { text: isKo ? '취소' : 'Cancel', style: 'cancel' },
+              {
+                text: isKo ? '설정 열기' : 'Open settings',
+                onPress: () => {
+                  void Linking.openSettings().catch(() => null);
+                },
+              },
+            ]
+          );
+        }
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  const readLocationPermissionGranted = async (): Promise<boolean> => requestLocationPermissionsForSharing(false);
+
+  const stopLocationHeartbeat = async () => {
+    return;
+  };
+
+  const syncLocationForegroundChannel = async () => {
+    return;
+  };
+
+  const startLocationHeartbeat = async () => {
+    return;
+/*
+    const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_BACKGROUND_TASK).catch(() => false);
+    if (hasStarted) {
+      await syncLocationForegroundChannel().catch(() => null);
+      return;
+    }
+
+    await Location.startLocationUpdatesAsync(LOCATION_BACKGROUND_TASK, {
+      accuracy: Location.Accuracy.Balanced,
+      timeInterval: LOCATION_HEARTBEAT_MS,
+      distanceInterval: 0,
+      pausesUpdatesAutomatically: false,
+      ...(Platform.OS === 'android'
+        ? {
+            foregroundService: {
+              notificationTitle: isKo ? 'ourHangout 위치 공유' : 'ourHangout location sharing',
+              notificationBody: isKo ? '10분마다 최근 위치를 업데이트하고 있어요.' : 'Updating your recent location every 10 minutes.',
+            },
+          }
+        : {}),
+    });
+    await syncLocationForegroundChannel().catch(() => null);
+*/
+  };
+
+  const runOneShotLocationUpdate = async (
+    source: 'heartbeat' | 'precision_refresh' | 'manual_refresh',
+    precise = false
+  ) => {
+    const token = accessToken.trim();
+    if (!token) return;
+
+    const position = await Location.getCurrentPositionAsync({
+      accuracy: precise ? Location.Accuracy.Highest : Location.Accuracy.Balanced,
+    });
+
+    await backendRequest<BackendUserLocation>(
+      '/v1/me/location',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracyM: position.coords.accuracy,
+          capturedAt: new Date(position.timestamp).toISOString(),
+          source,
+        }),
+      },
+      token
+    );
+  };
+
+  const syncLocationSharingRuntime = async (enabled: boolean, options?: { immediate?: boolean }) => {
+    void enabled;
+    void options;
+  };
+
+  const checkPendingPrecisionLocationRefresh = async () => {
+    const token = accessToken.trim();
+    if (!token || !profile.locationSharingEnabled) return;
+    const refresh = await backendRequest<BackendLocationRefreshRequest>(
+      '/v1/me/location/refresh-request',
+      { method: 'GET' },
+      token
+    ).catch(() => null);
+    if (!refresh?.pending) return;
+    await runOneShotLocationUpdate('precision_refresh', true).catch(() => null);
+  };
+
+  const waitForFamilyRoomLocationUpdate = async (
+    roomId: string,
+    targetUserId: string,
+    requestedAtMs: number,
+    previousCapturedAt?: number | null
+  ): Promise<UserLocationCard | null> => {
+    const token = accessToken.trim();
+    if (!token || !roomId || !targetUserId) return null;
+    const deadline = Date.now() + LOCATION_VIEW_TIMEOUT_MS;
+    while (Date.now() <= deadline) {
+      const raw = await backendRequest<BackendFamilyRoomLocationList>(`/v1/rooms/${roomId}/locations`, { method: 'GET' }, token).catch(
+        (error) => {
+          logSessionTrace('location_refresh:poll_failed', {
+            roomId,
+            targetUserId,
+            message: errorMessage(error),
+          });
+          return null;
+        }
+      );
+      if (raw) {
+        const items = mapUserLocations(raw.items);
+        setFamilyRoomLocations(items);
+        const match = items.find((item) => item.userId === targetUserId) ?? null;
+        if (match) {
+          const isFreshByRequestTime = match.capturedAt >= requestedAtMs - LOCATION_VIEW_CAPTURE_GRACE_MS;
+          const isFreshByDelta = !!previousCapturedAt && match.capturedAt > previousCapturedAt;
+          const isFresh = isFreshByRequestTime || isFreshByDelta;
+          logSessionTrace('location_refresh:poll_match', {
+            roomId,
+            targetUserId,
+            requestedAtMs,
+            previousCapturedAt: previousCapturedAt ?? null,
+            matchCapturedAt: match.capturedAt,
+            matchSource: match.source,
+            isFreshByRequestTime,
+            isFreshByDelta,
+          });
+          if (isFresh) {
+            return match;
+          }
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, LOCATION_VIEW_POLL_MS));
+    }
+    logSessionTrace('location_refresh:poll_timeout', {
+      roomId,
+      targetUserId,
+      requestedAtMs,
+      previousCapturedAt: previousCapturedAt ?? null,
+    });
+    return null;
+  };
+
+  const refreshFamilyRoomLocations = async (roomId: string) => {
+    const token = accessToken.trim();
+    if (!token || !roomId) return;
+    setIsFamilyRoomLocationsLoading(true);
+    try {
+      const raw = await backendRequest<BackendFamilyRoomLocationList>(`/v1/rooms/${roomId}/locations`, { method: 'GET' }, token);
+      setFamilyRoomLocations(mapUserLocations(raw.items));
+    } catch {
+      setFamilyRoomLocations([]);
+    } finally {
+      setIsFamilyRoomLocationsLoading(false);
+    }
+  };
+
+  const requestFamilyRoomLocationPrecisionRefresh = async (roomId: string, targetUserId: string) => {
+    const token = accessToken.trim();
+    if (!token || !roomId || !targetUserId) return;
+    const actionKey = `location-view:${targetUserId}`;
+    setFamilyRoomLocationActionKey(actionKey);
+    try {
+      const previousCapturedAt = familyRoomLocations.find((item) => item.userId === targetUserId)?.capturedAt ?? null;
+      const refresh = await backendRequest<BackendLocationRefreshRequest>(
+        `/v1/rooms/${roomId}/locations/${targetUserId}/refresh`,
+        { method: 'POST' },
+        token
+      );
+      const requestedAtMs = parseTimestamp(refresh.requestedAt || new Date().toISOString());
+      const updated = await waitForFamilyRoomLocationUpdate(roomId, targetUserId, requestedAtMs, previousCapturedAt);
+      if (!updated) {
+        Alert.alert(
+          isKo ? '위치 업데이트에 실패했어요' : 'Location update failed',
+          isKo
+            ? '15초 안에 상대방 위치가 업데이트되지 않았어요. 상대방 앱이 열려 있는지 확인한 뒤 다시 시도해 주세요.'
+            : 'The other device did not update its location within 15 seconds. Check that the app is open and try again.'
+        );
+        return;
+      }
+      Alert.alert(
+        isKo ? '위치가 업데이트되었어요' : 'Location updated',
+        isKo ? '최신 위치가 저장되었어요. 아래 지도 열기로 확인할 수 있어요.' : 'The latest location has been saved. Use Open map below to view it.'
+      );
+      return;
+      Alert.alert(
+        isKo ? '위치가 업데이트되었어요' : 'Location updated',
+        isKo ? '업데이트된 위치를 지도에서 열어요.' : 'Open the updated location on the map.',
+        [
+          {
+            text: isKo ? '지도 보기' : 'Open map',
+            onPress: () => {
+              void openLocationMap(updated!.latitude, updated!.longitude);
+            },
+          },
+          { text: isKo ? '닫기' : 'Close', style: 'cancel' },
+        ]
+      );
+    } catch (err) {
+      Alert.alert(
+        isKo ? '위치 업데이트에 실패했어요' : 'Location update failed',
+        isKo
+          ? '상대방 위치를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.'
+          : 'Could not refresh the other device location. Please try again shortly.'
+      );
+    } finally {
+      setFamilyRoomLocationActionKey('');
     }
   };
 
@@ -2569,34 +3741,104 @@ function App() {
       }))
       .sort((a, b) => b.createdAt - a.createdAt);
   };
-  const mapFamilyRequests = (value: BackendFamilyUpgradeRequest[] | undefined): FamilyUpgradeRequestItem[] => {
+  const mapFamilyRoomMemberProfiles = (
+    value: BackendFamilyRoomMemberProfile[] | undefined
+  ): FamilyRoomMemberProfile[] => {
     if (!Array.isArray(value)) return [];
     return value
-      .filter((item) => !!item?.requestId && !!item?.peer?.userId && !!item?.peer?.name)
+      .filter((item) => !!item?.userId && !!item?.name)
       .map((item) => ({
-        requestId: String(item.requestId),
-        peerUserId: String(item.peer?.userId),
-        peerName: String(item.peer?.name),
-        peerAvatarUri: resolveBackendMediaUrl(String(item.peer?.avatarUri || '')),
-        relationshipType: (item.relationshipType || 'parent_child') as FamilyRelationshipType,
-        requesterLabel: (item.requesterLabel || 'guardian') as FamilyLabel,
-        targetLabel: (item.targetLabel || 'child') as FamilyLabel,
-        note: String(item.note || ''),
+        userId: String(item.userId),
+        name: String(item.name),
+        avatarUri: resolveBackendMediaUrl(String(item.avatarUri || '')),
+        alias: String(item.alias || ''),
+        locationSharingEnabled: !!item.locationSharingEnabled,
+      }));
+  };
+  const mapFamilyRoomRelationships = (
+    value: BackendFamilyRoomRelationship[] | undefined
+  ): FamilyRoomRelationship[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((item) => !!item?.id && !!item?.guardianUserId && !!item?.childUserId)
+      .map((item) => ({
+        id: String(item.id),
+        guardianUserId: String(item.guardianUserId),
+        guardianName: String(item.guardianName || ''),
+        childUserId: String(item.childUserId),
+        childName: String(item.childName || ''),
+        requestedByUserId: String(item.requestedByUserId || ''),
+        requestedByName: String(item.requestedByName || ''),
+        createdAt: parseTimestamp(item.createdAt),
+      }))
+      .sort((a, b) => a.createdAt - b.createdAt);
+  };
+  const mapUserLocations = (value: BackendUserLocation[] | undefined): UserLocationCard[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter(
+        (item) =>
+          !!item?.userId &&
+          !!item?.name &&
+          Number.isFinite(item.latitude) &&
+          Number.isFinite(item.longitude) &&
+          !!item?.capturedAt &&
+          !!item?.source
+      )
+      .map((item) => ({
+        userId: String(item.userId),
+        name: String(item.name),
+        avatarUri: resolveBackendMediaUrl(String(item.avatarUri || '')),
+        latitude: Number(item.latitude),
+        longitude: Number(item.longitude),
+        accuracyM: typeof item.accuracyM === 'number' ? item.accuracyM : null,
+        capturedAt: parseTimestamp(item.capturedAt),
+        source: item.source as 'heartbeat' | 'precision_refresh' | 'manual_refresh',
+      }))
+      .sort((a, b) => b.capturedAt - a.capturedAt);
+  };
+  const mapRoomMembers = (value: BackendRoomMember[] | undefined): RoomMember[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((item) => !!item?.userId && !!item?.name && (item.role === 'admin' || item.role === 'member'))
+      .map((item) => ({
+        userId: String(item.userId),
+        name: String(item.name),
+        avatarUri: resolveBackendMediaUrl(String(item.avatarUri || '')),
+        alias: String(item.alias || ''),
+        role: item.role as 'admin' | 'member',
+        isOwner: !!item.isOwner,
+      }));
+  };
+  const mapRoomInvitations = (value: BackendRoomInvitation[] | undefined): RoomInvitationItem[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter(
+        (item) =>
+          !!item?.id &&
+          !!item?.roomId &&
+          (item.roomType === 'group' || item.roomType === 'family') &&
+          !!item?.inviterUserId &&
+          !!item?.inviterName &&
+          !!item?.targetUserId &&
+          !!item?.targetName &&
+          !!item?.status
+      )
+      .map((item) => ({
+        id: String(item.id),
+        roomId: String(item.roomId),
+        roomType: item.roomType as RoomType,
+        roomTitle: String(item.roomTitle || ''),
+        inviterUserId: String(item.inviterUserId),
+        inviterName: String(item.inviterName),
+        inviterAvatarUri: resolveBackendMediaUrl(String(item.inviterAvatarUri || '')),
+        targetUserId: String(item.targetUserId),
+        targetName: String(item.targetName),
+        status: item.status as 'pending' | 'accepted' | 'rejected' | 'canceled' | 'expired',
         createdAt: parseTimestamp(item.createdAt),
       }))
       .sort((a, b) => b.createdAt - a.createdAt);
   };
-  const refreshFamilyUpgradeRequests = async (token: string, strict = false) => {
-    const raw = strict
-      ? await backendRequest<BackendFamilyUpgradeRequestList>('/v1/family/upgrade-requests', { method: 'GET' }, token)
-      : await backendRequest<BackendFamilyUpgradeRequestList>('/v1/family/upgrade-requests', { method: 'GET' }, token).catch(
-          () => null
-        );
-    if (!raw) return;
-    setFamilyRequestsIncoming(mapFamilyRequests(raw.incoming));
-    setFamilyRequestsOutgoing(mapFamilyRequests(raw.outgoing));
-  };
-
   const refreshFriendsAndRequests = async (token: string, options?: BackendSyncOptions) => {
     const strict = options?.strict ?? false;
     const [backFriendsRaw, requestsRaw] = strict
@@ -2646,6 +3888,16 @@ function App() {
       setFriendRequestsIncoming(mapFriendRequests(requestsRaw.incoming));
       setFriendRequestsOutgoing(mapFriendRequests(requestsRaw.outgoing));
     }
+  };
+  const refreshRoomInvitations = async (token: string, options?: BackendSyncOptions) => {
+    const strict = options?.strict ?? false;
+    const raw = strict
+      ? await backendRequest<BackendRoomInvitationList>('/v1/room-invitations', { method: 'GET' }, token)
+      : await backendRequest<BackendRoomInvitationList>('/v1/room-invitations', { method: 'GET' }, token).catch(() => null);
+    if (!raw) return null;
+    setRoomInvitationsIncoming(mapRoomInvitations(raw.incoming));
+    setRoomInvitationsOutgoing(mapRoomInvitations(raw.outgoing));
+    return raw;
   };
 
   const refreshBotsFromBackend = async (token: string) => {
@@ -2715,6 +3967,18 @@ function App() {
     return mappedItems;
   };
 
+  const scheduleActiveRoomMessagesRefresh = (token: string, roomId: string, delayMs = 160) => {
+    if (!token || !roomId) return;
+    if (activeRoomRefreshTimerRef.current) {
+      clearTimeout(activeRoomRefreshTimerRef.current);
+    }
+    activeRoomRefreshTimerRef.current = setTimeout(() => {
+      activeRoomRefreshTimerRef.current = null;
+      if (activeRoomRef.current !== roomId) return;
+      void syncRoomMessagesFromBackend(token, roomId).catch(() => null);
+    }, delayMs);
+  };
+
   const syncInitialFromBackend = async (
     token: string,
     fallbackUser?: BackendAuthUser
@@ -2744,6 +4008,7 @@ function App() {
       profile.email ||
       ''
     ).trim();
+    currentUserIdRef.current = nextUserId || MY_ID;
     setCurrentUserId(nextUserId || MY_ID);
     setProfile((prev) => ({
       ...prev,
@@ -2752,12 +4017,13 @@ function App() {
       email: (me?.email || fallbackUser?.email || tokenPayload.email || prev.email || '').trim(),
       avatarUri: resolveBackendMediaUrl(me?.avatarUri || fallbackUser?.avatarUri || prev.avatarUri || ''),
       localeTag: (me?.locale || prev.localeTag || appLocaleTag).trim() || appLocaleTag,
+      locationSharingEnabled: typeof me?.locationSharingEnabled === 'boolean' ? !!me.locationSharingEnabled : prev.locationSharingEnabled,
     }));
     setNameDraft(resolvedName);
 
-    await syncLocaleWithBackend(token, me?.locale);
+    void syncLocaleWithBackend(token, me?.locale).catch(() => null);
 
-    await Promise.all([
+    const [, , syncedRooms] = await Promise.all([
       refreshFriendsAndRequests(token, { strict: true }).catch((error) => {
         if (isSessionInvalidError(error)) {
           throw error;
@@ -2767,17 +4033,25 @@ function App() {
         });
       }),
       refreshBotsFromBackend(token).catch(() => null),
+      refreshRoomsFromBackend(token, nextUserId, { strict: true }).catch((error) => {
+        if (isSessionInvalidError(error)) {
+          throw error;
+        }
+        logSessionTrace('sync_initial:rooms_failed', {
+          message: errorMessage(error),
+        });
+        return null;
+      }),
+      refreshRoomInvitations(token, { strict: true }).catch((error) => {
+        if (isSessionInvalidError(error)) {
+          throw error;
+        }
+        logSessionTrace('sync_initial:room_invitations_failed', {
+          message: errorMessage(error),
+        });
+        return null;
+      }),
     ]);
-
-    const syncedRooms = await refreshRoomsFromBackend(token, nextUserId, { strict: true }).catch((error) => {
-      if (isSessionInvalidError(error)) {
-        throw error;
-      }
-      logSessionTrace('sync_initial:rooms_failed', {
-        message: errorMessage(error),
-      });
-      return null;
-    });
     logSessionTrace('sync_initial:done', {
       userId: nextUserId,
       friends: friends.length,
@@ -2820,9 +4094,6 @@ function App() {
           const message = (payload.data.message || {}) as BackendRoomMessage;
           if (roomId && message) {
             void applyRealtimeMessage(token, roomId, message);
-            if (activeRoomRef.current === roomId) {
-              void syncRoomMessagesFromBackend(token, roomId).catch(() => null);
-            }
           }
           return;
         }
@@ -2848,7 +4119,9 @@ function App() {
                 return message.id === messageId ? { ...message, delivery } : message;
               })
             );
-            void syncRoomMessagesFromBackend(token, roomId).catch(() => null);
+            if (delivery === 'read' && isGroupRoom && activeRoomRef.current === roomId) {
+              scheduleActiveRoomMessagesRefresh(token, roomId);
+            }
           }
           return;
         }
@@ -2880,9 +4153,18 @@ function App() {
             setActiveRoomId(null);
           }
           void refreshRoomsFromBackend(token);
+          void refreshRoomInvitations(token).catch(() => null);
+          if (roomId && roomMembersRoomId === roomId) {
+            void loadRoomMembers(token, roomId).catch(() => null);
+          }
           if (roomId && activeRoomRef.current === roomId) {
             void syncRoomMessagesFromBackend(token, roomId).catch(() => null);
           }
+          return;
+        }
+
+        if (payload.event === 'room.invitation.updated') {
+          void refreshRoomInvitations(token).catch(() => null);
           return;
         }
 
@@ -2892,9 +4174,20 @@ function App() {
           return;
         }
 
-        if (payload.event === 'family.updated') {
-          scheduleFriendTabRefresh(120);
-          void refreshRoomsFromBackend(token).catch(() => null);
+        if (payload.event === 'location.precision.requested') {
+          void (async () => {
+            const granted = await readLocationPermissionGranted().catch(() => false);
+            setLocationPermissionGranted(granted);
+            if (!granted) {
+              return;
+            }
+            const requestData = payload.data && typeof payload.data === 'object' ? payload.data : {};
+            await startManagedLocationCapture('precision_refresh', true, {
+              requestToken: String((requestData as { requestToken?: string }).requestToken || ''),
+              backendBaseUrl: String((requestData as { backendBaseUrl?: string }).backendBaseUrl || ''),
+            }).catch(() => null);
+          })();
+          return;
         }
       } catch {
         // Ignore malformed websocket payloads and keep the socket alive.
@@ -2929,24 +4222,74 @@ function App() {
       }
       socket.close();
     };
-  }, [accessToken, backendBaseUrl, backendState, wsRetryTick]);
+  }, [accessToken, backendBaseUrl, backendState, wsRetryTick, locationPermissionGranted, profile.locationSharingEnabled, roomMembersRoomId]);
 
   useEffect(() => {
     const token = accessToken.trim();
-    if (backendState !== 'ready' || !token) return;
+    if (backendState !== 'ready' || !token || appVisibility !== 'active') return;
     let cancelled = false;
 
     const run = async () => {
       const nativeToken = pushTokenRef.current || (await requestDevicePushToken());
-      if (!nativeToken || cancelled) return;
-      await registerPushTokenWithBackend(nativeToken, token).catch(() => null);
+      if (!nativeToken || cancelled) {
+        logSessionTrace('push_token:missing', {
+          backendBaseUrl,
+          hasCachedToken: Boolean(pushTokenRef.current),
+        });
+        return;
+      }
+      await registerPushTokenWithBackend(nativeToken, token).catch((error) => {
+        registeredPushTokenRef.current = '';
+        logSessionTrace('push_token:register_failed', {
+          backendBaseUrl,
+          message: error instanceof Error ? error.message : 'unknown',
+        });
+      });
     };
 
     void run();
     return () => {
       cancelled = true;
     };
-  }, [accessToken, backendState]);
+  }, [accessToken, backendBaseUrl, backendState, appVisibility]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      const granted = await readLocationPermissionGranted();
+      if (!cancelled) {
+        setLocationPermissionGranted(granted);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [appVisibility, showProfileModal]);
+
+  useEffect(() => {
+    const token = accessToken.trim();
+    if (backendState !== 'ready' || !token) return;
+    if (appVisibility !== 'active') return;
+    void stopLocationHeartbeat().catch(() => null);
+    void syncLocationPermissionState(false);
+  }, [accessToken, backendState, appVisibility, showProfileModal]);
+
+  useEffect(() => {
+    const hasSession = !!accessToken.trim();
+    void syncBackgroundLocationTasks(hasSession && locationPermissionGranted);
+  }, [accessToken, locationPermissionGranted]);
+
+  useEffect(() => {
+    const token = accessToken.trim();
+    if (backendState !== 'ready' || !token || !profile.locationSharingEnabled) return;
+    if (appVisibility !== 'active') return;
+    void checkPendingPrecisionLocationRefresh().catch(() => null);
+    const interval = setInterval(() => {
+      void checkPendingPrecisionLocationRefresh().catch(() => null);
+    }, LOCATION_PRECISION_REFRESH_POLL_MS);
+    return () => clearInterval(interval);
+  }, [accessToken, backendState, appVisibility, profile.locationSharingEnabled]);
 
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
@@ -2957,7 +4300,7 @@ function App() {
         return;
       }
       if (!token) return;
-      void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token)]).finally(() => {
+      void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token), refreshRoomInvitations(token)]).finally(() => {
         setTab('friends');
       });
     });
@@ -2971,7 +4314,7 @@ function App() {
         return;
       }
       if (!response || !token) return;
-      void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token)]).finally(() => {
+      void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token), refreshRoomInvitations(token)]).finally(() => {
         setTab('friends');
       });
     });
@@ -3092,10 +4435,21 @@ function App() {
     if (sessionRestoreStartedRef.current) return;
     sessionRestoreStartedRef.current = true;
     let cancelled = false;
+    let restoreUiShown = false;
 
     const run = async () => {
+      const finishRestoreUi = () => {
+        if (cancelled || restoreUiShown) return;
+        restoreUiShown = true;
+        setStage('app');
+        setIsSessionRestoring(false);
+      };
       try {
         const stored = await readSessionFromStorage();
+        const snapshot = await readAppSnapshotFromStorage();
+        if (snapshot) {
+          applyPersistedAppSnapshot(snapshot);
+        }
         logSessionTrace('restore:storage_read', {
           hasAccessToken: !!stored?.accessToken,
           hasRefreshToken: !!stored?.refreshToken,
@@ -3113,6 +4467,7 @@ function App() {
           });
           setSessionTokens(nextAccessToken, nextRefreshToken);
           setLoginErr('');
+          finishRestoreUi();
           try {
             await syncInitialFromBackend(nextAccessToken, user);
           } catch (error) {
@@ -3125,7 +4480,6 @@ function App() {
           }
           if (cancelled) return;
           logSessionTrace('restore:apply_session_done');
-          setStage('app');
         };
 
         try {
@@ -3171,9 +4525,7 @@ function App() {
             logSessionTrace('restore:proceed_without_refresh', {
               message: msg,
             });
-            if (!cancelled) {
-              setStage('app');
-            }
+            finishRestoreUi();
             return;
           }
 
@@ -3199,9 +4551,7 @@ function App() {
               return;
             }
             setSessionTokens(stored.accessToken, storedRefreshToken);
-            if (!cancelled) {
-              setStage('app');
-            }
+            finishRestoreUi();
             return;
           }
 
@@ -3243,9 +4593,7 @@ function App() {
               }
               return;
             }
-            if (!cancelled) {
-              setStage('app');
-            }
+            finishRestoreUi();
           }
         }
       } catch (error) {
@@ -3261,11 +4609,11 @@ function App() {
           return;
         }
         if (accessTokenRef.current.trim()) {
-          setStage('app');
+          finishRestoreUi();
         }
       } finally {
         logSessionTrace('restore:finished');
-        if (!cancelled) setIsSessionRestoring(false);
+        if (!cancelled && !restoreUiShown) setIsSessionRestoring(false);
       }
     };
 
@@ -3331,7 +4679,9 @@ function App() {
   };
 
   const setRoomMsgs = (rid: string, updater: (prev: Message[]) => Message[]) =>
-    setMessages((p) => ({ ...p, [rid]: updater(p[rid] ?? []) }));
+    setMessages((p) => ({ ...p, [rid]: updater(p[rid] ?? []).map(normalizeMessageOwnership) }));
+  const upsertRoomMessage = (rid: string, message: Message) =>
+    setRoomMsgs(rid, (prev) => mergeRoomMessages(prev, [message]));
 
   const setProfileCropSynced = (
     updater: (prev: ProfilePhotoCrop | null) => ProfilePhotoCrop | null
@@ -3351,7 +4701,47 @@ function App() {
   };
 
   const normalizeImageForCrop = async (uri: string) => {
-    return uri;
+    const sourceUri = uri.trim();
+    if (!sourceUri) return uri;
+    const dimensions = await new Promise<{ width: number; height: number } | null>((resolve) => {
+      Image.getSize(
+        sourceUri,
+        (width, height) => resolve({ width: Math.max(1, width), height: Math.max(1, height) }),
+        () => resolve(null)
+      );
+    });
+
+    const actions: ImageManipulator.Action[] = [];
+    if (dimensions) {
+      const maxEdge = Math.max(dimensions.width, dimensions.height);
+      if (maxEdge > PROFILE_PHOTO_MAX_SOURCE) {
+        if (dimensions.width >= dimensions.height) {
+          actions.push({
+            resize: {
+              width: PROFILE_PHOTO_MAX_SOURCE,
+              height: Math.max(1, Math.round((dimensions.height / dimensions.width) * PROFILE_PHOTO_MAX_SOURCE)),
+            },
+          });
+        } else {
+          actions.push({
+            resize: {
+              width: Math.max(1, Math.round((dimensions.width / dimensions.height) * PROFILE_PHOTO_MAX_SOURCE)),
+              height: PROFILE_PHOTO_MAX_SOURCE,
+            },
+          });
+        }
+      }
+    }
+
+    try {
+      const normalized = await ImageManipulator.manipulateAsync(sourceUri, actions, {
+        compress: 1,
+        format: ImageManipulator.SaveFormat.JPEG,
+      });
+      return normalized.uri || sourceUri;
+    } catch {
+      return sourceUri;
+    }
   };
 
   const beginPinch = (crop: ProfilePhotoCrop, touches: TouchPoint[]) => {
@@ -3394,7 +4784,7 @@ function App() {
       text,
       at: Date.now(),
     };
-    setRoomMsgs(rid, (prev) => [...prev, m]);
+    upsertRoomMessage(rid, m);
     touchRoom(rid, text, false);
   };
 
@@ -3404,15 +4794,8 @@ function App() {
 
     setMessages((prev) => {
       const existing = prev[roomId] ?? [];
-      const index = existing.findIndex((message) => message.id === mapped.id);
-      if (index >= 0) {
-        const next = [...existing];
-        next[index] = { ...next[index], ...mapped };
-        next.sort((a, b) => a.at - b.at);
-        return { ...prev, [roomId]: next };
-      }
-      inserted = true;
-      return { ...prev, [roomId]: [...existing, mapped].sort((a, b) => a.at - b.at) };
+      inserted = !existing.some((message) => message.id === mapped.id);
+      return { ...prev, [roomId]: mergeRoomMessages(existing, [mapped]) };
     });
 
     setRooms((prev) => {
@@ -3479,6 +4862,7 @@ function App() {
       type: 'direct',
       title: getFriend(fid)?.name ?? s.directRoomFallback,
       members: [currentUserId, fid],
+      ownerUserId: currentUserId,
       isGroup: false,
       favorite: false,
       muted: false,
@@ -3550,6 +4934,389 @@ function App() {
     setActiveRoomId(null);
   };
 
+  const displayFamilyStructureName = (userId: string, fallbackName?: string) => {
+    const profile = familyStructureProfileMap.get(userId);
+    const alias = profile?.alias.trim() || '';
+    if (alias) return alias;
+    if (profile?.name) return profile.name;
+    return fallbackName || '';
+  };
+  const getFamilyStructureRelationshipWithMember = (memberUserId: string) => {
+    const active =
+      familyStructureRelationships.find(
+        (relationship) =>
+          (relationship.guardianUserId === currentUserId && relationship.childUserId === memberUserId) ||
+          (relationship.guardianUserId === memberUserId && relationship.childUserId === currentUserId)
+      ) ?? null;
+    const pendingIncoming =
+      familyStructurePendingIncoming.find(
+        (relationship) =>
+          (relationship.guardianUserId === currentUserId && relationship.childUserId === memberUserId) ||
+          (relationship.guardianUserId === memberUserId && relationship.childUserId === currentUserId)
+      ) ?? null;
+    const pendingOutgoing =
+      familyStructurePendingOutgoing.find(
+        (relationship) =>
+          (relationship.guardianUserId === currentUserId && relationship.childUserId === memberUserId) ||
+          (relationship.guardianUserId === memberUserId && relationship.childUserId === currentUserId)
+      ) ?? null;
+    return { active, pendingIncoming, pendingOutgoing };
+  };
+  const getFamilyStructureRelationshipSummary = (memberUserId: string) => {
+    const { active, pendingIncoming, pendingOutgoing } = getFamilyStructureRelationshipWithMember(memberUserId);
+    if (active) {
+      return active.guardianUserId === currentUserId
+        ? isKo
+          ? '내 자녀로 연결됨'
+          : 'Connected as my child'
+        : isKo
+          ? '내 보호자로 연결됨'
+          : 'Connected as my guardian';
+    }
+    if (pendingIncoming) {
+      return isKo ? '수락 대기 중' : 'Waiting for your response';
+    }
+    if (pendingOutgoing) {
+      return isKo ? '상대 수락 대기 중' : 'Waiting for the other person';
+    }
+    return isKo ? '관계 없음' : 'No relationship yet';
+  };
+
+  const closeFamilyStructureModal = () => {
+    setFamilyStructureRoomId(null);
+    setFamilyStructureProfiles([]);
+    setFamilyStructureRelationships([]);
+    setFamilyStructurePendingIncoming([]);
+    setFamilyStructurePendingOutgoing([]);
+    setFamilyStructureAliasDrafts({});
+    setFamilyStructureTargetId('');
+    setFamilyStructureRequestAs('guardian');
+    setFamilyStructureSelectedMemberId('');
+    setIsFamilyStructureLoading(false);
+    setFamilyStructureActionKey('');
+    setFamilyRoomLocations([]);
+    setIsFamilyRoomLocationsLoading(false);
+    setFamilyRoomLocationActionKey('');
+  };
+
+  const loadFamilyStructure = async (token: string, roomId: string) => {
+    if (!token || !roomId) return;
+    setIsFamilyStructureLoading(true);
+    try {
+      const [profilesRaw, relationshipsRaw] = await Promise.all([
+        backendRequest<BackendFamilyRoomMemberProfileList>(`/v1/rooms/${roomId}/member-profiles`, { method: 'GET' }, token),
+        backendRequest<BackendFamilyRoomRelationshipList>(`/v1/rooms/${roomId}/relationships`, { method: 'GET' }, token),
+      ]);
+      const profiles = mapFamilyRoomMemberProfiles(profilesRaw.items);
+      setFamilyStructureProfiles(profiles);
+      setFamilyStructureAliasDrafts(
+        Object.fromEntries(profiles.map((profile) => [profile.userId, profile.alias]))
+      );
+      setFamilyStructureRelationships(mapFamilyRoomRelationships(relationshipsRaw.items));
+      setFamilyStructurePendingIncoming(mapFamilyRoomRelationships(relationshipsRaw.pendingIncoming));
+      setFamilyStructurePendingOutgoing(mapFamilyRoomRelationships(relationshipsRaw.pendingOutgoing));
+    } finally {
+      setIsFamilyStructureLoading(false);
+    }
+  };
+
+  const openFamilyStructureEditor = async (roomId: string) => {
+    const token = await requireAccessToken();
+    if (!token || !roomId) return;
+    setRoomMenuId(null);
+    setFamilyStructureRoomId(roomId);
+    await loadFamilyStructure(token, roomId).catch((err) => {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+      closeFamilyStructureModal();
+    });
+    await refreshFamilyRoomLocations(roomId).catch(() => null);
+  };
+
+  const saveFamilyStructureAlias = async (targetUserId: string) => {
+    const token = await requireAccessToken();
+    const roomId = familyStructureRoomId || '';
+    if (!token || !roomId || !targetUserId) return;
+    const actionKey = `alias:${targetUserId}`;
+    setFamilyStructureActionKey(actionKey);
+    const nextAlias = (familyStructureAliasDrafts[targetUserId] || '').trim();
+    try {
+      await backendRequest(
+        `/v1/rooms/${roomId}/member-profiles/${targetUserId}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ alias: nextAlias || null }),
+        },
+        token
+      );
+      setFamilyStructureProfiles((prev) =>
+        prev.map((profile) => (profile.userId === targetUserId ? { ...profile, alias: nextAlias } : profile))
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setFamilyStructureActionKey('');
+    }
+  };
+
+  const createFamilyGuardianLink = async (
+    targetUserIdOverride?: string,
+    requestAsOverride?: 'guardian' | 'child'
+  ) => {
+    const token = await requireAccessToken();
+    const roomId = familyStructureRoomId || '';
+    const targetUserId = targetUserIdOverride || familyStructureTargetId;
+    const requestAs = requestAsOverride || familyStructureRequestAs;
+    if (!token || !roomId || !targetUserId) return;
+    const actionKey = `link-create:${requestAs}:${targetUserId}`;
+    setFamilyStructureActionKey(actionKey);
+    try {
+      const created = await backendRequest<BackendFamilyRoomRelationship>(
+        `/v1/rooms/${roomId}/relationships`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            targetUserId,
+            as: requestAs,
+          }),
+        },
+        token
+      );
+      const mapped = mapFamilyRoomRelationships([created])[0];
+      if (mapped) {
+        setFamilyStructurePendingOutgoing((prev) =>
+          [...prev.filter((item) => item.id !== mapped.id), mapped].sort((a, b) => a.createdAt - b.createdAt)
+        );
+      }
+      setFamilyStructureTargetId('');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setFamilyStructureActionKey('');
+    }
+  };
+
+  const respondFamilyGuardianLink = async (relationshipId: string, decision: 'accept' | 'reject') => {
+    const token = await requireAccessToken();
+    const roomId = familyStructureRoomId || '';
+    if (!token || !roomId || !relationshipId) return;
+    const actionKey = `link-respond:${decision}:${relationshipId}`;
+    setFamilyStructureActionKey(actionKey);
+    try {
+      await backendRequest(
+        `/v1/rooms/${roomId}/relationships/${relationshipId}/respond`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ decision }),
+        },
+        token
+      );
+      const matched = familyStructurePendingIncoming.find((item) => item.id === relationshipId) ?? null;
+      setFamilyStructurePendingIncoming((prev) => prev.filter((item) => item.id !== relationshipId));
+      if (decision === 'accept' && matched) {
+        setFamilyStructureRelationships((prev) => [...prev, matched].sort((a, b) => a.createdAt - b.createdAt));
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setFamilyStructureActionKey('');
+    }
+  };
+
+  const deleteFamilyGuardianLink = async (relationshipId: string) => {
+    const token = await requireAccessToken();
+    const roomId = familyStructureRoomId || '';
+    if (!token || !roomId || !relationshipId) return;
+    const actionKey = `link-delete:${relationshipId}`;
+    setFamilyStructureActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/rooms/${roomId}/relationships/${relationshipId}`, { method: 'DELETE' }, token);
+      setFamilyStructureRelationships((prev) => prev.filter((item) => item.id !== relationshipId));
+      setFamilyStructurePendingIncoming((prev) => prev.filter((item) => item.id !== relationshipId));
+      setFamilyStructurePendingOutgoing((prev) => prev.filter((item) => item.id !== relationshipId));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setFamilyStructureActionKey('');
+    }
+  };
+
+  const closeRoomMembersModal = () => {
+    setRoomMembersRoomId(null);
+    setRoomMembers([]);
+    setRoomOwnerUserId('');
+    setRoomMembersMyRole('member');
+    setRoomMembersCanTransferOwnership(false);
+    setRoomMembersCanManageAdmins(false);
+    setRoomMembersCanKickMembers(false);
+    setIsRoomMembersLoading(false);
+    setRoomMembersActionKey('');
+  };
+
+  const loadRoomMembers = async (token: string, roomId: string) => {
+    if (!token || !roomId) return;
+    setIsRoomMembersLoading(true);
+    try {
+      const raw = await backendRequest<BackendRoomMemberList>(`/v1/rooms/${roomId}/members`, { method: 'GET' }, token);
+      setRoomMembers(mapRoomMembers(raw.items));
+      setRoomOwnerUserId(String(raw.ownerUserId || ''));
+      setRoomMembersMyRole(raw.myRole === 'admin' ? 'admin' : 'member');
+      setRoomMembersCanTransferOwnership(!!raw.canTransferOwnership);
+      setRoomMembersCanManageAdmins(!!raw.canManageAdmins);
+      setRoomMembersCanKickMembers(!!raw.canKickMembers);
+    } finally {
+      setIsRoomMembersLoading(false);
+    }
+  };
+
+  const openRoomMembersEditor = async (roomId: string) => {
+    const token = await requireAccessToken();
+    if (!token || !roomId) return;
+    setRoomMenuId(null);
+    setRoomMembersRoomId(roomId);
+    await Promise.all([loadRoomMembers(token, roomId), refreshRoomInvitations(token)]).catch((err) => {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+      closeRoomMembersModal();
+    });
+  };
+
+  const displayRoomMemberName = (member: RoomMember) => member.alias.trim() || member.name;
+
+  const transferRoomOwnership = async (targetUserId: string) => {
+    const token = await requireAccessToken();
+    const roomId = roomMembersRoomId || '';
+    if (!token || !roomId || !targetUserId) return;
+    const actionKey = `owner:${targetUserId}`;
+    setRoomMembersActionKey(actionKey);
+    try {
+      await backendRequest(
+        `/v1/rooms/${roomId}/transfer-ownership`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ targetUserId }),
+        },
+        token
+      );
+      await Promise.all([loadRoomMembers(token, roomId), refreshRoomsFromBackend(token)]).catch(() => null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setRoomMembersActionKey('');
+    }
+  };
+
+  const updateRoomMemberRole = async (targetUserId: string, role: 'admin' | 'member') => {
+    const token = await requireAccessToken();
+    const roomId = roomMembersRoomId || '';
+    if (!token || !roomId || !targetUserId) return;
+    const actionKey = `role:${targetUserId}:${role}`;
+    setRoomMembersActionKey(actionKey);
+    try {
+      await backendRequest(
+        `/v1/rooms/${roomId}/members/${targetUserId}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ role }),
+        },
+        token
+      );
+      await Promise.all([loadRoomMembers(token, roomId), refreshRoomsFromBackend(token)]).catch(() => null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setRoomMembersActionKey('');
+    }
+  };
+
+  const kickRoomMember = async (targetUserId: string) => {
+    const token = await requireAccessToken();
+    const roomId = roomMembersRoomId || '';
+    if (!token || !roomId || !targetUserId) return;
+    const actionKey = `kick:${targetUserId}`;
+    setRoomMembersActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/rooms/${roomId}/members/${targetUserId}`, { method: 'DELETE' }, token);
+      await Promise.all([loadRoomMembers(token, roomId), refreshRoomsFromBackend(token)]).catch(() => null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setRoomMembersActionKey('');
+    }
+  };
+
+  const sendRoomInvitation = async (targetUserId: string) => {
+    const token = await requireAccessToken();
+    const roomId = roomMembersRoomId || '';
+    if (!token || !roomId || !targetUserId) return;
+    const actionKey = `invite:${roomId}:${targetUserId}`;
+    setRoomInvitationActionKey(actionKey);
+    try {
+      await backendRequest(
+        `/v1/rooms/${roomId}/invitations`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ targetUserId }),
+        },
+        token
+      );
+      await refreshRoomInvitations(token).catch(() => null);
+      Alert.alert(isKo ? '초대를 보냈어요.' : 'Invitation sent.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setRoomInvitationActionKey('');
+    }
+  };
+
+  const acceptRoomInvitation = async (invitationId: string) => {
+    const token = await requireAccessToken();
+    if (!token || !invitationId) return;
+    const actionKey = `invite-accept:${invitationId}`;
+    setRoomInvitationActionKey(actionKey);
+    try {
+      const result = await backendRequest<{ roomId?: string }>(
+        `/v1/room-invitations/${invitationId}/accept`,
+        { method: 'POST' },
+        token
+      );
+      const nextRoomId = String(result.roomId || '');
+      await Promise.all([refreshRoomInvitations(token), refreshRoomsFromBackend(token)]).catch(() => null);
+      if (nextRoomId) {
+        openRoom(nextRoomId);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setRoomInvitationActionKey('');
+    }
+  };
+
+  const rejectRoomInvitation = async (invitationId: string) => {
+    const token = await requireAccessToken();
+    if (!token || !invitationId) return;
+    const actionKey = `invite-reject:${invitationId}`;
+    setRoomInvitationActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/room-invitations/${invitationId}/reject`, { method: 'POST' }, token);
+      await refreshRoomInvitations(token).catch(() => null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setRoomInvitationActionKey('');
+    }
+  };
+
   const refreshFriendTabData = async (options?: { silent?: boolean }) => {
     const token = accessToken.trim();
     if (!token) return;
@@ -3562,7 +5329,7 @@ function App() {
         setIsFriendSyncing(true);
       }
       try {
-        await Promise.all([refreshFriendsAndRequests(token), refreshFamilyUpgradeRequests(token)]);
+        await refreshFriendsAndRequests(token);
       } catch (err) {
         const msg = err instanceof Error ? err.message : '';
         if (!silent && msg) Alert.alert(msg);
@@ -3627,7 +5394,7 @@ function App() {
     setFamilyUpgradeTargetId('');
   };
   const sendFamilyUpgradeRequest = async () => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const targetUserId = familyUpgradeTargetId.trim();
     if (!targetUserId) return;
@@ -3653,7 +5420,7 @@ function App() {
     }
   };
   const acceptFamilyUpgradeRequest = async (requestId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `accept:${requestId}`;
     setFamilyActionKey(actionKey);
@@ -3671,7 +5438,7 @@ function App() {
     }
   };
   const rejectFamilyUpgradeRequest = async (requestId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `reject:${requestId}`;
     setFamilyActionKey(actionKey);
@@ -3687,7 +5454,7 @@ function App() {
     }
   };
   const cancelFamilyUpgradeRequest = async (requestId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `cancel:${requestId}`;
     setFamilyActionKey(actionKey);
@@ -3703,7 +5470,7 @@ function App() {
     }
   };
   const removeFamilyLink = async (relationshipId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `family-remove:${relationshipId}`;
     setFamilyActionKey(actionKey);
@@ -3718,7 +5485,7 @@ function App() {
     }
   };
   const removeFriendConnection = async (friendUserId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `friend-remove:${friendUserId}`;
     setFriendActionKey(actionKey);
@@ -3738,7 +5505,7 @@ function App() {
     setShowFriendAliasModal(true);
   };
   const removeFriendAlias = async (friendUserId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `alias:${friendUserId}`;
     setFriendActionKey(actionKey);
@@ -3762,7 +5529,7 @@ function App() {
     setFriendAliasDraft('');
   };
   const saveFriendAlias = async () => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const friendUserId = friendAliasTargetId.trim();
     if (!friendUserId) return;
@@ -3798,7 +5565,7 @@ function App() {
   };
 
   const searchFriendCandidates = async () => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const query = friendLookupQuery.trim();
     if (!query) {
@@ -3848,7 +5615,7 @@ function App() {
   };
 
   const sendFriendRequest = async (targetUserId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `send:${targetUserId}`;
     setFriendActionKey(actionKey);
@@ -3877,7 +5644,7 @@ function App() {
   };
 
   const acceptFriendRequest = async (requestId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `accept:${requestId}`;
     setFriendActionKey(actionKey);
@@ -3895,7 +5662,7 @@ function App() {
   };
 
   const rejectFriendRequest = async (requestId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `reject:${requestId}`;
     setFriendActionKey(actionKey);
@@ -3968,6 +5735,7 @@ function App() {
       type: createRoomType,
       title,
       members: [currentUserId, ...groupPick],
+      ownerUserId: currentUserId,
       isGroup: true,
       favorite: false,
       muted: false,
@@ -3977,7 +5745,7 @@ function App() {
     };
     setRooms((p) => [room, ...p]);
     setMessages((p) => ({ ...p, [rid]: [] }));
-    appendSystem(rid, roomMembers(room));
+    appendSystem(rid, roomMemberNames(room));
     setGroupNameDraft('');
     setGroupPick([]);
     setShowGroupModal(false);
@@ -4015,7 +5783,7 @@ function App() {
               token
             );
             const mappedText = mapBackendMessage(createdText);
-            setRoomMsgs(activeRoom.id, (prev) => [...prev, mappedText]);
+            upsertRoomMessage(activeRoom.id, mappedText);
             touchRoom(activeRoom.id, mappedText.text || '', false);
             textSent = true;
           }
@@ -4035,7 +5803,7 @@ function App() {
               token
             );
             const mappedMedia = mapBackendMessage(createdMedia);
-            setRoomMsgs(activeRoom.id, (prev) => [...prev, mappedMedia]);
+            upsertRoomMessage(activeRoom.id, mappedMedia);
             touchRoom(activeRoom.id, previewFromMessage(mappedMedia), false);
             mediaSent = true;
           }
@@ -4278,7 +6046,6 @@ function App() {
   const openImageCrop = async (uri: string, target: CropTarget) => {
     const sourceUri = await normalizeImageForCrop(uri);
     setCropTarget(target);
-    if (target === 'profile') setProfilePhotoDraft(sourceUri);
     Image.getSize(
       sourceUri,
       (imageWidth, imageHeight) => {
@@ -4366,12 +6133,14 @@ function App() {
     try {
       const r = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        allowsEditing: false,
+        allowsEditing: true,
+        aspect: [1, 1],
         legacy: Platform.OS === 'android',
         quality: 1,
       });
       if (r.canceled || !r.assets.length || !r.assets[0].uri) return;
-      await openImageCrop(r.assets[0].uri, 'profile');
+      const sourceUri = await normalizeImageForCrop(r.assets[0].uri);
+      setProfilePhotoDraft(sourceUri);
     } catch {
       Alert.alert(s.mediaPickFailed);
     }
@@ -4451,7 +6220,12 @@ function App() {
     }
   };
 
-  const persistProfile = async (nextProfile: { name: string; status: string; avatarUri: string }) => {
+  const persistProfile = async (nextProfile: {
+    name: string;
+    status: string;
+    avatarUri: string;
+    locationSharingEnabled?: boolean;
+  }) => {
     const token = accessToken.trim();
     if (!token) {
       setProfile((p) => ({ ...p, ...nextProfile }));
@@ -4471,6 +6245,11 @@ function App() {
       status: String(saved.status || nextProfile.status),
       email: String(saved.email || p.email),
       avatarUri: resolveBackendMediaUrl(String(saved.avatarUri || nextProfile.avatarUri)),
+      ...(typeof saved.locationSharingEnabled === 'boolean'
+        ? { locationSharingEnabled: !!saved.locationSharingEnabled }
+        : typeof nextProfile.locationSharingEnabled === 'boolean'
+          ? { locationSharingEnabled: nextProfile.locationSharingEnabled }
+          : {}),
     }));
     setNameDraft(String(saved.name || nextProfile.name));
     setStatusDraft(String(saved.status || nextProfile.status));
@@ -4492,6 +6271,7 @@ function App() {
         name: n,
         status: statusDraft.trim(),
         avatarUri: nextAvatarUri,
+        locationSharingEnabled: profile.locationSharingEnabled,
       };
       await persistProfile(nextProfile);
       setShowProfileModal(false);
@@ -4501,16 +6281,137 @@ function App() {
     }
   };
 
+  const saveLocationSharingPreference = async (token: string, nextEnabled: boolean) => {
+    const saved = await backendRequest<BackendProfile>(
+      '/v1/me',
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ locationSharingEnabled: nextEnabled }),
+      },
+      token
+    );
+    const resolved = typeof saved.locationSharingEnabled === 'boolean' ? !!saved.locationSharingEnabled : nextEnabled;
+    setProfile((prev) => ({
+      ...prev,
+      locationSharingEnabled: resolved,
+    }));
+    return resolved;
+  };
+
+  const syncLocationPermissionState = async (request = false) => {
+    if (isUpdatingLocationSharing) return;
+    setIsUpdatingLocationSharing(true);
+    try {
+      const granted = request
+        ? await requestLocationPermissionsForSharing(true)
+        : await readLocationPermissionGranted();
+      setLocationPermissionGranted(granted);
+      const token = accessToken.trim();
+      if (!token || granted === profile.locationSharingEnabled) {
+        return;
+      }
+      await saveLocationSharingPreference(token, granted);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setIsUpdatingLocationSharing(false);
+    }
+  };
+
+  const disableLocationSharing = async () => {
+    const token = await requireAccessToken();
+    if (!token || isUpdatingLocationSharing) return;
+    setIsUpdatingLocationSharing(true);
+    try {
+      await saveLocationSharingPreference(token, false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setIsUpdatingLocationSharing(false);
+    }
+  };
+
+  const openLocationPermissionMenu = () => {
+    if (!locationPermissionGranted) {
+      Alert.alert(
+        isKo ? '위치 정보 권한 부여가 필요해요' : 'Location permission is required',
+        isKo
+          ? '위치 확인을 사용하려면 어플 권한에서 위치 정보를 허용해 주세요.'
+          : 'Allow location access in the app permissions screen to use location checks.',
+        [
+          { text: isKo ? '취소' : 'Cancel', style: 'cancel' },
+          {
+            text: isKo ? '권한 보기' : 'Open permissions',
+            onPress: () => {
+              void Linking.openSettings().catch(() => null);
+            },
+          },
+        ]
+      );
+      return;
+    }
+    void Linking.openSettings().catch(() => null);
+  };
+
+  const syncBackgroundLocationTasks = async (enabled: boolean) => {
+    if (enabled) {
+      await Notifications.registerTaskAsync(LOCATION_BACKGROUND_NOTIFICATION_TASK).catch(() => null);
+      await BackgroundTask.registerTaskAsync(LOCATION_BACKGROUND_SNAPSHOT_TASK, {
+        minimumInterval: LOCATION_BACKGROUND_MIN_INTERVAL_MINUTES,
+      }).catch(() => null);
+      return;
+    }
+    await Notifications.unregisterTaskAsync(LOCATION_BACKGROUND_NOTIFICATION_TASK).catch(() => null);
+    await BackgroundTask.unregisterTaskAsync(LOCATION_BACKGROUND_SNAPSHOT_TASK).catch(() => null);
+  };
+
   const openExternalUrl = async (url: string) => {
     try {
-      const canOpen = await Linking.canOpenURL(url);
-      if (!canOpen) {
-        Alert.alert(s.linkUnavailableTitle, s.linkUnavailableBody);
-        return;
+      if (/^https?:\/\//i.test(url)) {
+        try {
+          await WebBrowser.openBrowserAsync(url);
+          return;
+        } catch {
+          // Fall through to Linking fallback.
+        }
       }
       await Linking.openURL(url);
     } catch {
       Alert.alert(s.linkFailedTitle, s.linkFailedBody);
+    }
+  };
+
+  const openLocationMap = async (latitude: number, longitude: number) => {
+    if (Platform.OS === 'android') {
+      try {
+        await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+          data: `geo:${latitude},${longitude}?q=${latitude},${longitude}`,
+        });
+        return;
+      } catch {
+        // Fall through to other handlers.
+      }
+      try {
+        await Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`);
+        return;
+      } catch {
+        Alert.alert(s.linkFailedTitle, s.linkFailedBody);
+        return;
+      }
+    }
+
+    try {
+      await Linking.openURL(`http://maps.apple.com/?ll=${latitude},${longitude}`);
+      return;
+    } catch {
+      try {
+        await WebBrowser.openBrowserAsync(`https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`);
+        return;
+      } catch {
+        Alert.alert(s.linkFailedTitle, s.linkFailedBody);
+      }
     }
   };
 
@@ -4719,7 +6620,7 @@ function App() {
       <Text style={styles.sub}>{s.profilePhoto}</Text>
       <View style={styles.profilePhotoRow}>
         {profilePhotoDraft ? (
-          <Image source={{ uri: profilePhotoDraft }} style={styles.profilePhotoPreview} />
+          <Image source={{ uri: profilePhotoDraft }} style={styles.profilePhotoPreview} resizeMode="cover" />
         ) : (
           <View style={styles.profilePhotoPreviewFallback}>
             <Ionicons name="person" size={24} color={FOREST.text} />
@@ -4920,7 +6821,7 @@ function App() {
     setShowRoomTitleModal(false);
   };
   const toggleTrusted = async (fid: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const friend = friends.find((item) => item.id === fid);
     if (!friend) return;
@@ -4968,6 +6869,27 @@ function App() {
     setRoomMenuId(null);
   };
 
+  const leaveRoom = async (rid: string) => {
+    const token = accessToken.trim();
+    if (token) {
+      try {
+        await backendRequest(`/v1/rooms/${rid}/leave`, { method: 'POST' }, token);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+        return;
+      }
+    }
+    setRooms((p) => p.filter((r) => r.id !== rid));
+    setMessages((p) => {
+      const next = { ...p };
+      delete next[rid];
+      return next;
+    });
+    if (activeRoomRef.current === rid) setActiveRoomId(null);
+    setRoomMenuId(null);
+  };
+
   const reportRoom = (rid: string) => {
     appendSystem(rid, s.reported);
     setRoomMenuId(null);
@@ -4975,6 +6897,7 @@ function App() {
 
   const resetForLogout = () => {
     setSessionTokens('', '');
+    void clearAppSnapshotInStorage();
     if (friendTabRefreshTimerRef.current) {
       clearTimeout(friendTabRefreshTimerRef.current);
       friendTabRefreshTimerRef.current = null;
@@ -4983,11 +6906,12 @@ function App() {
     roomReadCutoffRef.current = {};
     pushTokenRef.current = '';
     registeredPushTokenRef.current = '';
+    currentUserIdRef.current = MY_ID;
     setCurrentUserId(MY_ID);
     setStage('login');
     setTab('chats');
     setActiveRoomId(null);
-    setProfile({ name: '', status: '', email: '', avatarUri: '', localeTag: appLocaleTag });
+    setProfile({ name: '', status: '', email: '', avatarUri: '', localeTag: appLocaleTag, locationSharingEnabled: false });
     setNameDraft('');
     setStatusDraft('');
     setProfilePhotoDraft('');
@@ -5007,6 +6931,9 @@ function App() {
     setFamilyRequestsOutgoing([]);
     setFriendActionKey('');
     setFamilyActionKey('');
+    setRoomInvitationsIncoming([]);
+    setRoomInvitationsOutgoing([]);
+    setRoomInvitationActionKey('');
     setIsFriendSyncing(false);
     setInput('');
     setDraftMedia(null);
@@ -5025,6 +6952,38 @@ function App() {
     setRoomMenuId(null);
     setLoginErr('');
   };
+
+  useEffect(() => {
+    const originalAlert = Alert.alert.bind(Alert);
+    const wrappedAlert: typeof Alert.alert = ((title: string, message?: string, buttons?: any, options?: any) => {
+      const combined = `${String(title || '')} ${String(message || '')}`.trim();
+      if (isSessionInvalidMessage(combined)) {
+        logSessionTrace('alert:session_invalid_suppressed', {
+          message: combined,
+        });
+        if (!sessionInvalidRecoveryInFlightRef.current) {
+          sessionInvalidRecoveryInFlightRef.current = true;
+          void (async () => {
+            try {
+              setSessionTokens('', '');
+              await clearSessionInStorage();
+            } finally {
+              setIsSessionRestoring(false);
+              resetForLogout();
+              sessionInvalidRecoveryInFlightRef.current = false;
+            }
+          })();
+        }
+        return;
+      }
+      return originalAlert(title, message, buttons, options);
+    }) as typeof Alert.alert;
+
+    Alert.alert = wrappedAlert;
+    return () => {
+      Alert.alert = originalAlert as typeof Alert.alert;
+    };
+  }, []);
 
   const switchBackendServer = async (nextUrl: string) => {
     const normalized = normalizeBackendBaseUrl(nextUrl);
@@ -5100,6 +7059,8 @@ function App() {
 
   const kbBehavior = Platform.OS === 'ios' ? 'padding' : 'height';
   const sheetBottomInset = Math.max(insets.bottom, 12);
+  const sheetKeyboardPadding = sheetBottomInset + (Platform.OS === 'android' ? keyboardInset : 0);
+  const sheetKeyboardPaddingRoomy = sheetKeyboardPadding + 12;
   const ForestBackdrop = () => (
     <>
       <View pointerEvents="none" style={styles.bgOrbTop} />
@@ -5126,6 +7087,30 @@ function App() {
       ))}
     </>
   );
+
+  if (isSessionRestoring) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar style="light" />
+        <LinearGradient colors={[FOREST.gradientTop, FOREST.gradientMid, FOREST.gradientBottom]} style={styles.fill}>
+          <ForestBackdrop />
+          <View style={styles.centerCard}>
+            <Pressable onPress={registerHiddenServerMenuTap}>
+              <Text style={styles.brand}>{s.app}</Text>
+            </Pressable>
+            <Text style={styles.h1}>{s.loginSessionRestoring}</Text>
+            <Text style={styles.sub}>
+              {backendState === 'checking'
+                ? s.loginServerChecking
+                : backendState === 'ready'
+                  ? s.loginServerReady
+                  : backendStateMsg || s.loginServerError}
+            </Text>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
 
   if (stage === 'login') {
     return (
@@ -5299,6 +7284,8 @@ function App() {
                   ) : (
                     activeMsgs.map((m, index) => {
                       const showDayChip = index === 0 || dayKey(activeMsgs[index - 1].at) !== dayKey(m.at);
+                      const isMine = m.mine || (!!m.senderId && m.senderId === currentUserId);
+                      const avatarUri = isMine ? '' : messageAvatarUri(m);
                       return (
                         <Fragment key={m.id}>
                           {showDayChip ? (
@@ -5309,18 +7296,18 @@ function App() {
                           <View
                             style={[
                               styles.bubbleRow,
-                              m.mine ? styles.mineRow : styles.otherRow,
-                              !m.mine && m.kind !== 'system' ? styles.otherRowWithAvatar : null,
+                              isMine ? styles.mineRow : styles.otherRow,
+                              !isMine && m.kind !== 'system' ? styles.otherRowWithAvatar : null,
                             ]}
                           >
-                            {!m.mine && m.kind !== 'system' ? (
+                            {!isMine && m.kind !== 'system' ? (
                               <Pressable
                                 style={styles.messageAvatarDock}
-                                disabled={!messageAvatarUri(m)}
-                                onPress={() => openAvatarViewer(messageAvatarUri(m), m.senderName)}
+                                disabled={!avatarUri}
+                                onPress={() => openAvatarViewer(avatarUri, m.senderName)}
                               >
-                                {messageAvatarUri(m) ? (
-                                  <Image source={{ uri: messageAvatarUri(m) }} style={styles.messageAvatar} />
+                                {avatarUri ? (
+                                  <Image source={{ uri: avatarUri }} style={styles.messageAvatar} />
                                 ) : (
                                   <View style={styles.messageAvatarFallback}>
                                     <Text style={styles.messageAvatarText}>
@@ -5330,11 +7317,11 @@ function App() {
                                 )}
                               </Pressable>
                             ) : null}
-                            {!m.mine && m.kind !== 'system' ? (
+                            {!isMine && m.kind !== 'system' ? (
                               <Text style={styles.roomSender}>{m.senderName}</Text>
                             ) : null}
-                        <View style={[styles.bubble, m.mine ? styles.mineBubble : styles.otherBubble]}>
-                          {m.kind === 'text' ? renderMessageText(m.text || '', m.mine) : null}
+                        <View style={[styles.bubble, isMine ? styles.mineBubble : styles.otherBubble]}>
+                          {m.kind === 'text' ? renderMessageText(m.text || '', isMine) : null}
                           {m.kind === 'image' && m.uri ? (
                             <Pressable onPress={() => setMediaViewer({ kind: 'image', uri: m.uri || '' })}>
                               <Image source={{ uri: m.uri }} style={styles.media} />
@@ -5350,7 +7337,7 @@ function App() {
                           ) : null}
                           {m.kind === 'system' ? <Text style={styles.system}>{renderSystemText(m.text || '')}</Text> : null}
                           <View style={styles.metaRow}>
-                            {m.mine ? (
+                            {isMine ? (
                               <View style={styles.receiptWrap}>
                                 {m.delivery === 'read' ||
                                 m.unreadCount === 0 ||
@@ -5361,14 +7348,14 @@ function App() {
                                 ) : null}
                               </View>
                             ) : null}
-                            <Text style={[styles.meta, m.mine && styles.metaMine]}>
+                            <Text style={[styles.meta, isMine && styles.metaMine]}>
                               {tLabel(m.at)}
-                              {m.mine && m.delivery
+                              {isMine && m.delivery
                                 ? ` · ${m.delivery === 'sending' ? s.sending : m.delivery === 'sent' ? s.sent : s.read}`
                                 : ''}
                             </Text>
                           </View>
-                          {m.mine && activeRoom.isGroup && m.readByNames?.length ? (
+                          {isMine && activeRoom.isGroup && m.readByNames?.length ? (
                             <Text style={styles.readersText} numberOfLines={1}>
                               {`${isKo ? '읽음' : 'Read'} ${m.readByNames.slice(0, 3).join(', ')}${
                                 m.readByNames.length > 3 ? ` +${m.readByNames.length - 3}` : ''
@@ -5538,6 +7525,49 @@ function App() {
                           </>
                         ) : (
                           <>
+                            {roomInvitationsIncoming.length > 0 ? (
+                              <>
+                                <Text style={styles.sectionTitle}>{isKo ? '받은 방 초대' : 'Room invites'}</Text>
+                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
+                                  {roomInvitationsIncoming.map((invitation) => (
+                                    <View key={invitation.id} style={styles.requestCard}>
+                                      <Text style={styles.itemTitle}>
+                                        {invitation.roomTitle ||
+                                          (invitation.roomType === 'family'
+                                            ? isKo
+                                              ? '가족방'
+                                              : 'Family room'
+                                            : isKo
+                                              ? '그룹방'
+                                              : 'Group room')}
+                                      </Text>
+                                      <Text style={styles.sub}>
+                                        {isKo
+                                          ? `${invitation.inviterName}님이 초대했어요`
+                                          : `Invited by ${invitation.inviterName}`}
+                                      </Text>
+                                      <Text style={styles.sub}>{new Date(invitation.createdAt).toLocaleDateString()}</Text>
+                                      <View style={styles.row}>
+                                        <Pressable
+                                          style={[styles.requestBtn, !!roomInvitationActionKey && styles.off]}
+                                          disabled={!!roomInvitationActionKey}
+                                          onPress={() => void acceptRoomInvitation(invitation.id)}
+                                        >
+                                          <Text style={styles.requestBtnText}>{isKo ? '수락' : 'Accept'}</Text>
+                                        </Pressable>
+                                        <Pressable
+                                          style={[styles.requestBtn, !!roomInvitationActionKey && styles.off]}
+                                          disabled={!!roomInvitationActionKey}
+                                          onPress={() => void rejectRoomInvitation(invitation.id)}
+                                        >
+                                          <Text style={styles.requestBtnText}>{isKo ? '거절' : 'Reject'}</Text>
+                                        </Pressable>
+                                      </View>
+                                    </View>
+                                  ))}
+                                </ScrollView>
+                              </>
+                            ) : null}
                             {favoriteGroupRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '즐겨찾기' : 'Favorites'}</Text> : null}
                             {favoriteGroupRooms.map(renderRoomRow)}
                             {favoriteFamilyRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '가족방 즐겨찾기' : 'Favorite Family Rooms'}</Text> : null}
@@ -5556,7 +7586,7 @@ function App() {
                 {tab === 'friends' ? (
                   <ScrollView contentContainerStyle={styles.list}>
                     {isFriendSyncing ? <Text style={styles.sub}>{s.friendLoading}</Text> : null}
-                    {familyRequestsIncoming.length > 0 ? (
+                    {false ? (
                       <>
                         <Text style={styles.sectionTitle}>{isKo ? '가족 요청' : 'Family Requests'}</Text>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
@@ -5587,7 +7617,7 @@ function App() {
                         </ScrollView>
                       </>
                     ) : null}
-                    {familyRequestsOutgoing.length > 0 ? (
+                    {false ? (
                       <>
                         <Text style={styles.sectionTitle}>{isKo ? '보낸 가족 요청' : 'Sent Family Requests'}</Text>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
@@ -5604,6 +7634,49 @@ function App() {
                               >
                                 <Text style={styles.requestBtnText}>{isKo ? '요청 취소' : 'Cancel Request'}</Text>
                               </Pressable>
+                            </View>
+                          ))}
+                        </ScrollView>
+                      </>
+                    ) : null}
+                    {roomInvitationsIncoming.length > 0 ? (
+                      <>
+                        <Text style={styles.sectionTitle}>{isKo ? '받은 방 초대' : 'Room invites'}</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
+                          {roomInvitationsIncoming.map((invitation) => (
+                            <View key={`friend-invite-${invitation.id}`} style={styles.requestCard}>
+                              <Text style={styles.itemTitle}>
+                                {invitation.roomTitle ||
+                                  (invitation.roomType === 'family'
+                                    ? isKo
+                                      ? '가족방'
+                                      : 'Family room'
+                                    : isKo
+                                      ? '그룹방'
+                                      : 'Group room')}
+                              </Text>
+                              <Text style={styles.sub}>
+                                {isKo
+                                  ? `${invitation.inviterName}님이 초대했어요`
+                                  : `Invited by ${invitation.inviterName}`}
+                              </Text>
+                              <Text style={styles.sub}>{new Date(invitation.createdAt).toLocaleDateString()}</Text>
+                              <View style={styles.row}>
+                                <Pressable
+                                  style={[styles.requestBtn, !!roomInvitationActionKey && styles.off]}
+                                  disabled={!!roomInvitationActionKey}
+                                  onPress={() => void acceptRoomInvitation(invitation.id)}
+                                >
+                                  <Text style={styles.requestBtnText}>{isKo ? '수락' : 'Accept'}</Text>
+                                </Pressable>
+                                <Pressable
+                                  style={[styles.requestBtn, !!roomInvitationActionKey && styles.off]}
+                                  disabled={!!roomInvitationActionKey}
+                                  onPress={() => void rejectRoomInvitation(invitation.id)}
+                                >
+                                  <Text style={styles.requestBtnText}>{isKo ? '거절' : 'Reject'}</Text>
+                                </Pressable>
+                              </View>
                             </View>
                           ))}
                         </ScrollView>
@@ -5663,7 +7736,7 @@ function App() {
                           <Text style={styles.smallBtnText}>{s.addFriend}</Text>
                         </Pressable>
                       </View>
-                    ) : friendsMode === 'family' ? (
+                    ) : false ? (
                       familyFriends.length === 0 ? (
                         <View style={[styles.empty, styles.emptyCove]}>
                           <Text style={styles.h1}>{isKo ? '가족이 아직 없어요' : 'No Family Links Yet'}</Text>
@@ -5702,7 +7775,7 @@ function App() {
                     <Pressable style={styles.profileCabinCard} onLongPress={openServerMenu} delayLongPress={900}>
                       <View style={styles.profileHero}>
                         {profile.avatarUri ? (
-                          <Image source={{ uri: profile.avatarUri }} style={styles.profileAvatar} />
+                          <Image source={{ uri: profile.avatarUri }} style={styles.profileAvatar} resizeMode="cover" />
                         ) : (
                           <View style={styles.profileAvatarFallback}>
                             <Text style={styles.profileAvatarText}>
@@ -5788,6 +7861,11 @@ function App() {
                   <Ionicons name="people" size={18} color={tab === 'friends' ? FOREST.text : FOREST.textMuted} />
                   <Text style={styles.tabText}>{friendsTabLabel}</Text>
                   <Text style={styles.tabHint}>{friendsTabHint}</Text>
+                  {knockCount > 0 ? (
+                    <View style={styles.tabBadge}>
+                      <Text style={styles.badgeText}>{knockCount > 99 ? '99+' : knockCount}</Text>
+                    </View>
+                  ) : null}
                 </Pressable>
                 <Pressable style={[styles.tab, tab === 'chats' && styles.tabOn]} onPress={handleChatsTabPress}>
                   <Ionicons name="chatbubbles" size={18} color={tab === 'chats' ? FOREST.text : FOREST.textMuted} />
@@ -5814,9 +7892,9 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={() => setShowFriendModal(false)} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
-              behavior="padding"
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPadding }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
               <ScrollView
                 contentContainerStyle={styles.sheetScrollContent}
@@ -5924,9 +8002,9 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={closeFamilyPickerModal} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset + 12 }]}
-              behavior="padding"
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPaddingRoomy }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
               <ScrollView
                 contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
@@ -5995,9 +8073,9 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={closeFamilyUpgradeModal} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset + 12 }]}
-              behavior="padding"
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPaddingRoomy }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
               <ScrollView
                 contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
@@ -6060,9 +8138,9 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={closeFriendAliasModal} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset + 12 }]}
-              behavior="padding"
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPaddingRoomy }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
               <ScrollView
                 contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
@@ -6115,9 +8193,9 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={closeFriendActionsModal} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset + 12 }]}
-              behavior="padding"
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPaddingRoomy }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
               <ScrollView
                 contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
@@ -6161,7 +8239,7 @@ function App() {
                       <Text style={styles.itemTitle}>{isKo ? '닉네임 삭제' : 'Remove Nickname'}</Text>
                     </Pressable>
                   ) : null}
-                  {friendActionsTarget?.family?.isFamily && friendActionsTarget.family.relationshipId ? (
+                  {false ? (
                     <Pressable
                       style={styles.item}
                       onPress={() => {
@@ -6207,85 +8285,91 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={() => setShowGroupModal(false)} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPadding }]}
               behavior={kbBehavior}
             >
-              <View style={styles.sheet}>
-                <Text style={styles.h1}>{s.createRoomTitle}</Text>
-                <View style={{ gap: 10 }}>
-                  <Pressable
-                    style={[
-                      styles.item,
-                      styles.familyOptionItem,
-                      createRoomType === 'group' && styles.familyOptionItemSelected,
-                    ]}
-                    onPress={() => setCreateRoomType('group')}
-                  >
-                    <View style={styles.familyOptionCopy}>
-                      <Text style={styles.itemTitle}>{s.createRoomGroupLabel}</Text>
-                      <Text style={styles.sub}>{s.createRoomGroupBody}</Text>
-                    </View>
-                    <Ionicons
-                      name={createRoomType === 'group' ? 'checkmark-circle' : 'ellipse-outline'}
-                      size={18}
-                      color={FOREST.text}
-                    />
-                  </Pressable>
-                  <Pressable
-                    style={[
-                      styles.item,
-                      styles.familyOptionItem,
-                      createRoomType === 'family' && styles.familyOptionItemSelected,
-                    ]}
-                    onPress={() => setCreateRoomType('family')}
-                  >
-                    <View style={styles.familyOptionCopy}>
-                      <Text style={styles.itemTitle}>{s.createRoomFamilyLabel}</Text>
-                      <Text style={styles.sub}>{s.createRoomFamilyBody}</Text>
-                    </View>
-                    <Ionicons
-                      name={createRoomType === 'family' ? 'checkmark-circle' : 'ellipse-outline'}
-                      size={18}
-                      color={FOREST.text}
-                    />
-                  </Pressable>
-                </View>
-                <TextInput
-                  style={styles.field}
-                  placeholder={createRoomType === 'family' ? s.createRoomFamilyName : s.groupName}
-                  placeholderTextColor={FOREST.placeholder}
-                  value={groupNameDraft}
-                  onChangeText={setGroupNameDraft}
-                />
-                <Text style={styles.sub}>{createRoomType === 'family' ? s.createRoomFamilyHint : s.groupHint}</Text>
-                <ScrollView style={{ maxHeight: 180 }}>
-                  {friends.map((f) => (
-                    <Pressable key={f.id} style={styles.item} onPress={() => toggleGroupPick(f.id)}>
-                      <Text style={styles.itemTitle}>{f.name}</Text>
-                      <Ionicons name={groupPick.includes(f.id) ? 'checkmark-circle' : 'ellipse-outline'} size={18} color={FOREST.text} />
+              <ScrollView
+                contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheet}>
+                  <Text style={styles.h1}>{s.createRoomTitle}</Text>
+                  <View style={{ gap: 10 }}>
+                    <Pressable
+                      style={[
+                        styles.item,
+                        styles.familyOptionItem,
+                        createRoomType === 'group' && styles.familyOptionItemSelected,
+                      ]}
+                      onPress={() => setCreateRoomType('group')}
+                    >
+                      <View style={styles.familyOptionCopy}>
+                        <Text style={styles.itemTitle}>{s.createRoomGroupLabel}</Text>
+                        <Text style={styles.sub}>{s.createRoomGroupBody}</Text>
+                      </View>
+                      <Ionicons
+                        name={createRoomType === 'group' ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={18}
+                        color={FOREST.text}
+                      />
                     </Pressable>
-                  ))}
-                </ScrollView>
-                <View style={styles.row}>
-                  <Pressable style={styles.smallBtn} onPress={() => setShowGroupModal(false)}>
-                    <Text style={styles.smallBtnText}>{s.cancel}</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[
-                      styles.smallBtn,
-                      groupPick.length < (createRoomType === 'family' ? 1 : 2) && styles.off,
-                    ]}
-                    disabled={groupPick.length < (createRoomType === 'family' ? 1 : 2)}
-                    onPress={() => {
-                      void createSharedRoom();
-                    }}
-                  >
-                    <Text style={styles.smallBtnText}>
-                      {createRoomType === 'family' ? s.createFamilyRoomAction : s.createRoom}
-                    </Text>
-                  </Pressable>
+                    <Pressable
+                      style={[
+                        styles.item,
+                        styles.familyOptionItem,
+                        createRoomType === 'family' && styles.familyOptionItemSelected,
+                      ]}
+                      onPress={() => setCreateRoomType('family')}
+                    >
+                      <View style={styles.familyOptionCopy}>
+                        <Text style={styles.itemTitle}>{s.createRoomFamilyLabel}</Text>
+                        <Text style={styles.sub}>{s.createRoomFamilyBody}</Text>
+                      </View>
+                      <Ionicons
+                        name={createRoomType === 'family' ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={18}
+                        color={FOREST.text}
+                      />
+                    </Pressable>
+                  </View>
+                  <TextInput
+                    style={styles.field}
+                    placeholder={createRoomType === 'family' ? s.createRoomFamilyName : s.groupName}
+                    placeholderTextColor={FOREST.placeholder}
+                    value={groupNameDraft}
+                    onChangeText={setGroupNameDraft}
+                  />
+                  <Text style={styles.sub}>{createRoomType === 'family' ? s.createRoomFamilyHint : s.groupHint}</Text>
+                  <ScrollView style={{ maxHeight: 180 }} keyboardShouldPersistTaps="handled">
+                    {friends.map((f) => (
+                      <Pressable key={f.id} style={styles.item} onPress={() => toggleGroupPick(f.id)}>
+                        <Text style={styles.itemTitle}>{f.name}</Text>
+                        <Ionicons name={groupPick.includes(f.id) ? 'checkmark-circle' : 'ellipse-outline'} size={18} color={FOREST.text} />
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                  <View style={styles.row}>
+                    <Pressable style={styles.smallBtn} onPress={() => setShowGroupModal(false)}>
+                      <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[
+                        styles.smallBtn,
+                        groupPick.length < (createRoomType === 'family' ? 1 : 2) && styles.off,
+                      ]}
+                      disabled={groupPick.length < (createRoomType === 'family' ? 1 : 2)}
+                      onPress={() => {
+                        void createSharedRoom();
+                      }}
+                    >
+                      <Text style={styles.smallBtnText}>
+                        {createRoomType === 'family' ? s.createFamilyRoomAction : s.createRoom}
+                      </Text>
+                    </Pressable>
+                  </View>
                 </View>
-              </View>
+              </ScrollView>
             </KeyboardAvoidingView>
           </View>
         </Modal>
@@ -6303,9 +8387,9 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={() => setShowProfileModal(false)} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
-              behavior="padding"
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPadding }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
               <ScrollView
                 contentContainerStyle={styles.sheetScrollContent}
@@ -6315,6 +8399,99 @@ function App() {
                 <View style={styles.sheet}>
                   <Text style={styles.h1}>{s.profileEdit}</Text>
                   {renderProfilePhotoEditor()}
+                  <Pressable
+                    style={[styles.item, styles.off, { display: 'none' }]}
+                    disabled={isUpdatingLocationSharing}
+                    onPress={() => {
+                      void syncLocationPermissionState(true);
+                    }}
+                  >
+                    <View style={{ display: 'none' }}>
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <Text style={styles.itemTitle}>
+                        {isKo ? '위치 확인 공유' : 'Location sharing'}
+                      </Text>
+                      <Text style={styles.sub}>
+                        {locationPermissionGranted
+                          ? isKo
+                            ? '보호자와 guardian 웹에서 최근 위치를 확인할 수 있어요.'
+                            : 'Guardians and Guardian Console can see your latest shared location.'
+                          : isKo
+                            ? '켜면 10분마다 최근 위치를 공유해요.'
+                            : 'When enabled, your latest location is shared every 10 minutes.'}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={locationPermissionGranted ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={18}
+                      color={FOREST.text}
+                    />
+                    <View style={{ display: 'none' }}>
+                    </View>
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <Text style={styles.itemTitle}>{isKo ? '위치정보 권한 확인' : 'Location permission check'}</Text>
+                      <Text style={styles.sub}>
+                        {locationPermissionGranted
+                          ? isKo
+                            ? '권한이 허용되어 있어요. 보호자 요청이 오면 현재 위치를 보낼 수 있어요.'
+                            : 'Permission is granted. The app can share your current location when guardians ask for it.'
+                          : isKo
+                            ? '권한이 꺼져 있어요. 눌러서 위치정보 권한을 확인해 주세요.'
+                            : 'Permission is off. Tap to review the location permission.'}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={locationPermissionGranted ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={18}
+                      color={FOREST.text}
+                    />
+                    <View style={{ display: 'none' }}>
+                    </View>
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <Text style={styles.itemTitle}>{isKo ? '위치정보 권한 확인' : 'Location permission check'}</Text>
+                      <Text style={styles.sub}>
+                        {locationPermissionGranted
+                          ? isKo
+                            ? '권한이 허용되어 있어요. 보호자 요청이 오면 현재 위치를 보낼 수 있어요.'
+                            : 'Permission is granted. The app can share your current location when guardians ask for it.'
+                          : isKo
+                            ? '권한이 꺼져 있어요. 눌러서 위치정보 권한을 확인해 주세요.'
+                            : 'Permission is off. Tap to review the location permission.'}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={locationPermissionGranted ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={18}
+                      color={FOREST.text}
+                    />
+                    </View>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.item, isUpdatingLocationSharing && styles.off]}
+                    disabled={isUpdatingLocationSharing}
+                    onPress={openLocationPermissionMenu}
+                  >
+                    <View style={{ display: 'none' }}>
+                    <Text style={styles.itemTitle}>{isKo ? '위치 권한 설정 열기' : 'Open location settings'}</Text>
+                    </View>
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <Text style={styles.itemTitle}>{isKo ? '위치정보 권한 확인' : 'Location permission check'}</Text>
+                      <Text style={styles.sub}>
+                        {locationPermissionGranted
+                          ? isKo
+                            ? '권한이 허용되어 있어요. 보호자 요청이 오면 현재 위치를 보낼 수 있어요.'
+                            : 'Permission is granted. The app can share your current location when guardians ask for it.'
+                          : isKo
+                            ? '권한이 꺼져 있어요. 눌러서 위치정보 권한을 확인해 주세요.'
+                            : 'Permission is off. Tap to review the location permission.'}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={locationPermissionGranted ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={18}
+                      color={FOREST.text}
+                    />
+                  </Pressable>
                   <TextInput
                     style={styles.field}
                     value={nameDraft}
@@ -6480,31 +8657,37 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={() => setShowRoomTitleModal(false)} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPadding }]}
               behavior={kbBehavior}
             >
-              <View style={styles.sheet}>
-                <Text style={styles.h1}>{s.editRoomTitle}</Text>
-                <TextInput
-                  style={styles.field}
-                  value={roomTitleDraft}
-                  onChangeText={setRoomTitleDraft}
-                  placeholder={s.roomTitlePlaceholder}
-                  placeholderTextColor={FOREST.placeholder}
-                />
-                <View style={styles.row}>
-                  <Pressable style={styles.smallBtn} onPress={() => setShowRoomTitleModal(false)}>
-                    <Text style={styles.smallBtnText}>{s.cancel}</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.smallBtn, !roomTitleDraft.trim() && styles.off]}
-                    disabled={!roomTitleDraft.trim()}
-                    onPress={() => void saveRoomTitle()}
-                  >
-                    <Text style={styles.smallBtnText}>{s.save}</Text>
-                  </Pressable>
+              <ScrollView
+                contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheet}>
+                  <Text style={styles.h1}>{s.editRoomTitle}</Text>
+                  <TextInput
+                    style={styles.field}
+                    value={roomTitleDraft}
+                    onChangeText={setRoomTitleDraft}
+                    placeholder={s.roomTitlePlaceholder}
+                    placeholderTextColor={FOREST.placeholder}
+                  />
+                  <View style={styles.row}>
+                    <Pressable style={styles.smallBtn} onPress={() => setShowRoomTitleModal(false)}>
+                      <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.smallBtn, !roomTitleDraft.trim() && styles.off]}
+                      disabled={!roomTitleDraft.trim()}
+                      onPress={() => void saveRoomTitle()}
+                    >
+                      <Text style={styles.smallBtnText}>{s.save}</Text>
+                    </Pressable>
+                  </View>
                 </View>
-              </View>
+              </ScrollView>
             </KeyboardAvoidingView>
           </View>
         </Modal>
@@ -6529,6 +8712,16 @@ function App() {
                         <Text style={styles.itemTitle}>{s.editRoomTitle}</Text>
                       </Pressable>
                     ) : null}
+                    {roomMap.get(roomMenuId)?.isGroup ? (
+                      <Pressable style={styles.item} onPress={() => void openRoomMembersEditor(roomMenuId)}>
+                        <Text style={styles.itemTitle}>{isKo ? '멤버 관리' : 'Manage members'}</Text>
+                      </Pressable>
+                    ) : null}
+                    {roomMap.get(roomMenuId)?.type === 'family' ? (
+                      <Pressable style={styles.item} onPress={() => void openFamilyStructureEditor(roomMenuId)}>
+                        <Text style={styles.itemTitle}>{isKo ? '가족 관계' : 'Family relationships'}</Text>
+                      </Pressable>
+                    ) : null}
                     <Pressable style={styles.item} onPress={() => toggleFavorite(roomMenuId)}>
                       <Text style={styles.itemTitle}>{roomMap.get(roomMenuId)?.favorite ? s.favoriteOff : s.favoriteOn}</Text>
                     </Pressable>
@@ -6538,13 +8731,792 @@ function App() {
                     <Pressable style={styles.item} onPress={() => reportRoom(roomMenuId)}>
                       <Text style={styles.itemTitle}>{s.report}</Text>
                     </Pressable>
-                    <Pressable style={styles.item} onPress={() => void deleteRoom(roomMenuId)}>
+                    <Pressable
+                      style={styles.item}
+                      onPress={() =>
+                        roomMap.get(roomMenuId)?.ownerUserId === currentUserId
+                          ? void deleteRoom(roomMenuId)
+                          : void leaveRoom(roomMenuId)
+                      }
+                    >
                       <Text style={[styles.itemTitle, { color: '#FFD4DE' }]}>
-                        {s.leaveRoom}
+                        {roomMap.get(roomMenuId)?.ownerUserId === currentUserId ? s.deleteRoom : s.leaveRoom}
                       </Text>
                     </Pressable>
                   </>
                 ) : null}
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={!!familyStructureRoomId}
+          transparent
+          animationType="slide"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={closeFamilyStructureModal}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={closeFamilyStructureModal} />
+            <KeyboardAvoidingView
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPaddingRoomy }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
+            >
+              <ScrollView
+                contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheet}>
+                  <Text style={styles.h1}>{isKo ? '가족 관계' : 'Family relationships'}</Text>
+                  <Text style={styles.sub}>
+                    {familyStructureRoom
+                      ? roomTitle(familyStructureRoom)
+                      : isKo
+                        ? '가족 멤버의 호칭과 보호자 연결을 확인해요.'
+                        : 'Review member aliases and guardian links in this family room.'}
+                  </Text>
+                  {isFamilyStructureLoading ? (
+                    <Text style={styles.sub}>{isKo ? '불러오는 중...' : 'Loading...'}</Text>
+                  ) : (
+                    <>
+                      <Text style={styles.sectionTitle}>{isKo ? '나의 호칭' : 'My alias'}</Text>
+                      <View style={styles.familyStructureCard}>
+                        <Text style={styles.itemTitle}>
+                          {displayFamilyStructureName(currentUserId, profile.name || s.me) || profile.name || s.me}
+                        </Text>
+                        <TextInput
+                          style={[styles.field, styles.familyAliasInput, !!familyStructureActionKey && styles.off]}
+                          value={familyStructureAliasDrafts[currentUserId] ?? familyStructureProfileMap.get(currentUserId)?.alias ?? ''}
+                          editable={!familyStructureActionKey}
+                          onChangeText={(value) =>
+                            setFamilyStructureAliasDrafts((prev) => ({
+                              ...prev,
+                              [currentUserId]: value,
+                            }))
+                          }
+                          placeholder={isKo ? '이 방에서 보일 나의 호칭' : 'My alias in this room'}
+                          placeholderTextColor={FOREST.placeholder}
+                        />
+                        <View style={styles.row}>
+                          <Pressable
+                            style={[styles.smallBtn, familyStructureActionKey === `alias:${currentUserId}` && styles.off]}
+                            disabled={!!familyStructureActionKey}
+                            onPress={() => {
+                              void saveFamilyStructureAlias(currentUserId);
+                            }}
+                          >
+                            <Text style={styles.smallBtnText}>{s.save}</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+
+                      <Text style={styles.sectionTitle}>{isKo ? '멤버' : 'Members'}</Text>
+                      {familyStructureProfiles
+                        .filter((profile) => profile.userId !== currentUserId)
+                        .map((member) => {
+                          const memberLocation = familyRoomLocations.find((item) => item.userId === member.userId) ?? null;
+                          const relationship = getFamilyStructureRelationshipWithMember(member.userId);
+                          const canRequestLocation = relationship.active?.guardianUserId === currentUserId;
+                          return (
+                            <Pressable
+                              key={`simple-member-${member.userId}`}
+                              style={styles.familyStructureCard}
+                              onPress={() => setFamilyStructureSelectedMemberId(member.userId)}
+                            >
+                              <View style={styles.familyStructureHeader}>
+                                <Text style={styles.itemTitle}>
+                                  {displayFamilyStructureName(member.userId, member.name) || member.name}
+                                </Text>
+                                <Ionicons name="chevron-forward" size={18} color={FOREST.textMuted} />
+                              </View>
+                              <Text style={styles.sub}>{getFamilyStructureRelationshipSummary(member.userId)}</Text>
+                              {memberLocation ? (
+                                <Text style={styles.sub}>
+                                  {`${isKo ? '최근 위치' : 'Recent location'} · ${roomTimeLabel(memberLocation.capturedAt)}`}
+                                </Text>
+                              ) : null}
+                              {!memberLocation && canRequestLocation ? (
+                                <Text style={styles.sub}>
+                                  {isKo ? '위치 보기 가능' : 'Location view available'}
+                                </Text>
+                              ) : null}
+                            </Pressable>
+                          );
+                        })}
+
+                      <View style={{ display: 'none' }}>
+                      <Text style={styles.sectionTitle}>{isKo ? '호칭' : 'Aliases'}</Text>
+                      {familyStructureProfiles.map((profile) => {
+                        const canEditAlias = profile.userId === currentUserId;
+                        const draftAlias = familyStructureAliasDrafts[profile.userId] ?? profile.alias;
+                        return (
+                          <View key={profile.userId} style={styles.familyStructureCard}>
+                            <View style={styles.familyStructureHeader}>
+                              <Text style={styles.itemTitle}>{profile.name}</Text>
+                              {profile.userId === currentUserId ? (
+                                <Text style={styles.sub}>{isKo ? '나' : 'Me'}</Text>
+                              ) : null}
+                            </View>
+                            <TextInput
+                              style={[styles.field, styles.familyAliasInput, !canEditAlias && styles.off]}
+                              value={draftAlias}
+                              editable={canEditAlias && !familyStructureActionKey.startsWith('link-')}
+                              onChangeText={(value) =>
+                                setFamilyStructureAliasDrafts((prev) => ({
+                                  ...prev,
+                                  [profile.userId]: value,
+                                }))
+                              }
+                              placeholder={isKo ? '이 방에서 보일 호칭' : 'Alias shown in this room'}
+                              placeholderTextColor={FOREST.placeholder}
+                            />
+                            {canEditAlias ? (
+                              <View style={styles.row}>
+                                <Pressable
+                                  style={[
+                                    styles.smallBtn,
+                                    familyStructureActionKey === `alias:${profile.userId}` && styles.off,
+                                  ]}
+                                  disabled={!!familyStructureActionKey}
+                                  onPress={() => {
+                                    void saveFamilyStructureAlias(profile.userId);
+                                  }}
+                                >
+                                  <Text style={styles.smallBtnText}>{s.save}</Text>
+                                </Pressable>
+                              </View>
+                            ) : null}
+                          </View>
+                        );
+                      })}
+
+                      <Text style={styles.sectionTitle}>{isKo ? '보호자 관계' : 'Guardian links'}</Text>
+                      <Text style={styles.sectionTitle}>{isKo ? '보호자 요청' : 'Guardian requests'}</Text>
+                      <Text style={styles.sub}>
+                        {isKo
+                          ? '다른 멤버를 선택하고, 그 사람이 나의 자녀인지 보호자인지 요청할 수 있어요.'
+                          : 'Pick another member and request whether they are your child or guardian.'}
+                      </Text>
+                      <Text style={styles.familyStructureLabel}>{isKo ? '상대 멤버' : 'Target member'}</Text>
+                      <View style={styles.familyChipWrap}>
+                        {familyStructureProfiles
+                          .filter((profile) => profile.userId !== currentUserId)
+                          .map((profile) => (
+                            <Pressable
+                              key={`target-${profile.userId}`}
+                              style={[
+                                styles.familyChip,
+                                familyStructureTargetId === profile.userId && styles.familyChipOn,
+                              ]}
+                              onPress={() => setFamilyStructureTargetId(profile.userId)}
+                            >
+                              <Text style={styles.familyChipText}>
+                                {displayFamilyStructureName(profile.userId, profile.name) || profile.name}
+                              </Text>
+                            </Pressable>
+                          ))}
+                      </View>
+                      <Text style={styles.familyStructureLabel}>{isKo ? '요청 방식' : 'Request as'}</Text>
+                      <View style={styles.familyChipWrap}>
+                        <Pressable
+                          style={[
+                            styles.familyChip,
+                            familyStructureRequestAs === 'guardian' && styles.familyChipOn,
+                          ]}
+                          onPress={() => setFamilyStructureRequestAs('guardian')}
+                        >
+                          <Text style={styles.familyChipText}>{isKo ? '내 자녀로 지정' : 'Mark as my child'}</Text>
+                        </Pressable>
+                        <Pressable
+                          style={[
+                            styles.familyChip,
+                            familyStructureRequestAs === 'child' && styles.familyChipOn,
+                          ]}
+                          onPress={() => setFamilyStructureRequestAs('child')}
+                        >
+                          <Text style={styles.familyChipText}>{isKo ? '내 보호자로 지정' : 'Mark as my guardian'}</Text>
+                        </Pressable>
+                      </View>
+                      <Pressable
+                        style={[
+                          styles.smallBtn,
+                          (!familyStructureTargetId || !!familyStructureActionKey) && styles.off,
+                        ]}
+                        disabled={!familyStructureTargetId || !!familyStructureActionKey}
+                        onPress={() => {
+                          void createFamilyGuardianLink();
+                        }}
+                      >
+                        <Text style={styles.smallBtnText}>{isKo ? '관계 요청 보내기' : 'Send relationship request'}</Text>
+                      </Pressable>
+                      {familyStructurePendingIncoming.length > 0 ? (
+                        <>
+                          <Text style={styles.sectionTitle}>{isKo ? '받은 요청' : 'Incoming requests'}</Text>
+                          {familyStructurePendingIncoming.map((relationship) => (
+                            <View key={`incoming-${relationship.id}`} style={styles.familyStructureCard}>
+                              <Text style={styles.itemTitle}>
+                                {`${displayFamilyStructureName(relationship.guardianUserId, relationship.guardianName)} -> ${displayFamilyStructureName(
+                                  relationship.childUserId,
+                                  relationship.childName
+                                )}`}
+                              </Text>
+                              <View style={styles.row}>
+                                <Pressable
+                                  style={[
+                                    styles.smallBtn,
+                                    familyStructureActionKey === `link-respond:accept:${relationship.id}` && styles.off,
+                                  ]}
+                                  disabled={!!familyStructureActionKey}
+                                  onPress={() => {
+                                    void respondFamilyGuardianLink(relationship.id, 'accept');
+                                  }}
+                                >
+                                  <Text style={styles.smallBtnText}>{isKo ? '수락' : 'Accept'}</Text>
+                                </Pressable>
+                                <Pressable
+                                  style={[
+                                    styles.smallBtn,
+                                    familyStructureActionKey === `link-respond:reject:${relationship.id}` && styles.off,
+                                  ]}
+                                  disabled={!!familyStructureActionKey}
+                                  onPress={() => {
+                                    void respondFamilyGuardianLink(relationship.id, 'reject');
+                                  }}
+                                >
+                                  <Text style={styles.smallBtnText}>{isKo ? '거절' : 'Reject'}</Text>
+                                </Pressable>
+                              </View>
+                            </View>
+                          ))}
+                        </>
+                      ) : null}
+                      {familyStructurePendingOutgoing.length > 0 ? (
+                        <>
+                          <Text style={styles.sectionTitle}>{isKo ? '보낸 요청' : 'Outgoing requests'}</Text>
+                          {familyStructurePendingOutgoing.map((relationship) => (
+                            <View key={`outgoing-${relationship.id}`} style={styles.familyRelationRow}>
+                              <Text style={styles.itemTitle}>
+                                {`${displayFamilyStructureName(relationship.guardianUserId, relationship.guardianName)} -> ${displayFamilyStructureName(
+                                  relationship.childUserId,
+                                  relationship.childName
+                                )}`}
+                              </Text>
+                              <Pressable
+                                style={[
+                                  styles.iconLight,
+                                  familyStructureActionKey === `link-delete:${relationship.id}` && styles.off,
+                                ]}
+                                disabled={!!familyStructureActionKey}
+                                onPress={() => {
+                                  void deleteFamilyGuardianLink(relationship.id);
+                                }}
+                              >
+                                <Ionicons name="close-outline" size={16} color={FOREST.text} />
+                              </Pressable>
+                            </View>
+                          ))}
+                        </>
+                      ) : null}
+                      {false ? (
+                        <>
+                          <Text style={styles.sub}>
+                            {isKo
+                              ? '보호자와 자녀를 각각 선택해서 연결해요.'
+                              : 'Pick one guardian and one child to create a link.'}
+                          </Text>
+                          <Text style={styles.familyStructureLabel}>{isKo ? '보호자' : 'Guardian'}</Text>
+                          <View style={styles.familyChipWrap}>
+                            {familyStructureProfiles.map((profile) => (
+                              <Pressable
+                                key={`guardian-${profile.userId}`}
+                                style={[
+                                  styles.familyChip,
+                                  familyStructureGuardianId === profile.userId && styles.familyChipOn,
+                                ]}
+                                onPress={() => setFamilyStructureGuardianId(profile.userId)}
+                              >
+                                <Text style={styles.familyChipText}>
+                                  {displayFamilyStructureName(profile.userId, profile.name) || profile.name}
+                                </Text>
+                              </Pressable>
+                            ))}
+                          </View>
+                          <Text style={styles.familyStructureLabel}>{isKo ? '자녀' : 'Child'}</Text>
+                          <View style={styles.familyChipWrap}>
+                            {familyStructureProfiles.map((profile) => (
+                              <Pressable
+                                key={`child-${profile.userId}`}
+                                style={[
+                                  styles.familyChip,
+                                  familyStructureChildId === profile.userId && styles.familyChipOn,
+                                ]}
+                                onPress={() => setFamilyStructureChildId(profile.userId)}
+                              >
+                                <Text style={styles.familyChipText}>
+                                  {displayFamilyStructureName(profile.userId, profile.name) || profile.name}
+                                </Text>
+                              </Pressable>
+                            ))}
+                          </View>
+                          <Pressable
+                            style={[
+                              styles.smallBtn,
+                              (!familyStructureGuardianId ||
+                                !familyStructureChildId ||
+                                familyStructureGuardianId === familyStructureChildId ||
+                                !!familyStructureActionKey) &&
+                                styles.off,
+                            ]}
+                            disabled={
+                              !familyStructureGuardianId ||
+                              !familyStructureChildId ||
+                              familyStructureGuardianId === familyStructureChildId ||
+                              !!familyStructureActionKey
+                            }
+                            onPress={() => {
+                              void createFamilyGuardianLink();
+                            }}
+                          >
+                            <Text style={styles.smallBtnText}>{isKo ? '보호자 관계 추가' : 'Add guardian link'}</Text>
+                          </Pressable>
+                        </>
+                      ) : (
+                        <Text style={styles.sub}>
+                          {isKo
+                            ? '호칭은 직접 바꿀 수 있고, 보호자 관계는 가족방 관리자만 바꿀 수 있어요.'
+                            : 'You can edit your own alias, but only family room admins can manage guardian links.'}
+                        </Text>
+                      )}
+
+                      {familyStructureRelationships.length === 0 ? (
+                        <Text style={styles.sub}>
+                          {isKo ? '아직 연결된 보호자 관계가 없어요.' : 'No guardian links yet.'}
+                        </Text>
+                      ) : (
+                        familyStructureRelationships.map((relationship) => (
+                          <View key={relationship.id} style={styles.familyRelationRow}>
+                            <Text style={styles.itemTitle}>
+                              {`${displayFamilyStructureName(relationship.guardianUserId, relationship.guardianName)} -> ${displayFamilyStructureName(
+                                relationship.childUserId,
+                                relationship.childName
+                              )}`}
+                            </Text>
+                            {relationship.guardianUserId === currentUserId || relationship.childUserId === currentUserId ? (
+                              <Pressable
+                                style={[
+                                  styles.iconLight,
+                                  familyStructureActionKey === `link-delete:${relationship.id}` && styles.off,
+                                ]}
+                                disabled={!!familyStructureActionKey}
+                                onPress={() => {
+                                  void deleteFamilyGuardianLink(relationship.id);
+                                }}
+                              >
+                                <Ionicons name="trash-outline" size={16} color={FOREST.text} />
+                              </Pressable>
+                            ) : null}
+                          </View>
+                        ))
+                      )}
+
+                      </View>
+                      <View style={{ display: 'none' }}>
+                      <Text style={styles.sectionTitle}>{isKo ? '최근 위치' : 'Recent locations'}</Text>
+                      {isFamilyRoomLocationsLoading ? (
+                        <Text style={styles.sub}>{isKo ? '위치를 불러오는 중...' : 'Loading locations...'}</Text>
+                      ) : familyRoomLocations.length === 0 ? (
+                        <Text style={styles.sub}>
+                          {isKo
+                            ? '현재 이 가족방에서 볼 수 있는 공유 위치가 없어요.'
+                            : 'No shared locations are visible in this family room yet.'}
+                        </Text>
+                      ) : (
+                        familyRoomLocations.map((locationItem) => (
+                          <View key={`location-${locationItem.userId}`} style={styles.familyStructureCard}>
+                            <Text style={styles.itemTitle}>{locationItem.name}</Text>
+                            <Text style={styles.sub}>
+                              {`${locationItem.latitude.toFixed(5)}, ${locationItem.longitude.toFixed(5)} · ${isKo ? '업데이트' : 'Updated'} ${roomTimeLabel(
+                                locationItem.capturedAt
+                              )}`}
+                            </Text>
+                            <View style={styles.row}>
+                              <Pressable
+                                style={styles.smallBtn}
+                                onPress={() => {
+                                  void openLocationMap(locationItem.latitude, locationItem.longitude);
+                                }}
+                              >
+                                <Text style={styles.smallBtnText}>{isKo ? '지도 열기' : 'Open map'}</Text>
+                              </Pressable>
+                              <Pressable
+                                style={[
+                                  styles.smallBtn,
+                                  familyRoomLocationActionKey === `location-refresh:${locationItem.userId}` && styles.off,
+                                ]}
+                                disabled={!!familyRoomLocationActionKey}
+                                onPress={() => {
+                                  void requestFamilyRoomLocationPrecisionRefresh(familyStructureRoomId || '', locationItem.userId);
+                                }}
+                              >
+                                <Text style={styles.smallBtnText}>{isKo ? '정확히 새로고침' : 'Precise refresh'}</Text>
+                              </Pressable>
+                            </View>
+                          </View>
+                        ))
+                      )}
+                      </View>
+                    </>
+                  )}
+                  <View style={styles.row}>
+                    <Pressable style={styles.smallBtn} onPress={closeFamilyStructureModal}>
+                      <Text style={styles.smallBtnText}>{isKo ? '닫기' : 'Close'}</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={!!roomMembersRoomId}
+          transparent
+          animationType="slide"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={closeRoomMembersModal}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={closeRoomMembersModal} />
+            <KeyboardAvoidingView
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPaddingRoomy }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
+            >
+              <ScrollView
+                contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheet}>
+                  <Text style={styles.h1}>{isKo ? '멤버 관리' : 'Manage members'}</Text>
+                  <Text style={styles.sub}>
+                    {roomMembersRoom
+                      ? roomTitle(roomMembersRoom)
+                      : isKo
+                        ? '방의 owner, admin, 멤버를 관리해요.'
+                        : 'Manage the owner, admins, and members of this room.'}
+                  </Text>
+                  {isRoomMembersLoading ? (
+                    <Text style={styles.sub}>{isKo ? '불러오는 중...' : 'Loading...'}</Text>
+                  ) : (
+                    roomMembers.map((member) => {
+                      const isSelf = member.userId === currentUserId;
+                      const canTransfer = roomMembersCanTransferOwnership && !member.isOwner;
+                      const canPromote = roomMembersCanManageAdmins && !member.isOwner && member.role === 'member';
+                      const canDemote = roomMembersCanManageAdmins && !member.isOwner && member.role === 'admin';
+                      const canKick =
+                        roomMembersCanKickMembers &&
+                        !member.isOwner &&
+                        !isSelf &&
+                        (roomMembersCanTransferOwnership || member.role === 'member');
+                      return (
+                        <View key={member.userId} style={styles.familyStructureCard}>
+                          <View style={styles.familyStructureHeader}>
+                            <Text style={styles.itemTitle}>{displayRoomMemberName(member)}</Text>
+                            <Text style={styles.sub}>
+                              {member.isOwner
+                                ? isKo
+                                  ? '방장'
+                                  : 'Owner'
+                                : member.role === 'admin'
+                                  ? isKo
+                                    ? '관리자'
+                                    : 'Admin'
+                                  : isKo
+                                    ? '멤버'
+                                    : 'Member'}
+                            </Text>
+                          </View>
+                          <Text style={styles.sub}>{member.name}</Text>
+                          <View style={styles.row}>
+                            {canTransfer ? (
+                              <Pressable
+                                style={[
+                                  styles.smallBtn,
+                                  roomMembersActionKey === `owner:${member.userId}` && styles.off,
+                                ]}
+                                disabled={!!roomMembersActionKey}
+                                onPress={() => {
+                                  void transferRoomOwnership(member.userId);
+                                }}
+                              >
+                                <Text style={styles.smallBtnText}>{isKo ? '방장 양도' : 'Make owner'}</Text>
+                              </Pressable>
+                            ) : null}
+                            {canPromote ? (
+                              <Pressable
+                                style={[
+                                  styles.smallBtn,
+                                  roomMembersActionKey === `role:${member.userId}:admin` && styles.off,
+                                ]}
+                                disabled={!!roomMembersActionKey}
+                                onPress={() => {
+                                  void updateRoomMemberRole(member.userId, 'admin');
+                                }}
+                              >
+                                <Text style={styles.smallBtnText}>{isKo ? 'Admin 지정' : 'Make admin'}</Text>
+                              </Pressable>
+                            ) : null}
+                            {canDemote ? (
+                              <Pressable
+                                style={[
+                                  styles.smallBtn,
+                                  roomMembersActionKey === `role:${member.userId}:member` && styles.off,
+                                ]}
+                                disabled={!!roomMembersActionKey}
+                                onPress={() => {
+                                  void updateRoomMemberRole(member.userId, 'member');
+                                }}
+                              >
+                                <Text style={styles.smallBtnText}>{isKo ? 'Admin 해제' : 'Remove admin'}</Text>
+                              </Pressable>
+                            ) : null}
+                            {canKick ? (
+                              <Pressable
+                                style={[
+                                  styles.smallBtn,
+                                  roomMembersActionKey === `kick:${member.userId}` && styles.off,
+                                ]}
+                                disabled={!!roomMembersActionKey}
+                                onPress={() => {
+                                  void kickRoomMember(member.userId);
+                                }}
+                              >
+                                <Text style={styles.smallBtnText}>{isKo ? '강퇴' : 'Remove'}</Text>
+                              </Pressable>
+                            ) : null}
+                          </View>
+                        </View>
+                      );
+                    })
+                  )}
+                  {!isRoomMembersLoading ? (
+                    <>
+                      <Text style={styles.sectionTitle}>{isKo ? '보낸 초대' : 'Pending invites'}</Text>
+                      {roomMembersPendingInvitations.length > 0 ? (
+                        roomMembersPendingInvitations.map((invitation) => (
+                          <View key={`invite-${invitation.id}`} style={styles.familyStructureCard}>
+                            <Text style={styles.itemTitle}>{invitation.targetName}</Text>
+                            <Text style={styles.sub}>
+                              {invitation.roomTitle ||
+                                (invitation.roomType === 'family'
+                                  ? isKo
+                                    ? '가족방'
+                                    : 'Family room'
+                                  : isKo
+                                    ? '그룹방'
+                                    : 'Group room')}
+                            </Text>
+                            <Text style={styles.sub}>
+                              {isKo ? '응답 대기 중' : 'Waiting for response'} ·{' '}
+                              {new Date(invitation.createdAt).toLocaleDateString()}
+                            </Text>
+                          </View>
+                        ))
+                      ) : (
+                        <Text style={styles.sub}>{isKo ? '아직 보낸 초대가 없어요.' : 'No pending invites yet.'}</Text>
+                      )}
+                      <Text style={styles.sectionTitle}>{isKo ? '친구 초대' : 'Invite friends'}</Text>
+                      {roomMembersInviteableFriends.length > 0 ? (
+                        roomMembersInviteableFriends.map((friend) => (
+                          <View key={`invite-friend-${friend.id}`} style={styles.item}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.itemTitle}>{friend.name}</Text>
+                              <Text style={styles.sub}>{friend.profileName || friend.status || friend.name}</Text>
+                            </View>
+                            <Pressable
+                              style={[
+                                styles.requestBtn,
+                                roomInvitationActionKey === `invite:${roomMembersRoomId}:${friend.id}` && styles.off,
+                              ]}
+                              disabled={!!roomInvitationActionKey}
+                              onPress={() => {
+                                void sendRoomInvitation(friend.id);
+                              }}
+                            >
+                              <Text style={styles.requestBtnText}>{isKo ? '초대' : 'Invite'}</Text>
+                            </Pressable>
+                          </View>
+                        ))
+                      ) : (
+                        <Text style={styles.sub}>
+                          {isKo ? '지금 초대할 수 있는 친구가 없어요.' : 'There are no friends available to invite right now.'}
+                        </Text>
+                      )}
+                    </>
+                  ) : null}
+                  <View style={styles.row}>
+                    <Pressable style={styles.smallBtn} onPress={closeRoomMembersModal}>
+                      <Text style={styles.smallBtnText}>{isKo ? '닫기' : 'Close'}</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={!!familyStructureSelectedMember}
+          transparent
+          animationType="fade"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={() => setFamilyStructureSelectedMemberId('')}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={() => setFamilyStructureSelectedMemberId('')} />
+            <View style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}>
+              <View style={styles.sheet}>
+                <Text style={styles.h1}>
+                  {familyStructureSelectedMember
+                    ? displayFamilyStructureName(
+                        familyStructureSelectedMember.userId,
+                        familyStructureSelectedMember.name
+                      ) || familyStructureSelectedMember.name
+                    : ''}
+                </Text>
+                {familyStructureSelectedMember ? (
+                  <>
+                    <Text style={styles.sub}>
+                      {getFamilyStructureRelationshipSummary(familyStructureSelectedMember.userId)}
+                    </Text>
+                    {(() => {
+                      const { active, pendingIncoming, pendingOutgoing } =
+                        getFamilyStructureRelationshipWithMember(familyStructureSelectedMember.userId);
+                      const canRequestLocation = !!active && active.guardianUserId === currentUserId;
+                      const isViewingLocation =
+                        familyRoomLocationActionKey === `location-view:${familyStructureSelectedMember.userId}`;
+                      const locationItem =
+                        familyRoomLocations.find((item) => item.userId === familyStructureSelectedMember.userId) ?? null;
+                      return (
+                        <>
+                          {pendingIncoming ? (
+                            <>
+                              <Pressable
+                                style={styles.item}
+                                onPress={() => {
+                                  void respondFamilyGuardianLink(pendingIncoming.id, 'accept');
+                                  setFamilyStructureSelectedMemberId('');
+                                }}
+                              >
+                                <Text style={styles.itemTitle}>{isKo ? '보호자 관계 수락' : 'Accept relationship'}</Text>
+                              </Pressable>
+                              <Pressable
+                                style={styles.item}
+                                onPress={() => {
+                                  void respondFamilyGuardianLink(pendingIncoming.id, 'reject');
+                                  setFamilyStructureSelectedMemberId('');
+                                }}
+                              >
+                                <Text style={styles.itemTitle}>{isKo ? '보호자 관계 거절' : 'Reject relationship'}</Text>
+                              </Pressable>
+                            </>
+                          ) : pendingOutgoing ? (
+                            <Pressable
+                              style={styles.item}
+                              onPress={() => {
+                                void deleteFamilyGuardianLink(pendingOutgoing.id);
+                                setFamilyStructureSelectedMemberId('');
+                              }}
+                            >
+                              <Text style={styles.itemTitle}>{isKo ? '요청 취소' : 'Cancel request'}</Text>
+                            </Pressable>
+                          ) : active ? (
+                            <Pressable
+                              style={styles.item}
+                              onPress={() => {
+                                void deleteFamilyGuardianLink(active.id);
+                                setFamilyStructureSelectedMemberId('');
+                              }}
+                            >
+                              <Text style={styles.itemTitle}>{isKo ? '보호자 관계 삭제' : 'Delete relationship'}</Text>
+                            </Pressable>
+                          ) : (
+                            <>
+                              <Pressable
+                                style={styles.item}
+                                onPress={() => {
+                                  void createFamilyGuardianLink(familyStructureSelectedMember.userId, 'guardian');
+                                  setFamilyStructureSelectedMemberId('');
+                                }}
+                              >
+                                <Text style={styles.itemTitle}>{isKo ? '내 자녀로 지정 요청' : 'Request as my child'}</Text>
+                              </Pressable>
+                              <Pressable
+                                style={styles.item}
+                                onPress={() => {
+                                  void createFamilyGuardianLink(familyStructureSelectedMember.userId, 'child');
+                                  setFamilyStructureSelectedMemberId('');
+                                }}
+                              >
+                                <Text style={styles.itemTitle}>{isKo ? '내 보호자로 지정 요청' : 'Request as my guardian'}</Text>
+                              </Pressable>
+                            </>
+                          )}
+                          {canRequestLocation ? (
+                            <View style={styles.familyStructureCard}>
+                              <Text style={styles.itemTitle}>{isKo ? '현재 위치' : 'Current location'}</Text>
+                              <Text style={styles.sub}>
+                                {locationItem
+                                  ? `${locationItem.latitude.toFixed(5)}, ${locationItem.longitude.toFixed(5)} · ${
+                                      isKo ? '업데이트' : 'Updated'
+                                    } ${roomTimeLabel(locationItem.capturedAt)}`
+                                  : isKo
+                                    ? '아직 저장된 위치가 없어요.'
+                                    : 'No saved location yet.'}
+                              </Text>
+                              <View style={styles.row}>
+                                <Pressable
+                                  style={[styles.smallBtn, isViewingLocation && styles.off]}
+                                  disabled={!!familyRoomLocationActionKey}
+                                  onPress={() => {
+                                    void requestFamilyRoomLocationPrecisionRefresh(
+                                      familyStructureRoomId || '',
+                                      familyStructureSelectedMember.userId
+                                    );
+                                  }}
+                                >
+                                  <Text style={styles.smallBtnText}>
+                                    {isViewingLocation ? (isKo ? '위치 확인 중...' : 'Checking location...') : isKo ? '위치정보요청' : 'Request location'}
+                                  </Text>
+                                </Pressable>
+                                <Pressable
+                                  style={[styles.smallBtn, !locationItem && styles.off]}
+                                  disabled={!locationItem}
+                                  onPress={() => {
+                                    if (!locationItem) return;
+                                    void openLocationMap(locationItem.latitude, locationItem.longitude);
+                                  }}
+                                >
+                                  <Text style={styles.smallBtnText}>{isKo ? '지도열기' : 'Open map'}</Text>
+                                </Pressable>
+                              </View>
+                            </View>
+                          ) : null}
+                        </>
+                      );
+                    })()}
+                  </>
+                ) : null}
+                <Pressable style={styles.smallBtn} onPress={() => setFamilyStructureSelectedMemberId('')}>
+                  <Text style={styles.smallBtnText}>{isKo ? '닫기' : 'Close'}</Text>
+                </Pressable>
               </View>
             </View>
           </View>
@@ -6998,6 +9970,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FOREST.border,
   },
+  tabBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 6,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: FOREST.badge,
+  },
   tabText: { color: FOREST.text, fontSize: 14, fontWeight: '700' },
   tabHint: { color: FOREST.textMuted, fontSize: 10, fontWeight: '700' },
   bubbleRow: { width: '100%' },
@@ -7168,6 +10152,63 @@ const styles = StyleSheet.create({
     fontSize: 15,
     borderWidth: 1,
     borderColor: 'rgba(167, 177, 230, 0.24)',
+  },
+  familyStructureCard: {
+    gap: 10,
+    padding: 14,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+  },
+  familyStructureHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  familyAliasInput: {
+    minHeight: 44,
+  },
+  familyStructureLabel: {
+    color: FOREST.textMuted,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 6,
+  },
+  familyChipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  familyChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: FOREST.buttonSoft,
+    borderWidth: 1,
+    borderColor: FOREST.border,
+  },
+  familyChipOn: {
+    backgroundColor: 'rgba(255, 214, 122, 0.22)',
+    borderColor: 'rgba(255, 214, 122, 0.7)',
+  },
+  familyChipText: {
+    color: FOREST.text,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  familyRelationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
   },
   composerInput: {
     flex: 1,

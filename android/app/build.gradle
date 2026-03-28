@@ -1,16 +1,39 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+apply plugin: "com.google.gms.google-services"
 
 import groovy.json.JsonSlurper
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
+def googleServicesEnvPath = System.getenv("ANDROID_GOOGLE_SERVICES_FILE")?.trim()
+def googleServicesSourceFile = googleServicesEnvPath ? file(googleServicesEnvPath) : null
+def googleServicesTargetFile = file("google-services.json")
 def buildVersionInfo = new JsonSlurper().parseText(
     ["node", "-e", "process.stdout.write(JSON.stringify(require('../scripts/build-version').getBuildVersionInfo()))"]
         .execute(null, rootDir)
         .text
         .trim()
 )
+
+tasks.register("prepareGoogleServicesConfig") {
+    doFirst {
+        if (googleServicesSourceFile != null && googleServicesSourceFile.exists()) {
+            copy {
+                from googleServicesSourceFile
+                into googleServicesTargetFile.parentFile
+                rename { "google-services.json" }
+            }
+            return
+        }
+        if (!googleServicesTargetFile.exists()) {
+            throw new GradleException(
+                "Missing Firebase Android config. Set ANDROID_GOOGLE_SERVICES_FILE to a valid google-services.json path " +
+                "or place google-services.json in android/app before building."
+            )
+        }
+    }
+}
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -140,6 +163,10 @@ android {
     }
 }
 
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn("prepareGoogleServicesConfig")
+}
+
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
 // Accepts values in comma delimited lists, example:
 // android.packagingOptions.pickFirsts=/LICENSE,**/picasa.ini
@@ -163,6 +190,7 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+    implementation("com.google.firebase:firebase-messaging:25.0.1")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

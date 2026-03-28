@@ -20,7 +20,12 @@
     },
     "android": {
       "permissions": [
-        "REQUEST_INSTALL_PACKAGES"
+        "REQUEST_INSTALL_PACKAGES",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
       ],
       "softwareKeyboardLayoutMode": "resize",
       "usesCleartextTraffic": true,
@@ -39,6 +44,14 @@
     "plugins": [
       "expo-web-browser",
       "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow Our Hangout to share your recent location with guardians and your own recovery tools.",
+          "locationWhenInUsePermission": "Allow Our Hangout to access your location while the app is open.",
+          "isAndroidBackgroundLocationEnabled": true
+        }
+      ],
       [
         "expo-notifications",
         {

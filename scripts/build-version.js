@@ -1,8 +1,13 @@
 const { execFileSync } = require('child_process');
+const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 
 const SEOUL_TIME_ZONE = 'Asia/Seoul';
 const MAX_DAILY_BUILD_INDEX = 99;
+const VERSION_STATE_DIR = '.build-meta';
+const VERSION_STATE_FILE = 'build-version-state.json';
+const NAMED_RELEASE_DIR = path.join('android', 'app', 'build', 'outputs', 'release-named');
 
 function pad2(value) {
   return String(value).padStart(2, '0');
@@ -55,6 +60,10 @@ function clampBuildIndex(value) {
   return Math.min(parsed, MAX_DAILY_BUILD_INDEX);
 }
 
+function normalizeRelativePath(value) {
+  return String(value || '').split(path.sep).join('/');
+}
+
 function getDailyCommitIndex(rootDir, parts) {
   try {
     const { since, until } = toDayWindow(parts);
@@ -71,6 +80,128 @@ function getDailyCommitIndex(rootDir, parts) {
   } catch {
     return 1;
   }
+}
+
+function getVersionStatePath(rootDir) {
+  return path.join(rootDir, VERSION_STATE_DIR, VERSION_STATE_FILE);
+}
+
+function readVersionState(rootDir) {
+  try {
+    const raw = fs.readFileSync(getVersionStatePath(rootDir), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!/^\d{8}$/.test(String(parsed.dateKey || ''))) return null;
+    const buildIndex = clampBuildIndex(parsed.buildIndex);
+    const fingerprint = String(parsed.fingerprint || '').trim();
+    if (!fingerprint) return null;
+    return {
+      dateKey: String(parsed.dateKey),
+      buildIndex,
+      fingerprint,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeVersionState(rootDir, state) {
+  const dirPath = path.join(rootDir, VERSION_STATE_DIR);
+  fs.mkdirSync(dirPath, { recursive: true });
+  fs.writeFileSync(
+    getVersionStatePath(rootDir),
+    JSON.stringify(
+      {
+        dateKey: state.dateKey,
+        buildIndex: state.buildIndex,
+        fingerprint: state.fingerprint,
+        updatedAt: new Date().toISOString(),
+      },
+      null,
+      2
+    )
+  );
+}
+
+function getWorkspaceFilesFromGit(rootDir) {
+  try {
+    const output = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
+      cwd: rootDir,
+      encoding: 'buffer',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return output
+      .toString('utf8')
+      .split('\0')
+      .filter(Boolean)
+      .map(normalizeRelativePath)
+      .filter((relativePath) => relativePath !== `${VERSION_STATE_DIR}/${VERSION_STATE_FILE}`)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+function hashFileContents(hash, absolutePath) {
+  const stat = fs.statSync(absolutePath);
+  if (stat.isDirectory()) {
+    hash.update('dir\0');
+    return;
+  }
+  hash.update('file\0');
+  hash.update(fs.readFileSync(absolutePath));
+  hash.update('\0');
+}
+
+function getWorkspaceFingerprint(rootDir) {
+  const files = getWorkspaceFilesFromGit(rootDir);
+  if (files.length === 0) {
+    return 'workspace-empty';
+  }
+
+  const hash = crypto.createHash('sha256');
+  for (const relativePath of files) {
+    const absolutePath = path.join(rootDir, relativePath);
+    hash.update(normalizeRelativePath(relativePath));
+    hash.update('\0');
+    if (!fs.existsSync(absolutePath)) {
+      hash.update('missing\0');
+      continue;
+    }
+    hashFileContents(hash, absolutePath);
+  }
+  return hash.digest('hex');
+}
+
+function getExistingNamedReleaseIndex(rootDir, dateKey) {
+  try {
+    const releaseDir = path.join(rootDir, NAMED_RELEASE_DIR);
+    const entries = fs.readdirSync(releaseDir, { withFileTypes: true });
+    let maxIndex = 0;
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const match = new RegExp(`^ourhangout_${dateKey}_(\\d{1,2})-release\\.apk$`).exec(entry.name);
+      if (!match) continue;
+      maxIndex = Math.max(maxIndex, clampBuildIndex(match[1]));
+    }
+    return maxIndex;
+  } catch {
+    return 0;
+  }
+}
+
+function resolveWorkspaceBuildIndex(rootDir, dateKey, fingerprint) {
+  const currentState = readVersionState(rootDir);
+  if (currentState && currentState.dateKey === dateKey) {
+    return currentState.fingerprint === fingerprint
+      ? currentState.buildIndex
+      : clampBuildIndex(currentState.buildIndex + 1);
+  }
+  if (currentState && currentState.dateKey !== dateKey) {
+    return 1;
+  }
+  const existingIndex = getExistingNamedReleaseIndex(rootDir, dateKey);
+  return existingIndex > 0 ? clampBuildIndex(existingIndex + 1) : 1;
 }
 
 function parseExplicitVersion(explicitVersion) {
@@ -101,16 +232,26 @@ function getBuildVersionInfo(options = {}) {
 
   const parts = getSeoulDateParts(options.now || new Date());
   const dateKey = toDateKey(parts);
+  const explicitIndex = options.explicitIndex || process.env.OH_BUILD_INDEX;
+  const fingerprint = explicitIndex ? '' : getWorkspaceFingerprint(rootDir);
   const buildIndex = clampBuildIndex(
-    options.explicitIndex || process.env.OH_BUILD_INDEX || getDailyCommitIndex(rootDir, parts)
+    explicitIndex || resolveWorkspaceBuildIndex(rootDir, dateKey, fingerprint) || getDailyCommitIndex(rootDir, parts)
   );
+
+  if (!explicitIndex && fingerprint) {
+    writeVersionState(rootDir, {
+      dateKey,
+      buildIndex,
+      fingerprint,
+    });
+  }
 
   return {
     dateKey,
     buildIndex,
     versionName: `${dateKey}_${buildIndex}`,
     versionCode: Number(dateKey) * 100 + buildIndex,
-    source: options.explicitIndex || process.env.OH_BUILD_INDEX ? 'env:OH_BUILD_INDEX' : 'git-daily-commit-count',
+    source: explicitIndex ? 'env:OH_BUILD_INDEX' : 'workspace-fingerprint',
     timeZone: SEOUL_TIME_ZONE,
   };
 }
