@@ -10,6 +10,7 @@ import {
   LayoutChangeEvent,
   Linking,
   Modal,
+  NativeModules,
   PanResponder,
   Platform,
   Pressable,
@@ -28,6 +29,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
 import * as MediaLibrary from 'expo-media-library';
 import * as Location from 'expo-location';
+import * as BackgroundTask from 'expo-background-task';
 import * as TaskManager from 'expo-task-manager';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as Device from 'expo-device';
@@ -340,6 +342,7 @@ type BackendFamilyRoomMemberProfile = {
   name?: string;
   avatarUri?: string;
   alias?: string;
+  locationSharingEnabled?: boolean;
 };
 type BackendFamilyRoomMemberProfileList = {
   canManage?: boolean;
@@ -365,6 +368,7 @@ type FamilyRoomMemberProfile = {
   name: string;
   avatarUri: string;
   alias: string;
+  locationSharingEnabled: boolean;
 };
 type FamilyRoomRelationship = {
   id: string;
@@ -393,6 +397,23 @@ type BackendRoomMemberList = {
   canKickMembers?: boolean;
   items?: BackendRoomMember[];
 };
+type BackendRoomInvitation = {
+  id?: string;
+  roomId?: string;
+  roomType?: RoomType;
+  roomTitle?: string;
+  inviterUserId?: string;
+  inviterName?: string;
+  inviterAvatarUri?: string;
+  targetUserId?: string;
+  targetName?: string;
+  status?: 'pending' | 'accepted' | 'rejected' | 'canceled' | 'expired';
+  createdAt?: string;
+};
+type BackendRoomInvitationList = {
+  incoming?: BackendRoomInvitation[];
+  outgoing?: BackendRoomInvitation[];
+};
 type RoomMember = {
   userId: string;
   name: string;
@@ -400,6 +421,19 @@ type RoomMember = {
   alias: string;
   role: 'admin' | 'member';
   isOwner: boolean;
+};
+type RoomInvitationItem = {
+  id: string;
+  roomId: string;
+  roomType: RoomType;
+  roomTitle: string;
+  inviterUserId: string;
+  inviterName: string;
+  inviterAvatarUri: string;
+  targetUserId: string;
+  targetName: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'canceled' | 'expired';
+  createdAt: number;
 };
 type AppExtra = {
   buildVersion?: { name?: string; code?: number; source?: string };
@@ -409,6 +443,16 @@ type AppExtra = {
 type PersistedSession = {
   accessToken: string;
   refreshToken?: string;
+};
+type PersistedAppSnapshot = {
+  profile?: Profile;
+  friends?: Friend[];
+  bots?: BotSummary[];
+  rooms?: Room[];
+  currentUserId?: string;
+  tab?: Tab;
+  chatsMode?: ChatsMode;
+  directReadCutoffs?: Record<string, number>;
 };
 type BackendSyncOptions = {
   strict?: boolean;
@@ -446,6 +490,7 @@ const URL_REGEX = /https?:\/\/\S+/gi;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const PROFILE_CROP_BOX = 260;
 const PROFILE_PHOTO_MAX_OUTPUT = 2048;
+const PROFILE_PHOTO_MAX_SOURCE = 4096;
 const DEFAULT_APP_VERSION = '0';
 const APP_PACKAGE_ID = 'com.ourhangout';
 const APP_UPDATE_APK_MIME_TYPE = 'application/vnd.android.package-archive';
@@ -513,6 +558,41 @@ const normalizeBackendErrorMessage = (message: string, isKo: boolean): string =>
       'Family room members must already be friends.',
       '가족방 멤버는 먼저 친구여야 해요.',
       'Family room members must already be friends.',
+    ],
+    [
+      'Room invitations require an existing friend relationship.',
+      '방 초대는 먼저 친구여야 보낼 수 있어요.',
+      'Room invitations require an existing friend relationship.',
+    ],
+    [
+      'A pending room invitation already exists.',
+      '이미 대기 중인 방 초대가 있어요.',
+      'A room invitation is already pending.',
+    ],
+    [
+      'Pending room invitation not found.',
+      '대기 중인 방 초대를 찾을 수 없어요.',
+      'The pending room invitation was not found.',
+    ],
+    [
+      'Only the invited member can accept this room invitation.',
+      '초대받은 멤버만 이 방 초대를 수락할 수 있어요.',
+      'Only the invited member can accept this room invitation.',
+    ],
+    [
+      'Only the invited member can reject this room invitation.',
+      '초대받은 멤버만 이 방 초대를 거절할 수 있어요.',
+      'Only the invited member can reject this room invitation.',
+    ],
+    [
+      'Target user is already in this room.',
+      '이미 이 방에 들어와 있는 멤버예요.',
+      'That user is already in this room.',
+    ],
+    [
+      'You cannot invite yourself to this room.',
+      '자기 자신은 초대할 수 없어요.',
+      'You cannot invite yourself to this room.',
     ],
     [
       'Transfer room ownership before leaving this room.',
@@ -675,11 +755,28 @@ const isSessionInvalidError = (error: unknown): boolean => {
   if (!(error instanceof Error)) return false;
   const status = typeof (error as BackendRequestError).status === 'number' ? (error as BackendRequestError).status : 0;
   const code = String((error as BackendRequestError).code || '').trim();
-  return code === 'AUTH_REFRESH_INVALID' || code === 'AUTH_UNAUTHORIZED' || (status === 401 && !code);
+  const message = String(error.message || '').trim().toLowerCase();
+  return (
+    code === 'AUTH_REFRESH_INVALID' ||
+    code === 'AUTH_UNAUTHORIZED' ||
+    (status === 401 && !code) ||
+    message.includes('refresh token is invalid or expired')
+  );
+};
+const isSessionInvalidMessage = (message: string): boolean => {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes('refresh token is invalid or expired') ||
+    normalized.includes('session validation failed') ||
+    normalized.includes('auth_refresh_invalid')
+  );
 };
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : '');
 const SESSION_STORAGE_KEY = 'ourhangout.session.v1';
+const APP_SNAPSHOT_STORAGE_KEY = 'ourhangout.app-snapshot.v1';
 const BACKEND_OVERRIDE_STORAGE_KEY = 'ourhangout.backend-override.v1';
+const ACTIVE_BACKEND_STORAGE_KEY = 'ourhangout.active-backend.v1';
 const CHATS_TAB_MODE_STORAGE_KEY = 'ourhangout.chats-tab-mode.v1';
 const HIDDEN_SERVER_MENU_TAP_COUNT = 5;
 const HIDDEN_SERVER_MENU_TAP_WINDOW_MS = 1200;
@@ -755,24 +852,76 @@ const parsePersistedSession = (raw: string | null | undefined): PersistedSession
     return null;
   }
 };
+const readNativeSessionFromModule = async (): Promise<PersistedSession | null> => {
+  const nativeModule = NativeModules.LocationCaptureModule as
+    | {
+        readSession?: () => Promise<{ accessToken?: string; refreshToken?: string } | null>;
+      }
+    | undefined;
+  if (!nativeModule?.readSession) return null;
+  try {
+    const raw = await nativeModule.readSession();
+    const accessToken = String(raw?.accessToken || '').trim();
+    const refreshToken = String(raw?.refreshToken || '').trim();
+    if (!accessToken) return null;
+    return {
+      accessToken,
+      ...(refreshToken ? { refreshToken } : {}),
+    };
+  } catch {
+    return null;
+  }
+};
+const syncNativeSessionModule = async (session: PersistedSession): Promise<void> => {
+  const nativeModule = NativeModules.LocationCaptureModule as
+    | {
+        storeSession?: (accessToken: string, refreshToken?: string) => Promise<boolean>;
+      }
+    | undefined;
+  if (!nativeModule?.storeSession) return;
+  await nativeModule.storeSession(session.accessToken, session.refreshToken || '').catch(() => null);
+};
+const clearNativeSessionModule = async (): Promise<void> => {
+  const nativeModule = NativeModules.LocationCaptureModule as
+    | {
+        clearSession?: () => Promise<boolean>;
+      }
+    | undefined;
+  if (!nativeModule?.clearSession) return;
+  await nativeModule.clearSession().catch(() => null);
+};
 const readSessionFromStorage = async (): Promise<PersistedSession | null> => {
+  let stored: PersistedSession | null = null;
   if (canUseSecureStore) {
     try {
       const secureRaw = await SecureStore.getItemAsync(SESSION_STORAGE_KEY);
       const secure = parsePersistedSession(secureRaw);
       if (secure?.accessToken) {
-        return secure;
+        stored = secure;
       }
     } catch {
       // Ignore SecureStore read failure and fallback to AsyncStorage.
     }
   }
-  try {
-    const fallbackRaw = await AsyncStorage.getItem(SESSION_STORAGE_KEY);
-    return parsePersistedSession(fallbackRaw);
-  } catch {
-    return null;
+  if (!stored) {
+    try {
+      const fallbackRaw = await AsyncStorage.getItem(SESSION_STORAGE_KEY);
+      stored = parsePersistedSession(fallbackRaw);
+    } catch {
+      stored = null;
+    }
   }
+  const nativeSession = await readNativeSessionFromModule().catch(() => null);
+  if (
+    nativeSession?.accessToken &&
+    (!stored ||
+      nativeSession.accessToken !== stored.accessToken ||
+      (nativeSession.refreshToken || '') !== (stored.refreshToken || ''))
+  ) {
+    await writeSessionToStorage(nativeSession).catch(() => null);
+    return nativeSession;
+  }
+  return stored;
 };
 const writeSessionToStorage = async (session: PersistedSession): Promise<void> => {
   const payload = JSON.stringify(session);
@@ -788,6 +937,7 @@ const writeSessionToStorage = async (session: PersistedSession): Promise<void> =
   } catch {
     // Ignore fallback storage failure.
   }
+  await syncNativeSessionModule(session).catch(() => null);
 };
 const clearSessionInStorage = async (): Promise<void> => {
   if (canUseSecureStore) {
@@ -801,6 +951,30 @@ const clearSessionInStorage = async (): Promise<void> => {
     await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
   } catch {
     // Ignore cleanup failure.
+  }
+  await clearNativeSessionModule().catch(() => null);
+};
+const readAppSnapshotFromStorage = async (): Promise<PersistedAppSnapshot | null> => {
+  try {
+    const raw = await AsyncStorage.getItem(APP_SNAPSHOT_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as PersistedAppSnapshot;
+  } catch {
+    return null;
+  }
+};
+const writeAppSnapshotToStorage = async (snapshot: PersistedAppSnapshot): Promise<void> => {
+  try {
+    await AsyncStorage.setItem(APP_SNAPSHOT_STORAGE_KEY, JSON.stringify(snapshot));
+  } catch {
+    // Ignore snapshot persistence failure.
+  }
+};
+const clearAppSnapshotInStorage = async (): Promise<void> => {
+  try {
+    await AsyncStorage.removeItem(APP_SNAPSHOT_STORAGE_KEY);
+  } catch {
+    // Ignore snapshot cleanup failure.
   }
 };
 const readBackendOverrideFromStorage = async (): Promise<string> => {
@@ -822,6 +996,25 @@ const writeBackendOverrideToStorage = async (value: string): Promise<void> => {
     // Ignore override persistence failure.
   }
 };
+const readActiveBackendFromStorage = async (): Promise<string> => {
+  try {
+    return normalizeBackendBaseUrl(await AsyncStorage.getItem(ACTIVE_BACKEND_STORAGE_KEY));
+  } catch {
+    return '';
+  }
+};
+const writeActiveBackendToStorage = async (value: string): Promise<void> => {
+  const normalized = normalizeBackendBaseUrl(value);
+  try {
+    if (normalized) {
+      await AsyncStorage.setItem(ACTIVE_BACKEND_STORAGE_KEY, normalized);
+    } else {
+      await AsyncStorage.removeItem(ACTIVE_BACKEND_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore active backend persistence failure.
+  }
+};
 const buildDevBackendBaseUrl = (prodBaseUrl: string): string => {
   const normalized = normalizeBackendBaseUrl(prodBaseUrl);
   try {
@@ -832,9 +1025,33 @@ const buildDevBackendBaseUrl = (prodBaseUrl: string): string => {
     return 'http://wowjini0228.synology.me:7084';
   }
 };
-const LOCATION_BACKGROUND_TASK = 'ourhangout.location.heartbeat';
-const LOCATION_HEARTBEAT_MS = 10 * 60 * 1000;
 const LOCATION_PRECISION_REFRESH_POLL_MS = 30 * 1000;
+const LOCATION_VIEW_TIMEOUT_MS = 15 * 1000;
+const LOCATION_VIEW_POLL_MS = 1500;
+const LOCATION_VIEW_CAPTURE_GRACE_MS = 10 * 1000;
+const LOCATION_BACKGROUND_NOTIFICATION_TASK = 'ourhangout.location.notification';
+const LOCATION_BACKGROUND_SNAPSHOT_TASK = 'ourhangout.location.snapshot';
+const LOCATION_BACKGROUND_MIN_INTERVAL_MINUTES = 60;
+const NativeLocationCapture = NativeModules.LocationCaptureModule as
+  | {
+      startCapture: (
+        baseUrl: string,
+        accessToken: string,
+        refreshToken: string,
+        source: 'heartbeat' | 'precision_refresh' | 'manual_refresh',
+        precise: boolean
+      ) => Promise<boolean>;
+      startCaptureWithRequest: (
+        baseUrl: string,
+        requestToken: string,
+        source: 'precision_refresh' | 'manual_refresh',
+        precise: boolean
+      ) => Promise<boolean>;
+      readSession: () => Promise<{ accessToken?: string; refreshToken?: string } | null>;
+      storeSession: (accessToken: string, refreshToken?: string) => Promise<boolean>;
+      clearSession: () => Promise<boolean>;
+    }
+  | undefined;
 const MODULE_BACKEND_BASE_URL =
   normalizeBackendBaseUrl(
     String(
@@ -843,8 +1060,9 @@ const MODULE_BACKEND_BASE_URL =
     )
   ) || 'http://wowjini0228.synology.me:7083';
 const getStoredBackendBaseUrlForLocation = async (): Promise<string> => {
+  const activeBackend = await readActiveBackendFromStorage().catch(() => '');
   const override = await readBackendOverrideFromStorage().catch(() => '');
-  return normalizeBackendBaseUrl(override) || MODULE_BACKEND_BASE_URL;
+  return normalizeBackendBaseUrl(activeBackend) || normalizeBackendBaseUrl(override) || MODULE_BACKEND_BASE_URL;
 };
 const uploadLocationToBackend = async (params: {
   latitude: number;
@@ -857,7 +1075,21 @@ const uploadLocationToBackend = async (params: {
   const token = (session?.accessToken || '').trim();
   if (!token) return;
   const backendBaseUrl = await getStoredBackendBaseUrlForLocation();
+  logSessionTrace('location_upload:base_url', {
+    source: params.source,
+    backendBaseUrl,
+  });
   if (!backendBaseUrl) return;
+  await fetch(`${backendBaseUrl}/v1/me`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      locationSharingEnabled: true,
+    }),
+  }).catch(() => null);
   await fetch(`${backendBaseUrl}/v1/me/location`, {
     method: 'POST',
     headers: {
@@ -873,27 +1105,147 @@ const uploadLocationToBackend = async (params: {
     }),
   }).catch(() => null);
 };
+const consumeLocationPrecisionRequestToBackend = async (params: {
+  requestToken: string;
+  latitude: number;
+  longitude: number;
+  accuracyM?: number | null;
+  capturedAt?: string;
+  source?: 'precision_refresh' | 'manual_refresh';
+  backendBaseUrl?: string;
+}): Promise<void> => {
+  const backendBaseUrl = normalizeBackendBaseUrl(params.backendBaseUrl) || (await getStoredBackendBaseUrlForLocation());
+  if (!backendBaseUrl || !params.requestToken.trim()) return;
+  await fetch(`${backendBaseUrl}/v1/location-precision/consume`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      requestToken: params.requestToken.trim(),
+      latitude: params.latitude,
+      longitude: params.longitude,
+      ...(typeof params.accuracyM === 'number' ? { accuracyM: params.accuracyM } : {}),
+      ...(params.capturedAt ? { capturedAt: params.capturedAt } : {}),
+      source: params.source || 'precision_refresh',
+    }),
+  }).catch(() => null);
+};
+const captureAndUploadLocationInBackground = async (
+  source: 'heartbeat' | 'precision_refresh' | 'manual_refresh',
+  precise = false,
+  options?: {
+    requestToken?: string;
+    backendBaseUrl?: string;
+  }
+): Promise<boolean> => {
+  const permission =
+    Platform.OS === 'android'
+      ? await Location.getBackgroundPermissionsAsync().catch(() => null)
+      : await Location.getForegroundPermissionsAsync().catch(() => null);
+  if (permission?.status !== 'granted') {
+    return false;
+  }
+  const position = await Location.getCurrentPositionAsync({
+    accuracy: precise ? Location.Accuracy.Highest : Location.Accuracy.Balanced,
+  }).catch(() => null);
+  if (!position) return false;
+  if (options?.requestToken && (source === 'precision_refresh' || source === 'manual_refresh')) {
+    await consumeLocationPrecisionRequestToBackend({
+      requestToken: options.requestToken,
+      backendBaseUrl: options.backendBaseUrl,
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracyM: typeof position.coords.accuracy === 'number' ? position.coords.accuracy : null,
+      capturedAt: new Date().toISOString(),
+      source,
+    });
+  } else {
+    await uploadLocationToBackend({
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracyM: typeof position.coords.accuracy === 'number' ? position.coords.accuracy : null,
+      capturedAt: new Date(position.timestamp).toISOString(),
+      source,
+    });
+  }
+  return true;
+};
+const startManagedLocationCapture = async (
+  source: 'heartbeat' | 'precision_refresh' | 'manual_refresh',
+  precise = false,
+  options?: {
+    requestToken?: string;
+    backendBaseUrl?: string;
+  }
+): Promise<boolean> => {
+  if (Platform.OS !== 'android') {
+    return captureAndUploadLocationInBackground(source, precise, options);
+  }
+  const permission = await Location.getBackgroundPermissionsAsync().catch(() => null);
+  if (permission?.status !== 'granted') {
+    return false;
+  }
+  const requestToken = (options?.requestToken || '').trim();
+  const requestBackendBaseUrl = normalizeBackendBaseUrl(options?.backendBaseUrl) || (await getStoredBackendBaseUrlForLocation());
+  if (requestToken && NativeLocationCapture?.startCaptureWithRequest && requestBackendBaseUrl) {
+    const started = await NativeLocationCapture.startCaptureWithRequest(
+      requestBackendBaseUrl,
+      requestToken,
+      source === 'manual_refresh' ? 'manual_refresh' : 'precision_refresh',
+      precise
+    ).catch(() => false);
+    return !!started;
+  }
+  const session = await readSessionFromStorage().catch(() => null);
+  const accessToken = (session?.accessToken || '').trim();
+  const refreshToken = (session?.refreshToken || '').trim();
+  const backendBaseUrl = await getStoredBackendBaseUrlForLocation();
+  logSessionTrace('location_capture:start', {
+    source,
+    precise,
+    backendBaseUrl,
+    hasAccessToken: !!accessToken,
+    hasRefreshToken: !!refreshToken,
+  });
+  if ((!accessToken && !refreshToken) || !backendBaseUrl || !NativeLocationCapture?.startCapture) {
+    return false;
+  }
+  const started = await NativeLocationCapture.startCapture(backendBaseUrl, accessToken, refreshToken, source, precise).catch(
+    () => false
+  );
+  return !!started;
+};
 
 try {
-  if (!TaskManager.isTaskDefined(LOCATION_BACKGROUND_TASK)) {
-    TaskManager.defineTask(LOCATION_BACKGROUND_TASK, async ({ data, error }) => {
-      if (error || !data) return;
-      const payload = data as { locations?: Array<{ coords?: { latitude?: number; longitude?: number; accuracy?: number | null }; timestamp?: number }> };
-      const latest = Array.isArray(payload.locations) ? payload.locations[payload.locations.length - 1] : null;
-      const latitude = Number(latest?.coords?.latitude ?? Number.NaN);
-      const longitude = Number(latest?.coords?.longitude ?? Number.NaN);
-      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
-      await uploadLocationToBackend({
-        latitude,
-        longitude,
-        accuracyM: typeof latest?.coords?.accuracy === 'number' ? latest.coords.accuracy : null,
-        capturedAt: latest?.timestamp ? new Date(latest.timestamp).toISOString() : new Date().toISOString(),
-        source: 'heartbeat',
-      });
+  if (!TaskManager.isTaskDefined(LOCATION_BACKGROUND_SNAPSHOT_TASK)) {
+    TaskManager.defineTask(LOCATION_BACKGROUND_SNAPSHOT_TASK, async () => {
+      try {
+        const ok = await startManagedLocationCapture('heartbeat', false);
+        return ok ? BackgroundTask.BackgroundTaskResult.Success : BackgroundTask.BackgroundTaskResult.Failed;
+      } catch {
+        return BackgroundTask.BackgroundTaskResult.Failed;
+      }
+    });
+  }
+  if (!TaskManager.isTaskDefined(LOCATION_BACKGROUND_NOTIFICATION_TASK)) {
+    TaskManager.defineTask<Notifications.NotificationTaskPayload>(LOCATION_BACKGROUND_NOTIFICATION_TASK, async ({ data }) => {
+      if ('actionIdentifier' in data) {
+        return Notifications.BackgroundNotificationTaskResult.NoData;
+      }
+      const payload = typeof data?.data?.dataString === 'string' ? JSON.parse(data.data.dataString) : data?.data || {};
+      if ((payload as { locationAction?: string }).locationAction !== 'refresh') {
+        return Notifications.BackgroundNotificationTaskResult.NoData;
+      }
+      const ok = await startManagedLocationCapture('precision_refresh', true, {
+        requestToken: String((payload as { requestToken?: string }).requestToken || ''),
+        backendBaseUrl: String((payload as { backendBaseUrl?: string }).backendBaseUrl || ''),
+      }).catch(() => false);
+      return ok ? Notifications.BackgroundNotificationTaskResult.NewData : Notifications.BackgroundNotificationTaskResult.Failed;
     });
   }
 } catch {
-  // Ignore task registration issues during hot reload or unsupported runtimes.
+  // Ignore duplicate registration and unsupported runtime cases.
 }
 const getRuntimeAppVersion = (): string => {
   const constantsAny = Constants as unknown as {
@@ -1601,6 +1953,9 @@ function App() {
   const [familyRequestsOutgoing, setFamilyRequestsOutgoing] = useState<FamilyUpgradeRequestItem[]>([]);
   const [friendActionKey, setFriendActionKey] = useState('');
   const [familyActionKey, setFamilyActionKey] = useState('');
+  const [roomInvitationsIncoming, setRoomInvitationsIncoming] = useState<RoomInvitationItem[]>([]);
+  const [roomInvitationsOutgoing, setRoomInvitationsOutgoing] = useState<RoomInvitationItem[]>([]);
+  const [roomInvitationActionKey, setRoomInvitationActionKey] = useState('');
   const [isFriendSyncing, setIsFriendSyncing] = useState(false);
   const [showFamilyPickerModal, setShowFamilyPickerModal] = useState(false);
   const [showFamilyUpgradeModal, setShowFamilyUpgradeModal] = useState(false);
@@ -1616,6 +1971,7 @@ function App() {
   const [groupPick, setGroupPick] = useState<string[]>([]);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [isUpdatingLocationSharing, setIsUpdatingLocationSharing] = useState(false);
+  const [locationPermissionGranted, setLocationPermissionGranted] = useState(false);
   const [familyRoomLocations, setFamilyRoomLocations] = useState<UserLocationCard[]>([]);
   const [isFamilyRoomLocationsLoading, setIsFamilyRoomLocationsLoading] = useState(false);
   const [familyRoomLocationActionKey, setFamilyRoomLocationActionKey] = useState('');
@@ -1677,10 +2033,34 @@ function App() {
   const roomReadCutoffRef = useRef<Record<string, number>>({});
   const pushTokenRef = useRef('');
   const registeredPushTokenRef = useRef('');
+  const sessionInvalidRecoveryInFlightRef = useRef(false);
   const notificationResponseSubRef = useRef<Notifications.EventSubscription | null>(null);
   const friendTabRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const friendTabRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const backendBaseUrl = normalizeBackendBaseUrl(backendOverrideUrl) || defaultBackendBaseUrl;
+
+  const applyPersistedAppSnapshot = (snapshot: PersistedAppSnapshot | null) => {
+    if (!snapshot) return;
+    if (snapshot.profile) {
+      setProfile((prev) => ({ ...prev, ...snapshot.profile }));
+      setNameDraft(snapshot.profile.name || '');
+      setStatusDraft(snapshot.profile.status || '');
+      setProfilePhotoDraft(snapshot.profile.avatarUri || '');
+    }
+    if (Array.isArray(snapshot.friends)) setFriends(snapshot.friends);
+    if (Array.isArray(snapshot.bots)) setBots(snapshot.bots);
+    if (Array.isArray(snapshot.rooms)) setRooms(snapshot.rooms);
+    if (snapshot.currentUserId) setCurrentUserId(snapshot.currentUserId);
+    if (snapshot.tab === 'friends' || snapshot.tab === 'chats' || snapshot.tab === 'profile') {
+      setTab(snapshot.tab);
+    }
+    if (snapshot.chatsMode === 'direct' || snapshot.chatsMode === 'group') {
+      setChatsMode(snapshot.chatsMode);
+    }
+    if (snapshot.directReadCutoffs) {
+      setDirectReadCutoffs(snapshot.directReadCutoffs);
+    }
+  };
   const backendOrigin = useMemo(() => {
     try {
       return new URL(backendBaseUrl).origin;
@@ -1913,7 +2293,7 @@ function App() {
   );
 
   const roomMap = useMemo(() => new Map(rooms.map((r) => [r.id, r])), [rooms]);
-  const knockCount = friendRequestsIncoming.length + friendRequestsOutgoing.length;
+  const knockCount = friendRequestsIncoming.length + friendRequestsOutgoing.length + roomInvitationsIncoming.length;
   const activeRoomCompanions = activeRoom?.members.filter((m) => m !== currentUserId).length ?? 0;
   const topAvatarUri = tab === 'chats' && activeRoom ? roomAvatarUri(activeRoom) : profile.avatarUri;
   const familyUpgradeTarget = useMemo(
@@ -1932,6 +2312,21 @@ function App() {
     () => (roomMembersRoomId ? roomMap.get(roomMembersRoomId) ?? null : null),
     [roomMembersRoomId, roomMap]
   );
+  const roomMembersPendingInvitations = useMemo(
+    () =>
+      roomMembersRoomId
+        ? roomInvitationsOutgoing.filter(
+            (invitation) => invitation.roomId === roomMembersRoomId && invitation.status === 'pending'
+          )
+        : [],
+    [roomInvitationsOutgoing, roomMembersRoomId]
+  );
+  const roomMembersInviteableFriends = useMemo(() => {
+    if (!roomMembersRoomId) return [];
+    const memberIds = new Set(roomMembers.map((member) => member.userId));
+    const pendingTargetIds = new Set(roomMembersPendingInvitations.map((invitation) => invitation.targetUserId));
+    return friends.filter((friend) => !memberIds.has(friend.id) && !pendingTargetIds.has(friend.id));
+  }, [friends, roomMembers, roomMembersPendingInvitations, roomMembersRoomId]);
   const familyStructureProfileMap = useMemo(
     () => new Map(familyStructureProfiles.map((profile) => [profile.userId, profile])),
     [familyStructureProfiles]
@@ -2037,6 +2432,10 @@ function App() {
       }
     };
   }, [defaultBackendBaseUrl]);
+  useEffect(() => {
+    if (!isBackendConfigReady) return;
+    void writeActiveBackendToStorage(backendBaseUrl);
+  }, [backendBaseUrl, isBackendConfigReady]);
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
@@ -2238,6 +2637,26 @@ function App() {
     return () => sub.remove();
   }, []);
   useEffect(() => {
+    if (appVisibility !== 'active') return;
+    let cancelled = false;
+    const run = async () => {
+      const stored = await readSessionFromStorage().catch(() => null);
+      if (cancelled || !stored?.accessToken) return;
+      const storedAccessToken = stored.accessToken.trim();
+      const storedRefreshToken = (stored.refreshToken || '').trim();
+      if (
+        storedAccessToken &&
+        (storedAccessToken !== accessTokenRef.current.trim() || storedRefreshToken !== refreshTokenRef.current.trim())
+      ) {
+        setSessionTokens(storedAccessToken, storedRefreshToken);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [appVisibility]);
+  useEffect(() => {
     if (!activeRoomId) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       void closeActiveRoom();
@@ -2253,7 +2672,11 @@ function App() {
       if (backendState !== 'ready') return;
       const token = accessToken.trim();
       if (!token) return;
-      void Promise.all([refreshFriendTabData({ silent: true }), refreshRoomsFromBackend(token)]).catch(() => null);
+      void Promise.all([
+        refreshFriendTabData({ silent: true }),
+        refreshRoomsFromBackend(token),
+        refreshRoomInvitations(token),
+      ]).catch(() => null);
       if (activeRoomRef.current) {
         void syncRoomReadState(token, activeRoomRef.current, { refreshMessages: true }).catch(() => null);
       }
@@ -2297,6 +2720,21 @@ function App() {
   useEffect(() => {
     refreshTokenRef.current = refreshToken.trim();
   }, [refreshToken]);
+
+  useEffect(() => {
+    if (stage !== 'app') return;
+    if (isSessionRestoring) return;
+    void writeAppSnapshotToStorage({
+      profile,
+      friends,
+      bots,
+      rooms,
+      currentUserId,
+      tab,
+      chatsMode,
+      directReadCutoffs,
+    });
+  }, [stage, isSessionRestoring, profile, friends, bots, rooms, currentUserId, tab, chatsMode, directReadCutoffs]);
 
   useEffect(() => {
     if (tab !== 'chats') return;
@@ -2367,9 +2805,19 @@ function App() {
   };
 
   const refreshAccessToken = async (preferredRefreshToken?: string): Promise<string> => {
+    const persisted = await readSessionFromStorage().catch(() => null);
+    const persistedAccessToken = (persisted?.accessToken || '').trim();
+    const persistedRefreshToken = (persisted?.refreshToken || '').trim();
+    if (
+      persistedAccessToken &&
+      (persistedAccessToken !== accessTokenRef.current.trim() || persistedRefreshToken !== refreshTokenRef.current.trim())
+    ) {
+      setSessionTokens(persistedAccessToken, persistedRefreshToken);
+      return persistedAccessToken;
+    }
     const preferred = (preferredRefreshToken || '').trim();
     const current = refreshTokenRef.current.trim();
-    const tokenToUse = current || preferred;
+    const tokenToUse = persistedRefreshToken || current || preferred;
     if (!tokenToUse) {
       throw new Error('missing refresh token');
     }
@@ -2378,42 +2826,62 @@ function App() {
     }
 
     const request = (async () => {
-      let refreshed: Response;
-      try {
-        refreshed = await fetch(`${backendBaseUrl}/v1/auth/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken: tokenToUse }),
-        });
-      } catch (error) {
-        throw createBackendRequestError(errorMessage(error) || 'Network request failed.', {
-          code: 'NETWORK_ERROR',
-        });
-      }
-      const refreshText = await refreshed.text();
-      let refreshJson: unknown = null;
-      if (refreshText) {
+      const performRefresh = async (refreshTokenCandidate: string): Promise<string> => {
+        let refreshed: Response;
         try {
-          refreshJson = JSON.parse(refreshText);
-        } catch {
-          refreshJson = {};
+          refreshed = await fetch(`${backendBaseUrl}/v1/auth/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshToken: refreshTokenCandidate }),
+          });
+        } catch (error) {
+          throw createBackendRequestError(errorMessage(error) || 'Network request failed.', {
+            code: 'NETWORK_ERROR',
+          });
         }
+        const refreshText = await refreshed.text();
+        let refreshJson: unknown = null;
+        if (refreshText) {
+          try {
+            refreshJson = JSON.parse(refreshText);
+          } catch {
+            refreshJson = {};
+          }
+        }
+        if (!refreshed.ok) {
+          throw toBackendRequestError(refreshJson || {}, `HTTP ${refreshed.status}`, refreshed.status);
+        }
+        const refreshData = unwrapEnvelope<BackendAuthData>(refreshJson || {});
+        const nextAccessToken = (refreshData.accessToken || refreshData.tokens?.accessToken || '').trim();
+        const nextRefreshToken = (refreshData.refreshToken || refreshData.tokens?.refreshToken || refreshTokenCandidate).trim();
+        if (!nextAccessToken) {
+          throw new Error('missing access token');
+        }
+        setSessionTokens(nextAccessToken, nextRefreshToken);
+        await writeSessionToStorage({
+          accessToken: nextAccessToken,
+          ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {}),
+        });
+        return nextAccessToken;
+      };
+
+      try {
+        return await performRefresh(tokenToUse);
+      } catch (error) {
+        if (!isSessionInvalidError(error)) {
+          throw error;
+        }
+        const latestStored = await readSessionFromStorage().catch(() => null);
+        const latestRefreshToken = (latestStored?.refreshToken || refreshTokenRef.current.trim()).trim();
+        if (latestRefreshToken && latestRefreshToken !== tokenToUse) {
+          logSessionTrace('auth:refresh_retry_latest_token', {
+            previousTokenLength: tokenToUse.length,
+            latestTokenLength: latestRefreshToken.length,
+          });
+          return performRefresh(latestRefreshToken);
+        }
+        throw error;
       }
-      if (!refreshed.ok) {
-        throw toBackendRequestError(refreshJson || {}, `HTTP ${refreshed.status}`, refreshed.status);
-      }
-      const refreshData = unwrapEnvelope<BackendAuthData>(refreshJson || {});
-      const nextAccessToken = (refreshData.accessToken || refreshData.tokens?.accessToken || '').trim();
-      const nextRefreshToken = (refreshData.refreshToken || refreshData.tokens?.refreshToken || tokenToUse).trim();
-      if (!nextAccessToken) {
-        throw new Error('missing access token');
-      }
-      setSessionTokens(nextAccessToken, nextRefreshToken);
-      await writeSessionToStorage({
-        accessToken: nextAccessToken,
-        ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {}),
-      });
-      return nextAccessToken;
     })();
 
     refreshRequestRef.current = request;
@@ -2696,10 +3164,34 @@ function App() {
     return completedUrl;
   };
 
-  const requireAccessToken = (): string => {
-    const token = accessToken.trim();
+  const requireAccessToken = async (): Promise<string> => {
+    const token = accessTokenRef.current.trim() || accessToken.trim();
     if (token) return token;
-    Alert.alert(s.needsLoginTitle, s.needsLoginBody);
+
+    const stored = await readSessionFromStorage().catch(() => null);
+    const storedAccessToken = (stored?.accessToken || '').trim();
+    const storedRefreshToken = (stored?.refreshToken || '').trim();
+    if (storedAccessToken) {
+      setSessionTokens(storedAccessToken, storedRefreshToken);
+      return storedAccessToken;
+    }
+
+    const refreshTokenToUse = storedRefreshToken || refreshTokenRef.current.trim();
+    if (refreshTokenToUse) {
+      try {
+        const refreshedAccessToken = await refreshAccessToken(refreshTokenToUse);
+        if (refreshedAccessToken) {
+          return refreshedAccessToken;
+        }
+      } catch (error) {
+        logSessionTrace('auth:require_token_refresh_failed', {
+          message: errorMessage(error),
+        });
+        return '';
+      }
+    }
+
+    logSessionTrace('auth:require_token_missing');
     return '';
   };
 
@@ -2833,7 +3325,16 @@ function App() {
 
   const registerPushTokenWithBackend = async (pushToken: string, token: string) => {
     if (!pushToken || !token) return;
-    if (registeredPushTokenRef.current === pushToken) return;
+    const registrationKey = `${backendBaseUrl}|${pushPlatform}|${pushToken}`;
+    if (registeredPushTokenRef.current === registrationKey) {
+      logSessionTrace('push_token:register_skip', { backendBaseUrl, pushPlatform });
+      return;
+    }
+    logSessionTrace('push_token:register_start', {
+      backendBaseUrl,
+      pushPlatform,
+      pushTokenSuffix: pushToken.slice(-12),
+    });
     await backendRequest(
       '/v1/push-tokens',
       {
@@ -2845,11 +3346,19 @@ function App() {
       },
       token
     );
-    registeredPushTokenRef.current = pushToken;
+    registeredPushTokenRef.current = registrationKey;
+    logSessionTrace('push_token:register_done', {
+      backendBaseUrl,
+      pushPlatform,
+      pushTokenSuffix: pushToken.slice(-12),
+    });
   };
 
   const requestDevicePushToken = async (): Promise<string> => {
-    if (!Device.isDevice) return '';
+    if (!Device.isDevice) {
+      logSessionTrace('push_token:skip_simulator');
+      return '';
+    }
 
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync('messages', {
@@ -2860,30 +3369,56 @@ function App() {
       });
     }
 
-    const existing = await Notifications.getPermissionsAsync();
-    let status = existing.status;
-    if (status !== 'granted') {
-      const requested = await Notifications.requestPermissionsAsync();
-      status = requested.status;
+    const existing = await Notifications.getPermissionsAsync().catch(() => null);
+    let status = existing?.status ?? 'undetermined';
+    if (status === 'undetermined') {
+      const requested = await Notifications.requestPermissionsAsync().catch(() => null);
+      status = requested?.status ?? status;
     }
-    if (status !== 'granted') return '';
+    logSessionTrace('push_token:permission', { platform: Platform.OS, status });
+    if (Platform.OS !== 'android' && status !== 'granted') {
+      return '';
+    }
+    if (Platform.OS === 'android' && status !== 'granted') {
+      logSessionTrace('push_token:android_permission_not_granted', { status });
+    }
 
     try {
       const result = await Notifications.getDevicePushTokenAsync();
       const pushToken = typeof result.data === 'string' ? result.data.trim() : '';
       if (pushToken) {
         pushTokenRef.current = pushToken;
+        logSessionTrace('push_token:fetched', {
+          platform: Platform.OS,
+          pushTokenSuffix: pushToken.slice(-12),
+        });
+      } else {
+        logSessionTrace('push_token:empty', { platform: Platform.OS });
       }
       return pushToken;
-    } catch {
+    } catch (error) {
+      logSessionTrace('push_token:fetch_failed', {
+        platform: Platform.OS,
+        message: error instanceof Error ? error.message : 'unknown',
+      });
       return '';
     }
   };
 
-  const requestLocationPermissionsForSharing = async (): Promise<boolean> => {
-    const foreground = await Location.requestForegroundPermissionsAsync();
-    if (foreground.status !== 'granted') {
-      Alert.alert(
+  const requestLocationPermissionsForSharingLegacy = async (request = false): Promise<boolean> => {
+    const current = await Location.getForegroundPermissionsAsync().catch(() => null);
+    let foregroundStatus = current?.status ?? 'undetermined';
+    if (request && foregroundStatus !== 'granted') {
+      const requested = await Location.requestForegroundPermissionsAsync().catch(() => null);
+      foregroundStatus = requested?.status ?? 'denied';
+    }
+    if (foregroundStatus === 'granted') {
+      return true;
+    }
+    if (!request) {
+      return false;
+    }
+    Alert.alert(
         isKo ? '위치 권한이 필요해요' : 'Location permission required',
         isKo ? '위치 공유를 켜려면 위치 권한을 허용해 주세요.' : 'Allow location access to enable location sharing.',
         [
@@ -2897,8 +3432,7 @@ function App() {
         ]
       );
       return false;
-    }
-
+/*
     if (Platform.OS === 'android') {
       const background = await Location.requestBackgroundPermissionsAsync();
       if (background.status !== 'granted') {
@@ -2922,18 +3456,95 @@ function App() {
     }
 
     return true;
+*/
+    return false;
   };
 
-  const stopLocationHeartbeat = async () => {
-    const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_BACKGROUND_TASK).catch(() => false);
-    if (hasStarted) {
-      await Location.stopLocationUpdatesAsync(LOCATION_BACKGROUND_TASK).catch(() => null);
+  const readLocationPermissionGrantedLegacy = async (): Promise<boolean> => {
+    if (Platform.OS === 'android') {
+      const background = await Location.getBackgroundPermissionsAsync().catch(() => null);
+      return background?.status === 'granted';
     }
+    const current = await Location.getForegroundPermissionsAsync().catch(() => null);
+    return current?.status === 'granted';
+  };
+
+  const requestLocationPermissionsForSharing = async (request = false): Promise<boolean> => {
+    const current = await Location.getForegroundPermissionsAsync().catch(() => null);
+    let foregroundStatus = current?.status ?? 'undetermined';
+    if (request && foregroundStatus !== 'granted') {
+      const requested = await Location.requestForegroundPermissionsAsync().catch(() => null);
+      foregroundStatus = requested?.status ?? 'denied';
+    }
+    if (foregroundStatus !== 'granted') {
+      if (request) {
+        Alert.alert(
+          isKo ? '위치 권한이 필요해요' : 'Location permission required',
+          isKo ? '위치 공유를 사용하려면 위치 권한을 허용해 주세요.' : 'Allow location access to enable location sharing.',
+          [
+            { text: isKo ? '취소' : 'Cancel', style: 'cancel' },
+            {
+              text: isKo ? '설정 열기' : 'Open settings',
+              onPress: () => {
+                void Linking.openSettings().catch(() => null);
+              },
+            },
+          ]
+        );
+      }
+      return false;
+    }
+
+    if (Platform.OS === 'android') {
+      const background = await Location.getBackgroundPermissionsAsync().catch(() => null);
+      let backgroundStatus = background?.status ?? 'undetermined';
+      if (request && backgroundStatus !== 'granted') {
+        const requested = await Location.requestBackgroundPermissionsAsync().catch(() => null);
+        backgroundStatus = requested?.status ?? 'denied';
+      }
+      if (backgroundStatus !== 'granted') {
+        if (request) {
+          Alert.alert(
+            isKo ? '항상 허용이 필요해요' : 'Always allow is required',
+            isKo
+              ? '가족 위치 요청에 응답하려면 Android 위치 권한을 항상 허용으로 바꿔 주세요.'
+              : 'Set Android location access to Always Allow so the app can answer family location requests.',
+            [
+              { text: isKo ? '취소' : 'Cancel', style: 'cancel' },
+              {
+                text: isKo ? '설정 열기' : 'Open settings',
+                onPress: () => {
+                  void Linking.openSettings().catch(() => null);
+                },
+              },
+            ]
+          );
+        }
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  const readLocationPermissionGranted = async (): Promise<boolean> => requestLocationPermissionsForSharing(false);
+
+  const stopLocationHeartbeat = async () => {
+    return;
+  };
+
+  const syncLocationForegroundChannel = async () => {
+    return;
   };
 
   const startLocationHeartbeat = async () => {
+    return;
+/*
     const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_BACKGROUND_TASK).catch(() => false);
-    if (hasStarted) return;
+    if (hasStarted) {
+      await syncLocationForegroundChannel().catch(() => null);
+      return;
+    }
 
     await Location.startLocationUpdatesAsync(LOCATION_BACKGROUND_TASK, {
       accuracy: Location.Accuracy.Balanced,
@@ -2949,6 +3560,8 @@ function App() {
           }
         : {}),
     });
+    await syncLocationForegroundChannel().catch(() => null);
+*/
   };
 
   const runOneShotLocationUpdate = async (
@@ -2979,20 +3592,8 @@ function App() {
   };
 
   const syncLocationSharingRuntime = async (enabled: boolean, options?: { immediate?: boolean }) => {
-    if (!enabled) {
-      await stopLocationHeartbeat();
-      return;
-    }
-
-    const granted = await requestLocationPermissionsForSharing();
-    if (!granted) {
-      throw new Error('Location permission was not granted.');
-    }
-
-    await startLocationHeartbeat();
-    if (options?.immediate) {
-      await runOneShotLocationUpdate('manual_refresh').catch(() => null);
-    }
+    void enabled;
+    void options;
   };
 
   const checkPendingPrecisionLocationRefresh = async () => {
@@ -3005,6 +3606,60 @@ function App() {
     ).catch(() => null);
     if (!refresh?.pending) return;
     await runOneShotLocationUpdate('precision_refresh', true).catch(() => null);
+  };
+
+  const waitForFamilyRoomLocationUpdate = async (
+    roomId: string,
+    targetUserId: string,
+    requestedAtMs: number,
+    previousCapturedAt?: number | null
+  ): Promise<UserLocationCard | null> => {
+    const token = accessToken.trim();
+    if (!token || !roomId || !targetUserId) return null;
+    const deadline = Date.now() + LOCATION_VIEW_TIMEOUT_MS;
+    while (Date.now() <= deadline) {
+      const raw = await backendRequest<BackendFamilyRoomLocationList>(`/v1/rooms/${roomId}/locations`, { method: 'GET' }, token).catch(
+        (error) => {
+          logSessionTrace('location_refresh:poll_failed', {
+            roomId,
+            targetUserId,
+            message: errorMessage(error),
+          });
+          return null;
+        }
+      );
+      if (raw) {
+        const items = mapUserLocations(raw.items);
+        setFamilyRoomLocations(items);
+        const match = items.find((item) => item.userId === targetUserId) ?? null;
+        if (match) {
+          const isFreshByRequestTime = match.capturedAt >= requestedAtMs - LOCATION_VIEW_CAPTURE_GRACE_MS;
+          const isFreshByDelta = !!previousCapturedAt && match.capturedAt > previousCapturedAt;
+          const isFresh = isFreshByRequestTime || isFreshByDelta;
+          logSessionTrace('location_refresh:poll_match', {
+            roomId,
+            targetUserId,
+            requestedAtMs,
+            previousCapturedAt: previousCapturedAt ?? null,
+            matchCapturedAt: match.capturedAt,
+            matchSource: match.source,
+            isFreshByRequestTime,
+            isFreshByDelta,
+          });
+          if (isFresh) {
+            return match;
+          }
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, LOCATION_VIEW_POLL_MS));
+    }
+    logSessionTrace('location_refresh:poll_timeout', {
+      roomId,
+      targetUserId,
+      requestedAtMs,
+      previousCapturedAt: previousCapturedAt ?? null,
+    });
+    return null;
   };
 
   const refreshFamilyRoomLocations = async (roomId: string) => {
@@ -3024,14 +3679,51 @@ function App() {
   const requestFamilyRoomLocationPrecisionRefresh = async (roomId: string, targetUserId: string) => {
     const token = accessToken.trim();
     if (!token || !roomId || !targetUserId) return;
-    const actionKey = `location-refresh:${targetUserId}`;
+    const actionKey = `location-view:${targetUserId}`;
     setFamilyRoomLocationActionKey(actionKey);
     try {
-      await backendRequest(`/v1/rooms/${roomId}/locations/${targetUserId}/refresh`, { method: 'POST' }, token);
-      Alert.alert(isKo ? '정확한 위치 새로고침을 요청했어요.' : 'Requested a precise location refresh.');
+      const previousCapturedAt = familyRoomLocations.find((item) => item.userId === targetUserId)?.capturedAt ?? null;
+      const refresh = await backendRequest<BackendLocationRefreshRequest>(
+        `/v1/rooms/${roomId}/locations/${targetUserId}/refresh`,
+        { method: 'POST' },
+        token
+      );
+      const requestedAtMs = parseTimestamp(refresh.requestedAt || new Date().toISOString());
+      const updated = await waitForFamilyRoomLocationUpdate(roomId, targetUserId, requestedAtMs, previousCapturedAt);
+      if (!updated) {
+        Alert.alert(
+          isKo ? '위치 업데이트에 실패했어요' : 'Location update failed',
+          isKo
+            ? '15초 안에 상대방 위치가 업데이트되지 않았어요. 상대방 앱이 열려 있는지 확인한 뒤 다시 시도해 주세요.'
+            : 'The other device did not update its location within 15 seconds. Check that the app is open and try again.'
+        );
+        return;
+      }
+      Alert.alert(
+        isKo ? '위치가 업데이트되었어요' : 'Location updated',
+        isKo ? '최신 위치가 저장되었어요. 아래 지도 열기로 확인할 수 있어요.' : 'The latest location has been saved. Use Open map below to view it.'
+      );
+      return;
+      Alert.alert(
+        isKo ? '위치가 업데이트되었어요' : 'Location updated',
+        isKo ? '업데이트된 위치를 지도에서 열어요.' : 'Open the updated location on the map.',
+        [
+          {
+            text: isKo ? '지도 보기' : 'Open map',
+            onPress: () => {
+              void openLocationMap(updated!.latitude, updated!.longitude);
+            },
+          },
+          { text: isKo ? '닫기' : 'Close', style: 'cancel' },
+        ]
+      );
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '';
-      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+      Alert.alert(
+        isKo ? '위치 업데이트에 실패했어요' : 'Location update failed',
+        isKo
+          ? '상대방 위치를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.'
+          : 'Could not refresh the other device location. Please try again shortly.'
+      );
     } finally {
       setFamilyRoomLocationActionKey('');
     }
@@ -3060,6 +3752,7 @@ function App() {
         name: String(item.name),
         avatarUri: resolveBackendMediaUrl(String(item.avatarUri || '')),
         alias: String(item.alias || ''),
+        locationSharingEnabled: !!item.locationSharingEnabled,
       }));
   };
   const mapFamilyRoomRelationships = (
@@ -3117,6 +3810,35 @@ function App() {
         isOwner: !!item.isOwner,
       }));
   };
+  const mapRoomInvitations = (value: BackendRoomInvitation[] | undefined): RoomInvitationItem[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter(
+        (item) =>
+          !!item?.id &&
+          !!item?.roomId &&
+          (item.roomType === 'group' || item.roomType === 'family') &&
+          !!item?.inviterUserId &&
+          !!item?.inviterName &&
+          !!item?.targetUserId &&
+          !!item?.targetName &&
+          !!item?.status
+      )
+      .map((item) => ({
+        id: String(item.id),
+        roomId: String(item.roomId),
+        roomType: item.roomType as RoomType,
+        roomTitle: String(item.roomTitle || ''),
+        inviterUserId: String(item.inviterUserId),
+        inviterName: String(item.inviterName),
+        inviterAvatarUri: resolveBackendMediaUrl(String(item.inviterAvatarUri || '')),
+        targetUserId: String(item.targetUserId),
+        targetName: String(item.targetName),
+        status: item.status as 'pending' | 'accepted' | 'rejected' | 'canceled' | 'expired',
+        createdAt: parseTimestamp(item.createdAt),
+      }))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  };
   const refreshFriendsAndRequests = async (token: string, options?: BackendSyncOptions) => {
     const strict = options?.strict ?? false;
     const [backFriendsRaw, requestsRaw] = strict
@@ -3166,6 +3888,16 @@ function App() {
       setFriendRequestsIncoming(mapFriendRequests(requestsRaw.incoming));
       setFriendRequestsOutgoing(mapFriendRequests(requestsRaw.outgoing));
     }
+  };
+  const refreshRoomInvitations = async (token: string, options?: BackendSyncOptions) => {
+    const strict = options?.strict ?? false;
+    const raw = strict
+      ? await backendRequest<BackendRoomInvitationList>('/v1/room-invitations', { method: 'GET' }, token)
+      : await backendRequest<BackendRoomInvitationList>('/v1/room-invitations', { method: 'GET' }, token).catch(() => null);
+    if (!raw) return null;
+    setRoomInvitationsIncoming(mapRoomInvitations(raw.incoming));
+    setRoomInvitationsOutgoing(mapRoomInvitations(raw.outgoing));
+    return raw;
   };
 
   const refreshBotsFromBackend = async (token: string) => {
@@ -3310,6 +4042,15 @@ function App() {
         });
         return null;
       }),
+      refreshRoomInvitations(token, { strict: true }).catch((error) => {
+        if (isSessionInvalidError(error)) {
+          throw error;
+        }
+        logSessionTrace('sync_initial:room_invitations_failed', {
+          message: errorMessage(error),
+        });
+        return null;
+      }),
     ]);
     logSessionTrace('sync_initial:done', {
       userId: nextUserId,
@@ -3412,9 +4153,18 @@ function App() {
             setActiveRoomId(null);
           }
           void refreshRoomsFromBackend(token);
+          void refreshRoomInvitations(token).catch(() => null);
+          if (roomId && roomMembersRoomId === roomId) {
+            void loadRoomMembers(token, roomId).catch(() => null);
+          }
           if (roomId && activeRoomRef.current === roomId) {
             void syncRoomMessagesFromBackend(token, roomId).catch(() => null);
           }
+          return;
+        }
+
+        if (payload.event === 'room.invitation.updated') {
+          void refreshRoomInvitations(token).catch(() => null);
           return;
         }
 
@@ -3425,9 +4175,18 @@ function App() {
         }
 
         if (payload.event === 'location.precision.requested') {
-          if (profile.locationSharingEnabled) {
-            void runOneShotLocationUpdate('precision_refresh', true).catch(() => null);
-          }
+          void (async () => {
+            const granted = await readLocationPermissionGranted().catch(() => false);
+            setLocationPermissionGranted(granted);
+            if (!granted) {
+              return;
+            }
+            const requestData = payload.data && typeof payload.data === 'object' ? payload.data : {};
+            await startManagedLocationCapture('precision_refresh', true, {
+              requestToken: String((requestData as { requestToken?: string }).requestToken || ''),
+              backendBaseUrl: String((requestData as { backendBaseUrl?: string }).backendBaseUrl || ''),
+            }).catch(() => null);
+          })();
           return;
         }
       } catch {
@@ -3463,52 +4222,63 @@ function App() {
       }
       socket.close();
     };
-  }, [accessToken, backendBaseUrl, backendState, wsRetryTick]);
+  }, [accessToken, backendBaseUrl, backendState, wsRetryTick, locationPermissionGranted, profile.locationSharingEnabled, roomMembersRoomId]);
 
   useEffect(() => {
     const token = accessToken.trim();
-    if (backendState !== 'ready' || !token) return;
+    if (backendState !== 'ready' || !token || appVisibility !== 'active') return;
     let cancelled = false;
 
     const run = async () => {
       const nativeToken = pushTokenRef.current || (await requestDevicePushToken());
-      if (!nativeToken || cancelled) return;
-      await registerPushTokenWithBackend(nativeToken, token).catch(() => null);
+      if (!nativeToken || cancelled) {
+        logSessionTrace('push_token:missing', {
+          backendBaseUrl,
+          hasCachedToken: Boolean(pushTokenRef.current),
+        });
+        return;
+      }
+      await registerPushTokenWithBackend(nativeToken, token).catch((error) => {
+        registeredPushTokenRef.current = '';
+        logSessionTrace('push_token:register_failed', {
+          backendBaseUrl,
+          message: error instanceof Error ? error.message : 'unknown',
+        });
+      });
     };
 
     void run();
     return () => {
       cancelled = true;
     };
-  }, [accessToken, backendState]);
+  }, [accessToken, backendBaseUrl, backendState, appVisibility]);
 
   useEffect(() => {
-    const token = accessToken.trim();
-    if (backendState !== 'ready' || !token) return;
     let cancelled = false;
     const run = async () => {
-      try {
-        await syncLocationSharingRuntime(profile.locationSharingEnabled, { immediate: profile.locationSharingEnabled });
-      } catch (error) {
-        if (cancelled) return;
-        if (profile.locationSharingEnabled) {
-          setProfile((prev) => ({ ...prev, locationSharingEnabled: false }));
-          await backendRequest(
-            '/v1/me',
-            {
-              method: 'PATCH',
-              body: JSON.stringify({ locationSharingEnabled: false }),
-            },
-            token
-          ).catch(() => null);
-        }
+      const granted = await readLocationPermissionGranted();
+      if (!cancelled) {
+        setLocationPermissionGranted(granted);
       }
     };
     void run();
     return () => {
       cancelled = true;
     };
-  }, [accessToken, backendState, profile.locationSharingEnabled]);
+  }, [appVisibility, showProfileModal]);
+
+  useEffect(() => {
+    const token = accessToken.trim();
+    if (backendState !== 'ready' || !token) return;
+    if (appVisibility !== 'active') return;
+    void stopLocationHeartbeat().catch(() => null);
+    void syncLocationPermissionState(false);
+  }, [accessToken, backendState, appVisibility, showProfileModal]);
+
+  useEffect(() => {
+    const hasSession = !!accessToken.trim();
+    void syncBackgroundLocationTasks(hasSession && locationPermissionGranted);
+  }, [accessToken, locationPermissionGranted]);
 
   useEffect(() => {
     const token = accessToken.trim();
@@ -3530,7 +4300,7 @@ function App() {
         return;
       }
       if (!token) return;
-      void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token)]).finally(() => {
+      void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token), refreshRoomInvitations(token)]).finally(() => {
         setTab('friends');
       });
     });
@@ -3544,7 +4314,7 @@ function App() {
         return;
       }
       if (!response || !token) return;
-      void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token)]).finally(() => {
+      void Promise.all([refreshFriendsAndRequests(token), refreshRoomsFromBackend(token), refreshRoomInvitations(token)]).finally(() => {
         setTab('friends');
       });
     });
@@ -3665,10 +4435,21 @@ function App() {
     if (sessionRestoreStartedRef.current) return;
     sessionRestoreStartedRef.current = true;
     let cancelled = false;
+    let restoreUiShown = false;
 
     const run = async () => {
+      const finishRestoreUi = () => {
+        if (cancelled || restoreUiShown) return;
+        restoreUiShown = true;
+        setStage('app');
+        setIsSessionRestoring(false);
+      };
       try {
         const stored = await readSessionFromStorage();
+        const snapshot = await readAppSnapshotFromStorage();
+        if (snapshot) {
+          applyPersistedAppSnapshot(snapshot);
+        }
         logSessionTrace('restore:storage_read', {
           hasAccessToken: !!stored?.accessToken,
           hasRefreshToken: !!stored?.refreshToken,
@@ -3686,6 +4467,7 @@ function App() {
           });
           setSessionTokens(nextAccessToken, nextRefreshToken);
           setLoginErr('');
+          finishRestoreUi();
           try {
             await syncInitialFromBackend(nextAccessToken, user);
           } catch (error) {
@@ -3698,7 +4480,6 @@ function App() {
           }
           if (cancelled) return;
           logSessionTrace('restore:apply_session_done');
-          setStage('app');
         };
 
         try {
@@ -3744,9 +4525,7 @@ function App() {
             logSessionTrace('restore:proceed_without_refresh', {
               message: msg,
             });
-            if (!cancelled) {
-              setStage('app');
-            }
+            finishRestoreUi();
             return;
           }
 
@@ -3772,9 +4551,7 @@ function App() {
               return;
             }
             setSessionTokens(stored.accessToken, storedRefreshToken);
-            if (!cancelled) {
-              setStage('app');
-            }
+            finishRestoreUi();
             return;
           }
 
@@ -3816,9 +4593,7 @@ function App() {
               }
               return;
             }
-            if (!cancelled) {
-              setStage('app');
-            }
+            finishRestoreUi();
           }
         }
       } catch (error) {
@@ -3834,11 +4609,11 @@ function App() {
           return;
         }
         if (accessTokenRef.current.trim()) {
-          setStage('app');
+          finishRestoreUi();
         }
       } finally {
         logSessionTrace('restore:finished');
-        if (!cancelled) setIsSessionRestoring(false);
+        if (!cancelled && !restoreUiShown) setIsSessionRestoring(false);
       }
     };
 
@@ -3926,7 +4701,47 @@ function App() {
   };
 
   const normalizeImageForCrop = async (uri: string) => {
-    return uri;
+    const sourceUri = uri.trim();
+    if (!sourceUri) return uri;
+    const dimensions = await new Promise<{ width: number; height: number } | null>((resolve) => {
+      Image.getSize(
+        sourceUri,
+        (width, height) => resolve({ width: Math.max(1, width), height: Math.max(1, height) }),
+        () => resolve(null)
+      );
+    });
+
+    const actions: ImageManipulator.Action[] = [];
+    if (dimensions) {
+      const maxEdge = Math.max(dimensions.width, dimensions.height);
+      if (maxEdge > PROFILE_PHOTO_MAX_SOURCE) {
+        if (dimensions.width >= dimensions.height) {
+          actions.push({
+            resize: {
+              width: PROFILE_PHOTO_MAX_SOURCE,
+              height: Math.max(1, Math.round((dimensions.height / dimensions.width) * PROFILE_PHOTO_MAX_SOURCE)),
+            },
+          });
+        } else {
+          actions.push({
+            resize: {
+              width: Math.max(1, Math.round((dimensions.width / dimensions.height) * PROFILE_PHOTO_MAX_SOURCE)),
+              height: PROFILE_PHOTO_MAX_SOURCE,
+            },
+          });
+        }
+      }
+    }
+
+    try {
+      const normalized = await ImageManipulator.manipulateAsync(sourceUri, actions, {
+        compress: 1,
+        format: ImageManipulator.SaveFormat.JPEG,
+      });
+      return normalized.uri || sourceUri;
+    } catch {
+      return sourceUri;
+    }
   };
 
   const beginPinch = (crop: ProfilePhotoCrop, touches: TouchPoint[]) => {
@@ -4206,7 +5021,7 @@ function App() {
   };
 
   const openFamilyStructureEditor = async (roomId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token || !roomId) return;
     setRoomMenuId(null);
     setFamilyStructureRoomId(roomId);
@@ -4219,7 +5034,7 @@ function App() {
   };
 
   const saveFamilyStructureAlias = async (targetUserId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     const roomId = familyStructureRoomId || '';
     if (!token || !roomId || !targetUserId) return;
     const actionKey = `alias:${targetUserId}`;
@@ -4249,7 +5064,7 @@ function App() {
     targetUserIdOverride?: string,
     requestAsOverride?: 'guardian' | 'child'
   ) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     const roomId = familyStructureRoomId || '';
     const targetUserId = targetUserIdOverride || familyStructureTargetId;
     const requestAs = requestAsOverride || familyStructureRequestAs;
@@ -4284,7 +5099,7 @@ function App() {
   };
 
   const respondFamilyGuardianLink = async (relationshipId: string, decision: 'accept' | 'reject') => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     const roomId = familyStructureRoomId || '';
     if (!token || !roomId || !relationshipId) return;
     const actionKey = `link-respond:${decision}:${relationshipId}`;
@@ -4312,7 +5127,7 @@ function App() {
   };
 
   const deleteFamilyGuardianLink = async (relationshipId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     const roomId = familyStructureRoomId || '';
     if (!token || !roomId || !relationshipId) return;
     const actionKey = `link-delete:${relationshipId}`;
@@ -4359,11 +5174,11 @@ function App() {
   };
 
   const openRoomMembersEditor = async (roomId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token || !roomId) return;
     setRoomMenuId(null);
     setRoomMembersRoomId(roomId);
-    await loadRoomMembers(token, roomId).catch((err) => {
+    await Promise.all([loadRoomMembers(token, roomId), refreshRoomInvitations(token)]).catch((err) => {
       const msg = err instanceof Error ? err.message : '';
       Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
       closeRoomMembersModal();
@@ -4373,7 +5188,7 @@ function App() {
   const displayRoomMemberName = (member: RoomMember) => member.alias.trim() || member.name;
 
   const transferRoomOwnership = async (targetUserId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     const roomId = roomMembersRoomId || '';
     if (!token || !roomId || !targetUserId) return;
     const actionKey = `owner:${targetUserId}`;
@@ -4397,7 +5212,7 @@ function App() {
   };
 
   const updateRoomMemberRole = async (targetUserId: string, role: 'admin' | 'member') => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     const roomId = roomMembersRoomId || '';
     if (!token || !roomId || !targetUserId) return;
     const actionKey = `role:${targetUserId}:${role}`;
@@ -4421,7 +5236,7 @@ function App() {
   };
 
   const kickRoomMember = async (targetUserId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     const roomId = roomMembersRoomId || '';
     if (!token || !roomId || !targetUserId) return;
     const actionKey = `kick:${targetUserId}`;
@@ -4434,6 +5249,71 @@ function App() {
       Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
     } finally {
       setRoomMembersActionKey('');
+    }
+  };
+
+  const sendRoomInvitation = async (targetUserId: string) => {
+    const token = await requireAccessToken();
+    const roomId = roomMembersRoomId || '';
+    if (!token || !roomId || !targetUserId) return;
+    const actionKey = `invite:${roomId}:${targetUserId}`;
+    setRoomInvitationActionKey(actionKey);
+    try {
+      await backendRequest(
+        `/v1/rooms/${roomId}/invitations`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ targetUserId }),
+        },
+        token
+      );
+      await refreshRoomInvitations(token).catch(() => null);
+      Alert.alert(isKo ? '초대를 보냈어요.' : 'Invitation sent.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setRoomInvitationActionKey('');
+    }
+  };
+
+  const acceptRoomInvitation = async (invitationId: string) => {
+    const token = await requireAccessToken();
+    if (!token || !invitationId) return;
+    const actionKey = `invite-accept:${invitationId}`;
+    setRoomInvitationActionKey(actionKey);
+    try {
+      const result = await backendRequest<{ roomId?: string }>(
+        `/v1/room-invitations/${invitationId}/accept`,
+        { method: 'POST' },
+        token
+      );
+      const nextRoomId = String(result.roomId || '');
+      await Promise.all([refreshRoomInvitations(token), refreshRoomsFromBackend(token)]).catch(() => null);
+      if (nextRoomId) {
+        openRoom(nextRoomId);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setRoomInvitationActionKey('');
+    }
+  };
+
+  const rejectRoomInvitation = async (invitationId: string) => {
+    const token = await requireAccessToken();
+    if (!token || !invitationId) return;
+    const actionKey = `invite-reject:${invitationId}`;
+    setRoomInvitationActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/room-invitations/${invitationId}/reject`, { method: 'POST' }, token);
+      await refreshRoomInvitations(token).catch(() => null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setRoomInvitationActionKey('');
     }
   };
 
@@ -4514,7 +5394,7 @@ function App() {
     setFamilyUpgradeTargetId('');
   };
   const sendFamilyUpgradeRequest = async () => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const targetUserId = familyUpgradeTargetId.trim();
     if (!targetUserId) return;
@@ -4540,7 +5420,7 @@ function App() {
     }
   };
   const acceptFamilyUpgradeRequest = async (requestId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `accept:${requestId}`;
     setFamilyActionKey(actionKey);
@@ -4558,7 +5438,7 @@ function App() {
     }
   };
   const rejectFamilyUpgradeRequest = async (requestId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `reject:${requestId}`;
     setFamilyActionKey(actionKey);
@@ -4574,7 +5454,7 @@ function App() {
     }
   };
   const cancelFamilyUpgradeRequest = async (requestId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `cancel:${requestId}`;
     setFamilyActionKey(actionKey);
@@ -4590,7 +5470,7 @@ function App() {
     }
   };
   const removeFamilyLink = async (relationshipId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `family-remove:${relationshipId}`;
     setFamilyActionKey(actionKey);
@@ -4605,7 +5485,7 @@ function App() {
     }
   };
   const removeFriendConnection = async (friendUserId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `friend-remove:${friendUserId}`;
     setFriendActionKey(actionKey);
@@ -4625,7 +5505,7 @@ function App() {
     setShowFriendAliasModal(true);
   };
   const removeFriendAlias = async (friendUserId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `alias:${friendUserId}`;
     setFriendActionKey(actionKey);
@@ -4649,7 +5529,7 @@ function App() {
     setFriendAliasDraft('');
   };
   const saveFriendAlias = async () => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const friendUserId = friendAliasTargetId.trim();
     if (!friendUserId) return;
@@ -4685,7 +5565,7 @@ function App() {
   };
 
   const searchFriendCandidates = async () => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const query = friendLookupQuery.trim();
     if (!query) {
@@ -4735,7 +5615,7 @@ function App() {
   };
 
   const sendFriendRequest = async (targetUserId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `send:${targetUserId}`;
     setFriendActionKey(actionKey);
@@ -4764,7 +5644,7 @@ function App() {
   };
 
   const acceptFriendRequest = async (requestId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `accept:${requestId}`;
     setFriendActionKey(actionKey);
@@ -4782,7 +5662,7 @@ function App() {
   };
 
   const rejectFriendRequest = async (requestId: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const actionKey = `reject:${requestId}`;
     setFriendActionKey(actionKey);
@@ -5166,7 +6046,6 @@ function App() {
   const openImageCrop = async (uri: string, target: CropTarget) => {
     const sourceUri = await normalizeImageForCrop(uri);
     setCropTarget(target);
-    if (target === 'profile') setProfilePhotoDraft(sourceUri);
     Image.getSize(
       sourceUri,
       (imageWidth, imageHeight) => {
@@ -5254,12 +6133,14 @@ function App() {
     try {
       const r = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        allowsEditing: false,
+        allowsEditing: true,
+        aspect: [1, 1],
         legacy: Platform.OS === 'android',
         quality: 1,
       });
       if (r.canceled || !r.assets.length || !r.assets[0].uri) return;
-      await openImageCrop(r.assets[0].uri, 'profile');
+      const sourceUri = await normalizeImageForCrop(r.assets[0].uri);
+      setProfilePhotoDraft(sourceUri);
     } catch {
       Alert.alert(s.mediaPickFailed);
     }
@@ -5400,32 +6281,90 @@ function App() {
     }
   };
 
-  const toggleLocationSharing = async () => {
-    const token = requireAccessToken();
-    if (!token || isUpdatingLocationSharing) return;
-    const nextEnabled = !profile.locationSharingEnabled;
+  const saveLocationSharingPreference = async (token: string, nextEnabled: boolean) => {
+    const saved = await backendRequest<BackendProfile>(
+      '/v1/me',
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ locationSharingEnabled: nextEnabled }),
+      },
+      token
+    );
+    const resolved = typeof saved.locationSharingEnabled === 'boolean' ? !!saved.locationSharingEnabled : nextEnabled;
+    setProfile((prev) => ({
+      ...prev,
+      locationSharingEnabled: resolved,
+    }));
+    return resolved;
+  };
+
+  const syncLocationPermissionState = async (request = false) => {
+    if (isUpdatingLocationSharing) return;
     setIsUpdatingLocationSharing(true);
     try {
-      await syncLocationSharingRuntime(nextEnabled, { immediate: nextEnabled });
-      const saved = await backendRequest<BackendProfile>(
-        '/v1/me',
-        {
-          method: 'PATCH',
-          body: JSON.stringify({ locationSharingEnabled: nextEnabled }),
-        },
-        token
-      );
-      setProfile((prev) => ({
-        ...prev,
-        locationSharingEnabled:
-          typeof saved.locationSharingEnabled === 'boolean' ? !!saved.locationSharingEnabled : nextEnabled,
-      }));
+      const granted = request
+        ? await requestLocationPermissionsForSharing(true)
+        : await readLocationPermissionGranted();
+      setLocationPermissionGranted(granted);
+      const token = accessToken.trim();
+      if (!token || granted === profile.locationSharingEnabled) {
+        return;
+      }
+      await saveLocationSharingPreference(token, granted);
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
       Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
     } finally {
       setIsUpdatingLocationSharing(false);
     }
+  };
+
+  const disableLocationSharing = async () => {
+    const token = await requireAccessToken();
+    if (!token || isUpdatingLocationSharing) return;
+    setIsUpdatingLocationSharing(true);
+    try {
+      await saveLocationSharingPreference(token, false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setIsUpdatingLocationSharing(false);
+    }
+  };
+
+  const openLocationPermissionMenu = () => {
+    if (!locationPermissionGranted) {
+      Alert.alert(
+        isKo ? '위치 정보 권한 부여가 필요해요' : 'Location permission is required',
+        isKo
+          ? '위치 확인을 사용하려면 어플 권한에서 위치 정보를 허용해 주세요.'
+          : 'Allow location access in the app permissions screen to use location checks.',
+        [
+          { text: isKo ? '취소' : 'Cancel', style: 'cancel' },
+          {
+            text: isKo ? '권한 보기' : 'Open permissions',
+            onPress: () => {
+              void Linking.openSettings().catch(() => null);
+            },
+          },
+        ]
+      );
+      return;
+    }
+    void Linking.openSettings().catch(() => null);
+  };
+
+  const syncBackgroundLocationTasks = async (enabled: boolean) => {
+    if (enabled) {
+      await Notifications.registerTaskAsync(LOCATION_BACKGROUND_NOTIFICATION_TASK).catch(() => null);
+      await BackgroundTask.registerTaskAsync(LOCATION_BACKGROUND_SNAPSHOT_TASK, {
+        minimumInterval: LOCATION_BACKGROUND_MIN_INTERVAL_MINUTES,
+      }).catch(() => null);
+      return;
+    }
+    await Notifications.unregisterTaskAsync(LOCATION_BACKGROUND_NOTIFICATION_TASK).catch(() => null);
+    await BackgroundTask.unregisterTaskAsync(LOCATION_BACKGROUND_SNAPSHOT_TASK).catch(() => null);
   };
 
   const openExternalUrl = async (url: string) => {
@@ -5445,22 +6384,34 @@ function App() {
   };
 
   const openLocationMap = async (latitude: number, longitude: number) => {
-    const appUrl =
-      Platform.OS === 'android'
-        ? `geo:${latitude},${longitude}?q=${latitude},${longitude}`
-        : `http://maps.apple.com/?ll=${latitude},${longitude}`;
-    try {
-      await Linking.openURL(appUrl);
-      return;
-    } catch {
-      // Fall through to browser fallback.
+    if (Platform.OS === 'android') {
+      try {
+        await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+          data: `geo:${latitude},${longitude}?q=${latitude},${longitude}`,
+        });
+        return;
+      } catch {
+        // Fall through to other handlers.
+      }
+      try {
+        await Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`);
+        return;
+      } catch {
+        Alert.alert(s.linkFailedTitle, s.linkFailedBody);
+        return;
+      }
     }
 
     try {
-      await WebBrowser.openBrowserAsync(`https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`);
+      await Linking.openURL(`http://maps.apple.com/?ll=${latitude},${longitude}`);
       return;
     } catch {
-      Alert.alert(s.linkFailedTitle, s.linkFailedBody);
+      try {
+        await WebBrowser.openBrowserAsync(`https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`);
+        return;
+      } catch {
+        Alert.alert(s.linkFailedTitle, s.linkFailedBody);
+      }
     }
   };
 
@@ -5669,7 +6620,7 @@ function App() {
       <Text style={styles.sub}>{s.profilePhoto}</Text>
       <View style={styles.profilePhotoRow}>
         {profilePhotoDraft ? (
-          <Image source={{ uri: profilePhotoDraft }} style={styles.profilePhotoPreview} />
+          <Image source={{ uri: profilePhotoDraft }} style={styles.profilePhotoPreview} resizeMode="cover" />
         ) : (
           <View style={styles.profilePhotoPreviewFallback}>
             <Ionicons name="person" size={24} color={FOREST.text} />
@@ -5870,7 +6821,7 @@ function App() {
     setShowRoomTitleModal(false);
   };
   const toggleTrusted = async (fid: string) => {
-    const token = requireAccessToken();
+    const token = await requireAccessToken();
     if (!token) return;
     const friend = friends.find((item) => item.id === fid);
     if (!friend) return;
@@ -5946,6 +6897,7 @@ function App() {
 
   const resetForLogout = () => {
     setSessionTokens('', '');
+    void clearAppSnapshotInStorage();
     if (friendTabRefreshTimerRef.current) {
       clearTimeout(friendTabRefreshTimerRef.current);
       friendTabRefreshTimerRef.current = null;
@@ -5979,6 +6931,9 @@ function App() {
     setFamilyRequestsOutgoing([]);
     setFriendActionKey('');
     setFamilyActionKey('');
+    setRoomInvitationsIncoming([]);
+    setRoomInvitationsOutgoing([]);
+    setRoomInvitationActionKey('');
     setIsFriendSyncing(false);
     setInput('');
     setDraftMedia(null);
@@ -5997,6 +6952,38 @@ function App() {
     setRoomMenuId(null);
     setLoginErr('');
   };
+
+  useEffect(() => {
+    const originalAlert = Alert.alert.bind(Alert);
+    const wrappedAlert: typeof Alert.alert = ((title: string, message?: string, buttons?: any, options?: any) => {
+      const combined = `${String(title || '')} ${String(message || '')}`.trim();
+      if (isSessionInvalidMessage(combined)) {
+        logSessionTrace('alert:session_invalid_suppressed', {
+          message: combined,
+        });
+        if (!sessionInvalidRecoveryInFlightRef.current) {
+          sessionInvalidRecoveryInFlightRef.current = true;
+          void (async () => {
+            try {
+              setSessionTokens('', '');
+              await clearSessionInStorage();
+            } finally {
+              setIsSessionRestoring(false);
+              resetForLogout();
+              sessionInvalidRecoveryInFlightRef.current = false;
+            }
+          })();
+        }
+        return;
+      }
+      return originalAlert(title, message, buttons, options);
+    }) as typeof Alert.alert;
+
+    Alert.alert = wrappedAlert;
+    return () => {
+      Alert.alert = originalAlert as typeof Alert.alert;
+    };
+  }, []);
 
   const switchBackendServer = async (nextUrl: string) => {
     const normalized = normalizeBackendBaseUrl(nextUrl);
@@ -6100,6 +7087,30 @@ function App() {
       ))}
     </>
   );
+
+  if (isSessionRestoring) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar style="light" />
+        <LinearGradient colors={[FOREST.gradientTop, FOREST.gradientMid, FOREST.gradientBottom]} style={styles.fill}>
+          <ForestBackdrop />
+          <View style={styles.centerCard}>
+            <Pressable onPress={registerHiddenServerMenuTap}>
+              <Text style={styles.brand}>{s.app}</Text>
+            </Pressable>
+            <Text style={styles.h1}>{s.loginSessionRestoring}</Text>
+            <Text style={styles.sub}>
+              {backendState === 'checking'
+                ? s.loginServerChecking
+                : backendState === 'ready'
+                  ? s.loginServerReady
+                  : backendStateMsg || s.loginServerError}
+            </Text>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
 
   if (stage === 'login') {
     return (
@@ -6514,6 +7525,49 @@ function App() {
                           </>
                         ) : (
                           <>
+                            {roomInvitationsIncoming.length > 0 ? (
+                              <>
+                                <Text style={styles.sectionTitle}>{isKo ? '받은 방 초대' : 'Room invites'}</Text>
+                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
+                                  {roomInvitationsIncoming.map((invitation) => (
+                                    <View key={invitation.id} style={styles.requestCard}>
+                                      <Text style={styles.itemTitle}>
+                                        {invitation.roomTitle ||
+                                          (invitation.roomType === 'family'
+                                            ? isKo
+                                              ? '가족방'
+                                              : 'Family room'
+                                            : isKo
+                                              ? '그룹방'
+                                              : 'Group room')}
+                                      </Text>
+                                      <Text style={styles.sub}>
+                                        {isKo
+                                          ? `${invitation.inviterName}님이 초대했어요`
+                                          : `Invited by ${invitation.inviterName}`}
+                                      </Text>
+                                      <Text style={styles.sub}>{new Date(invitation.createdAt).toLocaleDateString()}</Text>
+                                      <View style={styles.row}>
+                                        <Pressable
+                                          style={[styles.requestBtn, !!roomInvitationActionKey && styles.off]}
+                                          disabled={!!roomInvitationActionKey}
+                                          onPress={() => void acceptRoomInvitation(invitation.id)}
+                                        >
+                                          <Text style={styles.requestBtnText}>{isKo ? '수락' : 'Accept'}</Text>
+                                        </Pressable>
+                                        <Pressable
+                                          style={[styles.requestBtn, !!roomInvitationActionKey && styles.off]}
+                                          disabled={!!roomInvitationActionKey}
+                                          onPress={() => void rejectRoomInvitation(invitation.id)}
+                                        >
+                                          <Text style={styles.requestBtnText}>{isKo ? '거절' : 'Reject'}</Text>
+                                        </Pressable>
+                                      </View>
+                                    </View>
+                                  ))}
+                                </ScrollView>
+                              </>
+                            ) : null}
                             {favoriteGroupRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '즐겨찾기' : 'Favorites'}</Text> : null}
                             {favoriteGroupRooms.map(renderRoomRow)}
                             {favoriteFamilyRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '가족방 즐겨찾기' : 'Favorite Family Rooms'}</Text> : null}
@@ -6580,6 +7634,49 @@ function App() {
                               >
                                 <Text style={styles.requestBtnText}>{isKo ? '요청 취소' : 'Cancel Request'}</Text>
                               </Pressable>
+                            </View>
+                          ))}
+                        </ScrollView>
+                      </>
+                    ) : null}
+                    {roomInvitationsIncoming.length > 0 ? (
+                      <>
+                        <Text style={styles.sectionTitle}>{isKo ? '받은 방 초대' : 'Room invites'}</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
+                          {roomInvitationsIncoming.map((invitation) => (
+                            <View key={`friend-invite-${invitation.id}`} style={styles.requestCard}>
+                              <Text style={styles.itemTitle}>
+                                {invitation.roomTitle ||
+                                  (invitation.roomType === 'family'
+                                    ? isKo
+                                      ? '가족방'
+                                      : 'Family room'
+                                    : isKo
+                                      ? '그룹방'
+                                      : 'Group room')}
+                              </Text>
+                              <Text style={styles.sub}>
+                                {isKo
+                                  ? `${invitation.inviterName}님이 초대했어요`
+                                  : `Invited by ${invitation.inviterName}`}
+                              </Text>
+                              <Text style={styles.sub}>{new Date(invitation.createdAt).toLocaleDateString()}</Text>
+                              <View style={styles.row}>
+                                <Pressable
+                                  style={[styles.requestBtn, !!roomInvitationActionKey && styles.off]}
+                                  disabled={!!roomInvitationActionKey}
+                                  onPress={() => void acceptRoomInvitation(invitation.id)}
+                                >
+                                  <Text style={styles.requestBtnText}>{isKo ? '수락' : 'Accept'}</Text>
+                                </Pressable>
+                                <Pressable
+                                  style={[styles.requestBtn, !!roomInvitationActionKey && styles.off]}
+                                  disabled={!!roomInvitationActionKey}
+                                  onPress={() => void rejectRoomInvitation(invitation.id)}
+                                >
+                                  <Text style={styles.requestBtnText}>{isKo ? '거절' : 'Reject'}</Text>
+                                </Pressable>
+                              </View>
                             </View>
                           ))}
                         </ScrollView>
@@ -6678,7 +7775,7 @@ function App() {
                     <Pressable style={styles.profileCabinCard} onLongPress={openServerMenu} delayLongPress={900}>
                       <View style={styles.profileHero}>
                         {profile.avatarUri ? (
-                          <Image source={{ uri: profile.avatarUri }} style={styles.profileAvatar} />
+                          <Image source={{ uri: profile.avatarUri }} style={styles.profileAvatar} resizeMode="cover" />
                         ) : (
                           <View style={styles.profileAvatarFallback}>
                             <Text style={styles.profileAvatarText}>
@@ -6764,6 +7861,11 @@ function App() {
                   <Ionicons name="people" size={18} color={tab === 'friends' ? FOREST.text : FOREST.textMuted} />
                   <Text style={styles.tabText}>{friendsTabLabel}</Text>
                   <Text style={styles.tabHint}>{friendsTabHint}</Text>
+                  {knockCount > 0 ? (
+                    <View style={styles.tabBadge}>
+                      <Text style={styles.badgeText}>{knockCount > 99 ? '99+' : knockCount}</Text>
+                    </View>
+                  ) : null}
                 </Pressable>
                 <Pressable style={[styles.tab, tab === 'chats' && styles.tabOn]} onPress={handleChatsTabPress}>
                   <Ionicons name="chatbubbles" size={18} color={tab === 'chats' ? FOREST.text : FOREST.textMuted} />
@@ -7298,18 +8400,19 @@ function App() {
                   <Text style={styles.h1}>{s.profileEdit}</Text>
                   {renderProfilePhotoEditor()}
                   <Pressable
-                    style={[styles.item, isUpdatingLocationSharing && styles.off]}
+                    style={[styles.item, styles.off, { display: 'none' }]}
                     disabled={isUpdatingLocationSharing}
                     onPress={() => {
-                      void toggleLocationSharing();
+                      void syncLocationPermissionState(true);
                     }}
                   >
+                    <View style={{ display: 'none' }}>
                     <View style={{ flex: 1, gap: 4 }}>
                       <Text style={styles.itemTitle}>
                         {isKo ? '위치 확인 공유' : 'Location sharing'}
                       </Text>
                       <Text style={styles.sub}>
-                        {profile.locationSharingEnabled
+                        {locationPermissionGranted
                           ? isKo
                             ? '보호자와 guardian 웹에서 최근 위치를 확인할 수 있어요.'
                             : 'Guardians and Guardian Console can see your latest shared location.'
@@ -7319,18 +8422,75 @@ function App() {
                       </Text>
                     </View>
                     <Ionicons
-                      name={profile.locationSharingEnabled ? 'checkmark-circle' : 'ellipse-outline'}
+                      name={locationPermissionGranted ? 'checkmark-circle' : 'ellipse-outline'}
                       size={18}
                       color={FOREST.text}
                     />
+                    <View style={{ display: 'none' }}>
+                    </View>
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <Text style={styles.itemTitle}>{isKo ? '위치정보 권한 확인' : 'Location permission check'}</Text>
+                      <Text style={styles.sub}>
+                        {locationPermissionGranted
+                          ? isKo
+                            ? '권한이 허용되어 있어요. 보호자 요청이 오면 현재 위치를 보낼 수 있어요.'
+                            : 'Permission is granted. The app can share your current location when guardians ask for it.'
+                          : isKo
+                            ? '권한이 꺼져 있어요. 눌러서 위치정보 권한을 확인해 주세요.'
+                            : 'Permission is off. Tap to review the location permission.'}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={locationPermissionGranted ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={18}
+                      color={FOREST.text}
+                    />
+                    <View style={{ display: 'none' }}>
+                    </View>
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <Text style={styles.itemTitle}>{isKo ? '위치정보 권한 확인' : 'Location permission check'}</Text>
+                      <Text style={styles.sub}>
+                        {locationPermissionGranted
+                          ? isKo
+                            ? '권한이 허용되어 있어요. 보호자 요청이 오면 현재 위치를 보낼 수 있어요.'
+                            : 'Permission is granted. The app can share your current location when guardians ask for it.'
+                          : isKo
+                            ? '권한이 꺼져 있어요. 눌러서 위치정보 권한을 확인해 주세요.'
+                            : 'Permission is off. Tap to review the location permission.'}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={locationPermissionGranted ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={18}
+                      color={FOREST.text}
+                    />
+                    </View>
                   </Pressable>
                   <Pressable
-                    style={styles.item}
-                    onPress={() => {
-                      void Linking.openSettings().catch(() => null);
-                    }}
+                    style={[styles.item, isUpdatingLocationSharing && styles.off]}
+                    disabled={isUpdatingLocationSharing}
+                    onPress={openLocationPermissionMenu}
                   >
+                    <View style={{ display: 'none' }}>
                     <Text style={styles.itemTitle}>{isKo ? '위치 권한 설정 열기' : 'Open location settings'}</Text>
+                    </View>
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <Text style={styles.itemTitle}>{isKo ? '위치정보 권한 확인' : 'Location permission check'}</Text>
+                      <Text style={styles.sub}>
+                        {locationPermissionGranted
+                          ? isKo
+                            ? '권한이 허용되어 있어요. 보호자 요청이 오면 현재 위치를 보낼 수 있어요.'
+                            : 'Permission is granted. The app can share your current location when guardians ask for it.'
+                          : isKo
+                            ? '권한이 꺼져 있어요. 눌러서 위치정보 권한을 확인해 주세요.'
+                            : 'Permission is off. Tap to review the location permission.'}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={locationPermissionGranted ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={18}
+                      color={FOREST.text}
+                    />
                   </Pressable>
                   <TextInput
                     style={styles.field}
@@ -7559,7 +8719,7 @@ function App() {
                     ) : null}
                     {roomMap.get(roomMenuId)?.type === 'family' ? (
                       <Pressable style={styles.item} onPress={() => void openFamilyStructureEditor(roomMenuId)}>
-                        <Text style={styles.itemTitle}>{isKo ? '가족 구조' : 'Family structure'}</Text>
+                        <Text style={styles.itemTitle}>{isKo ? '가족 관계' : 'Family relationships'}</Text>
                       </Pressable>
                     ) : null}
                     <Pressable style={styles.item} onPress={() => toggleFavorite(roomMenuId)}>
@@ -7611,13 +8771,13 @@ function App() {
                 showsVerticalScrollIndicator={false}
               >
                 <View style={styles.sheet}>
-                  <Text style={styles.h1}>{isKo ? '가족 구조' : 'Family structure'}</Text>
+                  <Text style={styles.h1}>{isKo ? '가족 관계' : 'Family relationships'}</Text>
                   <Text style={styles.sub}>
                     {familyStructureRoom
                       ? roomTitle(familyStructureRoom)
                       : isKo
-                        ? '가족방 멤버와 보호자 관계를 관리해요.'
-                        : 'Manage member aliases and guardian links in this family room.'}
+                        ? '가족 멤버의 호칭과 보호자 연결을 확인해요.'
+                        : 'Review member aliases and guardian links in this family room.'}
                   </Text>
                   {isFamilyStructureLoading ? (
                     <Text style={styles.sub}>{isKo ? '불러오는 중...' : 'Loading...'}</Text>
@@ -7659,6 +8819,8 @@ function App() {
                         .filter((profile) => profile.userId !== currentUserId)
                         .map((member) => {
                           const memberLocation = familyRoomLocations.find((item) => item.userId === member.userId) ?? null;
+                          const relationship = getFamilyStructureRelationshipWithMember(member.userId);
+                          const canRequestLocation = relationship.active?.guardianUserId === currentUserId;
                           return (
                             <Pressable
                               key={`simple-member-${member.userId}`}
@@ -7675,6 +8837,11 @@ function App() {
                               {memberLocation ? (
                                 <Text style={styles.sub}>
                                   {`${isKo ? '최근 위치' : 'Recent location'} · ${roomTimeLabel(memberLocation.capturedAt)}`}
+                                </Text>
+                              ) : null}
+                              {!memberLocation && canRequestLocation ? (
+                                <Text style={styles.sub}>
+                                  {isKo ? '위치 보기 가능' : 'Location view available'}
                                 </Text>
                               ) : null}
                             </Pressable>
@@ -8138,6 +9305,61 @@ function App() {
                       );
                     })
                   )}
+                  {!isRoomMembersLoading ? (
+                    <>
+                      <Text style={styles.sectionTitle}>{isKo ? '보낸 초대' : 'Pending invites'}</Text>
+                      {roomMembersPendingInvitations.length > 0 ? (
+                        roomMembersPendingInvitations.map((invitation) => (
+                          <View key={`invite-${invitation.id}`} style={styles.familyStructureCard}>
+                            <Text style={styles.itemTitle}>{invitation.targetName}</Text>
+                            <Text style={styles.sub}>
+                              {invitation.roomTitle ||
+                                (invitation.roomType === 'family'
+                                  ? isKo
+                                    ? '가족방'
+                                    : 'Family room'
+                                  : isKo
+                                    ? '그룹방'
+                                    : 'Group room')}
+                            </Text>
+                            <Text style={styles.sub}>
+                              {isKo ? '응답 대기 중' : 'Waiting for response'} ·{' '}
+                              {new Date(invitation.createdAt).toLocaleDateString()}
+                            </Text>
+                          </View>
+                        ))
+                      ) : (
+                        <Text style={styles.sub}>{isKo ? '아직 보낸 초대가 없어요.' : 'No pending invites yet.'}</Text>
+                      )}
+                      <Text style={styles.sectionTitle}>{isKo ? '친구 초대' : 'Invite friends'}</Text>
+                      {roomMembersInviteableFriends.length > 0 ? (
+                        roomMembersInviteableFriends.map((friend) => (
+                          <View key={`invite-friend-${friend.id}`} style={styles.item}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.itemTitle}>{friend.name}</Text>
+                              <Text style={styles.sub}>{friend.profileName || friend.status || friend.name}</Text>
+                            </View>
+                            <Pressable
+                              style={[
+                                styles.requestBtn,
+                                roomInvitationActionKey === `invite:${roomMembersRoomId}:${friend.id}` && styles.off,
+                              ]}
+                              disabled={!!roomInvitationActionKey}
+                              onPress={() => {
+                                void sendRoomInvitation(friend.id);
+                              }}
+                            >
+                              <Text style={styles.requestBtnText}>{isKo ? '초대' : 'Invite'}</Text>
+                            </Pressable>
+                          </View>
+                        ))
+                      ) : (
+                        <Text style={styles.sub}>
+                          {isKo ? '지금 초대할 수 있는 친구가 없어요.' : 'There are no friends available to invite right now.'}
+                        </Text>
+                      )}
+                    </>
+                  ) : null}
                   <View style={styles.row}>
                     <Pressable style={styles.smallBtn} onPress={closeRoomMembersModal}>
                       <Text style={styles.smallBtnText}>{isKo ? '닫기' : 'Close'}</Text>
@@ -8177,6 +9399,9 @@ function App() {
                     {(() => {
                       const { active, pendingIncoming, pendingOutgoing } =
                         getFamilyStructureRelationshipWithMember(familyStructureSelectedMember.userId);
+                      const canRequestLocation = !!active && active.guardianUserId === currentUserId;
+                      const isViewingLocation =
+                        familyRoomLocationActionKey === `location-view:${familyStructureSelectedMember.userId}`;
                       const locationItem =
                         familyRoomLocations.find((item) => item.userId === familyStructureSelectedMember.userId) ?? null;
                       return (
@@ -8244,28 +9469,45 @@ function App() {
                               </Pressable>
                             </>
                           )}
-                          {locationItem ? (
-                            <>
-                              <Pressable
-                                style={styles.item}
-                                onPress={() => {
-                                  void openLocationMap(locationItem.latitude, locationItem.longitude);
-                                }}
-                              >
-                                <Text style={styles.itemTitle}>{isKo ? '지도 열기' : 'Open map'}</Text>
-                              </Pressable>
-                              <Pressable
-                                style={styles.item}
-                                onPress={() => {
-                                  void requestFamilyRoomLocationPrecisionRefresh(
-                                    familyStructureRoomId || '',
-                                    familyStructureSelectedMember.userId
-                                  );
-                                }}
-                              >
-                                <Text style={styles.itemTitle}>{isKo ? '정확히 새로고침' : 'Precise refresh'}</Text>
-                              </Pressable>
-                            </>
+                          {canRequestLocation ? (
+                            <View style={styles.familyStructureCard}>
+                              <Text style={styles.itemTitle}>{isKo ? '현재 위치' : 'Current location'}</Text>
+                              <Text style={styles.sub}>
+                                {locationItem
+                                  ? `${locationItem.latitude.toFixed(5)}, ${locationItem.longitude.toFixed(5)} · ${
+                                      isKo ? '업데이트' : 'Updated'
+                                    } ${roomTimeLabel(locationItem.capturedAt)}`
+                                  : isKo
+                                    ? '아직 저장된 위치가 없어요.'
+                                    : 'No saved location yet.'}
+                              </Text>
+                              <View style={styles.row}>
+                                <Pressable
+                                  style={[styles.smallBtn, isViewingLocation && styles.off]}
+                                  disabled={!!familyRoomLocationActionKey}
+                                  onPress={() => {
+                                    void requestFamilyRoomLocationPrecisionRefresh(
+                                      familyStructureRoomId || '',
+                                      familyStructureSelectedMember.userId
+                                    );
+                                  }}
+                                >
+                                  <Text style={styles.smallBtnText}>
+                                    {isViewingLocation ? (isKo ? '위치 확인 중...' : 'Checking location...') : isKo ? '위치정보요청' : 'Request location'}
+                                  </Text>
+                                </Pressable>
+                                <Pressable
+                                  style={[styles.smallBtn, !locationItem && styles.off]}
+                                  disabled={!locationItem}
+                                  onPress={() => {
+                                    if (!locationItem) return;
+                                    void openLocationMap(locationItem.latitude, locationItem.longitude);
+                                  }}
+                                >
+                                  <Text style={styles.smallBtnText}>{isKo ? '지도열기' : 'Open map'}</Text>
+                                </Pressable>
+                              </View>
+                            </View>
                           ) : null}
                         </>
                       );
@@ -8727,6 +9969,18 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(139, 149, 255, 0.14)',
     borderWidth: 1,
     borderColor: FOREST.border,
+  },
+  tabBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 6,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: FOREST.badge,
   },
   tabText: { color: FOREST.text, fontSize: 14, fontWeight: '700' },
   tabHint: { color: FOREST.textMuted, fontSize: 10, fontWeight: '700' },

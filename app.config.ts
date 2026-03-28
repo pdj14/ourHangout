@@ -35,6 +35,9 @@ if (!plugins.includes('expo-video')) {
 if (!plugins.includes('expo-media-library')) {
   plugins.push('expo-media-library');
 }
+if (!plugins.includes('expo-background-task')) {
+  plugins.push('expo-background-task');
+}
 
 const backendBaseUrl = pick(process.env.EXPO_PUBLIC_BACKEND_BASE_URL, defaultBackend.baseUrl)
   .replace(/\/+$/, '');

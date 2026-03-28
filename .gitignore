@@ -5,6 +5,8 @@ node_modules/
 
 # Expo
 .expo/
+.build-meta/
+android/app/google-services.json
 dist/
 web-build/
 expo-env.d.ts
