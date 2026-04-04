@@ -38,6 +38,36 @@ class LocationCaptureModule(
   }
 
   @ReactMethod
+  fun refreshSession(baseUrl: String, refreshToken: String?, promise: Promise) {
+    val normalizedBaseUrl = baseUrl.trim().trimEnd('/')
+    if (normalizedBaseUrl.isEmpty()) {
+      promise.reject("AUTH_REFRESH_FAILED", "Backend base URL is missing.")
+      return
+    }
+
+    val outcome = LocationAuthSessionManager.refreshSession(
+      reactContext,
+      normalizedBaseUrl,
+      refreshToken?.trim().orEmpty()
+    )
+
+    val session = outcome.session
+    if (session == null) {
+      promise.reject(
+        outcome.errorCode ?: "AUTH_REFRESH_FAILED",
+        outcome.errorMessage ?: "Token refresh failed."
+      )
+      return
+    }
+
+    val map = Arguments.createMap().apply {
+      putString("accessToken", session.accessToken)
+      putString("refreshToken", session.refreshToken)
+    }
+    promise.resolve(map)
+  }
+
+  @ReactMethod
   fun startCapture(
     baseUrl: String,
     accessToken: String,
