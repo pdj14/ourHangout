@@ -1,9 +1,10 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import type { ComponentProps, ReactNode } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ComponentProps, Dispatch, ReactNode, RefObject, SetStateAction } from 'react';
 import {
   Alert,
   AppState,
   BackHandler,
+  FlatList,
   Image,
   Keyboard,
   KeyboardAvoidingView,
@@ -35,7 +36,6 @@ import { VideoView, useVideoPlayer } from 'expo-video';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import * as WebBrowser from 'expo-web-browser';
-import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -45,6 +45,14 @@ import {
   isSuccessResponse,
   statusCodes,
 } from '@react-native-google-signin/google-signin';
+import {
+  clearAuthSession,
+  hasNativeAuthRefreshSupport,
+  readAuthSession,
+  refreshNativeAuthSession,
+  writeAuthSession,
+} from './src/auth/authSession';
+import type { PersistedSession } from './src/auth/authSession';
 
 let foregroundNotificationRoomId = '';
 let foregroundAppState: 'active' | 'background' | 'inactive' = 'active';
@@ -440,10 +448,6 @@ type AppExtra = {
   googleAuth?: { androidClientId?: string; iosClientId?: string; webClientId?: string };
   backend?: { baseUrl?: string };
 };
-type PersistedSession = {
-  accessToken: string;
-  refreshToken?: string;
-};
 type PersistedAppSnapshot = {
   profile?: Profile;
   friends?: Friend[];
@@ -484,6 +488,7 @@ type AppUpdateCardState = {
   release: BackendAppUpdateRelease | null;
   errorMessage: string;
 };
+type AppUpdateInstallPhase = 'idle' | 'downloading' | 'openingInstaller';
 
 const MY_ID = 'me';
 const URL_REGEX = /https?:\/\/\S+/gi;
@@ -495,6 +500,8 @@ const DEFAULT_APP_VERSION = '0';
 const APP_PACKAGE_ID = 'com.ourhangout';
 const APP_UPDATE_APK_MIME_TYPE = 'application/vnd.android.package-archive';
 const INTENT_FLAG_GRANT_READ_URI_PERMISSION = 1;
+const DEFAULT_BACKEND_BASE_URL = 'http://wowjini0228.synology.me:7083';
+const DEFAULT_DEV_BACKEND_BASE_URL = 'http://wowjini0228.synology.me:7084';
 
 const normalizeBackendErrorMessage = (message: string, isKo: boolean): string => {
   const normalized = message.trim();
@@ -767,9 +774,11 @@ const isSessionInvalidMessage = (message: string): boolean => {
   const normalized = message.trim().toLowerCase();
   if (!normalized) return false;
   return (
+    normalized.includes('authentication required') ||
     normalized.includes('refresh token is invalid or expired') ||
     normalized.includes('session validation failed') ||
-    normalized.includes('auth_refresh_invalid')
+    normalized.includes('auth_refresh_invalid') ||
+    normalized.includes('auth_unauthorized')
   );
 };
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : '');
@@ -830,130 +839,32 @@ const cropGeometry = (imageWidth: number, imageHeight: number, scale: number) =>
   const overflowY = Math.max(0, renderHeight - PROFILE_CROP_BOX);
   return { renderWidth, renderHeight, overflowX, overflowY };
 };
-const canUseSecureStore = Platform.OS !== 'web';
 const normalizeBackendBaseUrl = (value?: string | null): string => (value || '').trim().replace(/\/+$/, '');
+const detectBackendPreset = (
+  value: string | null | undefined,
+  prodBaseUrl: string,
+  devBaseUrl: string
+): 'prod' | 'dev' | 'custom' => {
+  const normalized = normalizeBackendBaseUrl(value);
+  if (!normalized || normalized === prodBaseUrl) {
+    return 'prod';
+  }
+  if (normalized === devBaseUrl) {
+    return 'dev';
+  }
+  return 'custom';
+};
 const isLocalAssetUri = (value?: string | null): boolean => {
   const normalized = (value || '').trim();
   if (!normalized) return false;
   return /^(file|content):\/\//i.test(normalized) || normalized.startsWith('/');
 };
-const parsePersistedSession = (raw: string | null | undefined): PersistedSession | null => {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as PersistedSession;
-    const accessToken = (parsed.accessToken || '').trim();
-    const refreshToken = (parsed.refreshToken || '').trim();
-    if (!accessToken) return null;
-    return {
-      accessToken,
-      ...(refreshToken ? { refreshToken } : {})
-    };
-  } catch {
-    return null;
-  }
-};
-const readNativeSessionFromModule = async (): Promise<PersistedSession | null> => {
-  const nativeModule = NativeModules.LocationCaptureModule as
-    | {
-        readSession?: () => Promise<{ accessToken?: string; refreshToken?: string } | null>;
-      }
-    | undefined;
-  if (!nativeModule?.readSession) return null;
-  try {
-    const raw = await nativeModule.readSession();
-    const accessToken = String(raw?.accessToken || '').trim();
-    const refreshToken = String(raw?.refreshToken || '').trim();
-    if (!accessToken) return null;
-    return {
-      accessToken,
-      ...(refreshToken ? { refreshToken } : {}),
-    };
-  } catch {
-    return null;
-  }
-};
-const syncNativeSessionModule = async (session: PersistedSession): Promise<void> => {
-  const nativeModule = NativeModules.LocationCaptureModule as
-    | {
-        storeSession?: (accessToken: string, refreshToken?: string) => Promise<boolean>;
-      }
-    | undefined;
-  if (!nativeModule?.storeSession) return;
-  await nativeModule.storeSession(session.accessToken, session.refreshToken || '').catch(() => null);
-};
-const clearNativeSessionModule = async (): Promise<void> => {
-  const nativeModule = NativeModules.LocationCaptureModule as
-    | {
-        clearSession?: () => Promise<boolean>;
-      }
-    | undefined;
-  if (!nativeModule?.clearSession) return;
-  await nativeModule.clearSession().catch(() => null);
-};
-const readSessionFromStorage = async (): Promise<PersistedSession | null> => {
-  let stored: PersistedSession | null = null;
-  if (canUseSecureStore) {
-    try {
-      const secureRaw = await SecureStore.getItemAsync(SESSION_STORAGE_KEY);
-      const secure = parsePersistedSession(secureRaw);
-      if (secure?.accessToken) {
-        stored = secure;
-      }
-    } catch {
-      // Ignore SecureStore read failure and fallback to AsyncStorage.
-    }
-  }
-  if (!stored) {
-    try {
-      const fallbackRaw = await AsyncStorage.getItem(SESSION_STORAGE_KEY);
-      stored = parsePersistedSession(fallbackRaw);
-    } catch {
-      stored = null;
-    }
-  }
-  const nativeSession = await readNativeSessionFromModule().catch(() => null);
-  if (
-    nativeSession?.accessToken &&
-    (!stored ||
-      nativeSession.accessToken !== stored.accessToken ||
-      (nativeSession.refreshToken || '') !== (stored.refreshToken || ''))
-  ) {
-    await writeSessionToStorage(nativeSession).catch(() => null);
-    return nativeSession;
-  }
-  return stored;
-};
-const writeSessionToStorage = async (session: PersistedSession): Promise<void> => {
-  const payload = JSON.stringify(session);
-  if (canUseSecureStore) {
-    try {
-      await SecureStore.setItemAsync(SESSION_STORAGE_KEY, payload);
-    } catch {
-      // Keep fallback persistence even when SecureStore fails.
-    }
-  }
-  try {
-    await AsyncStorage.setItem(SESSION_STORAGE_KEY, payload);
-  } catch {
-    // Ignore fallback storage failure.
-  }
-  await syncNativeSessionModule(session).catch(() => null);
-};
-const clearSessionInStorage = async (): Promise<void> => {
-  if (canUseSecureStore) {
-    try {
-      await SecureStore.deleteItemAsync(SESSION_STORAGE_KEY);
-    } catch {
-      // Ignore cleanup failure.
-    }
-  }
-  try {
-    await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
-  } catch {
-    // Ignore cleanup failure.
-  }
-  await clearNativeSessionModule().catch(() => null);
-};
+const readSessionFromStorage = async (): Promise<PersistedSession | null> =>
+  readAuthSession(SESSION_STORAGE_KEY);
+const writeSessionToStorage = async (session: PersistedSession): Promise<void> =>
+  writeAuthSession(SESSION_STORAGE_KEY, session);
+const clearSessionInStorage = async (): Promise<void> =>
+  clearAuthSession(SESSION_STORAGE_KEY);
 const readAppSnapshotFromStorage = async (): Promise<PersistedAppSnapshot | null> => {
   try {
     const raw = await AsyncStorage.getItem(APP_SNAPSHOT_STORAGE_KEY);
@@ -1022,7 +933,7 @@ const buildDevBackendBaseUrl = (prodBaseUrl: string): string => {
     next.port = '7084';
     return normalizeBackendBaseUrl(next.toString());
   } catch {
-    return 'http://wowjini0228.synology.me:7084';
+    return DEFAULT_DEV_BACKEND_BASE_URL;
   }
 };
 const LOCATION_PRECISION_REFRESH_POLL_MS = 30 * 1000;
@@ -1048,6 +959,10 @@ const NativeLocationCapture = NativeModules.LocationCaptureModule as
         precise: boolean
       ) => Promise<boolean>;
       readSession: () => Promise<{ accessToken?: string; refreshToken?: string } | null>;
+      refreshSession: (
+        baseUrl: string,
+        refreshToken?: string
+      ) => Promise<{ accessToken?: string; refreshToken?: string } | null>;
       storeSession: (accessToken: string, refreshToken?: string) => Promise<boolean>;
       clearSession: () => Promise<boolean>;
     }
@@ -1058,7 +973,7 @@ const MODULE_BACKEND_BASE_URL =
       ((Constants.expoConfig?.extra as { backend?: { baseUrl?: string } } | undefined)?.backend?.baseUrl as string | undefined) ||
         ''
     )
-  ) || 'http://wowjini0228.synology.me:7083';
+  ) || DEFAULT_BACKEND_BASE_URL;
 const getStoredBackendBaseUrlForLocation = async (): Promise<string> => {
   const activeBackend = await readActiveBackendFromStorage().catch(() => '');
   const override = await readBackendOverrideFromStorage().catch(() => '');
@@ -1320,10 +1235,12 @@ const openUnknownSourcesSettings = async (): Promise<void> => {
 const downloadAndInstallAppUpdate = async (
   downloadUrl: string,
   version: string,
-  isKo: boolean
+  isKo: boolean,
+  onStageChange?: (stage: 'downloading' | 'openingInstaller') => void
 ): Promise<boolean> => {
   if (Platform.OS !== 'android') {
     try {
+      onStageChange?.('openingInstaller');
       const canOpen = await Linking.canOpenURL(downloadUrl);
       if (!canOpen) {
         Alert.alert(
@@ -1372,11 +1289,13 @@ const downloadAndInstallAppUpdate = async (
     const targetUri = `${baseDir}ourhangout-update-${sanitizeAppUpdateVersion(version)}.apk`;
     await FileSystem.deleteAsync(targetUri, { idempotent: true }).catch(() => null);
 
+    onStageChange?.('downloading');
     const result = await FileSystem.downloadAsync(downloadUrl, targetUri);
     if (result.status < 200 || result.status >= 300) {
       throw new Error(`Download failed (${result.status}).`);
     }
 
+    onStageChange?.('openingInstaller');
     const contentUri = await FileSystem.getContentUriAsync(result.uri);
     await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
       data: contentUri,
@@ -1795,6 +1714,289 @@ const splitLinkParts = (value: string): Array<{ text: string; url?: string }> =>
   return out;
 };
 
+const openExternalUrlWithFallback = async (url: string, linkFailedTitle: string, linkFailedBody: string) => {
+  try {
+    if (/^https?:\/\//i.test(url)) {
+      try {
+        await WebBrowser.openBrowserAsync(url);
+        return;
+      } catch {
+        // Fall through to Linking fallback.
+      }
+    }
+    await Linking.openURL(url);
+  } catch {
+    Alert.alert(linkFailedTitle, linkFailedBody);
+  }
+};
+
+const formatSystemText = (value: string, isKo: boolean) => {
+  if (value.startsWith('__sys__:member_left:')) {
+    const encodedName = value.slice('__sys__:member_left:'.length);
+    const displayName = decodeURIComponent(encodedName || '').trim();
+    return displayName
+      ? isKo
+        ? `${displayName}님이 방을 나갔어요.`
+        : `${displayName} left the room.`
+      : isKo
+        ? '누군가 방을 나갔어요.'
+        : 'Someone left the room.';
+  }
+  return value;
+};
+
+type ChatMessageEntry = {
+  message: Message;
+  showDayChip: boolean;
+  isMine: boolean;
+  avatarUri: string;
+};
+
+type ChatMessageRowProps = {
+  entry: ChatMessageEntry;
+  roomIsGroup: boolean;
+  directReadCutoff: number;
+  isKo: boolean;
+  sendingLabel: string;
+  sentLabel: string;
+  readLabel: string;
+  linkFailedTitle: string;
+  linkFailedBody: string;
+  setMediaViewer: Dispatch<SetStateAction<MediaViewer | null>>;
+  setAvatarViewer: Dispatch<SetStateAction<AvatarViewer | null>>;
+};
+
+type ChatMessageListProps = {
+  listRef: RefObject<FlatList<ChatMessageEntry> | null>;
+  entries: ChatMessageEntry[];
+  roomIsGroup: boolean;
+  directReadCutoff: number;
+  isKo: boolean;
+  sendingLabel: string;
+  sentLabel: string;
+  readLabel: string;
+  noMessageTitle: string;
+  noMessageBody: string;
+  firstMessageLabel: string;
+  helloSeed: string;
+  onSeedMessage: Dispatch<SetStateAction<string>>;
+  linkFailedTitle: string;
+  linkFailedBody: string;
+  setMediaViewer: Dispatch<SetStateAction<MediaViewer | null>>;
+  setAvatarViewer: Dispatch<SetStateAction<AvatarViewer | null>>;
+};
+
+const ChatMessageText = memo(function ChatMessageText(props: {
+  value: string;
+  mine: boolean;
+  linkFailedTitle: string;
+  linkFailedBody: string;
+}) {
+  const { value, mine, linkFailedTitle, linkFailedBody } = props;
+  const parts = useMemo(() => splitLinkParts(value), [value]);
+
+  return (
+    <Text style={[styles.msg, mine && styles.msgMine]}>
+      {parts.map((part, idx) =>
+        part.url ? (
+          <Text
+            key={`${part.url}-${idx}`}
+            style={[styles.msgLink, mine && styles.msgLinkMine]}
+            onPress={() => {
+              void openExternalUrlWithFallback(part.url!, linkFailedTitle, linkFailedBody);
+            }}
+          >
+            {part.text}
+          </Text>
+        ) : (
+          <Text key={`plain-${idx}`}>{part.text}</Text>
+        )
+      )}
+    </Text>
+  );
+});
+
+const ChatMessageRow = memo(function ChatMessageRow(props: ChatMessageRowProps) {
+  const {
+    entry,
+    roomIsGroup,
+    directReadCutoff,
+    isKo,
+    sendingLabel,
+    sentLabel,
+    readLabel,
+    linkFailedTitle,
+    linkFailedBody,
+    setMediaViewer,
+    setAvatarViewer,
+  } = props;
+  const { message, showDayChip, isMine, avatarUri } = entry;
+
+  return (
+    <>
+      {showDayChip ? (
+        <View style={styles.roomDayChip}>
+          <Text style={styles.roomDayChipText}>{messageDayLabel(message.at)}</Text>
+        </View>
+      ) : null}
+      <View
+        style={[
+          styles.bubbleRow,
+          isMine ? styles.mineRow : styles.otherRow,
+          !isMine && message.kind !== 'system' ? styles.otherRowWithAvatar : null,
+        ]}
+      >
+        {!isMine && message.kind !== 'system' ? (
+          <Pressable
+            style={styles.messageAvatarDock}
+            disabled={!avatarUri}
+            onPress={() => {
+              const normalizedUri = avatarUri.trim();
+              if (!normalizedUri) return;
+              setAvatarViewer({
+                uri: normalizedUri,
+                title: message.senderName.trim(),
+              });
+            }}
+          >
+            {avatarUri ? (
+              <Image source={{ uri: avatarUri }} style={styles.messageAvatar} />
+            ) : (
+              <View style={styles.messageAvatarFallback}>
+                <Text style={styles.messageAvatarText}>{(message.senderName || '?').slice(0, 1).toUpperCase()}</Text>
+              </View>
+            )}
+          </Pressable>
+        ) : null}
+        {!isMine && message.kind !== 'system' ? <Text style={styles.roomSender}>{message.senderName}</Text> : null}
+        <View style={[styles.bubble, isMine ? styles.mineBubble : styles.otherBubble]}>
+          {message.kind === 'text' ? (
+            <ChatMessageText
+              value={message.text || ''}
+              mine={isMine}
+              linkFailedTitle={linkFailedTitle}
+              linkFailedBody={linkFailedBody}
+            />
+          ) : null}
+          {message.kind === 'image' && message.uri ? (
+            <Pressable
+              onPress={() => {
+                setMediaViewer({ kind: 'image', uri: message.uri || '' });
+              }}
+            >
+              <Image source={{ uri: message.uri }} style={styles.media} />
+            </Pressable>
+          ) : null}
+          {message.kind === 'video' && message.uri ? (
+            <Pressable
+              onPress={() => {
+                setMediaViewer({ kind: 'video', uri: message.uri || '' });
+              }}
+            >
+              <View style={[styles.media, styles.videoCard]}>
+                <Ionicons name="videocam-outline" size={28} color="#E7F4FF" />
+                <Text style={styles.videoCardText}>{isKo ? '동영상 크게 보기' : 'Open video viewer'}</Text>
+              </View>
+            </Pressable>
+          ) : null}
+          {message.kind === 'system' ? <Text style={styles.system}>{formatSystemText(message.text || '', isKo)}</Text> : null}
+          <View style={styles.metaRow}>
+            {isMine ? (
+              <View style={styles.receiptWrap}>
+                {message.delivery === 'read' ||
+                message.unreadCount === 0 ||
+                (!roomIsGroup && directReadCutoff >= message.at) ? (
+                  <Text style={styles.receiptCheck}>✓</Text>
+                ) : typeof message.unreadCount === 'number' && message.unreadCount > 0 ? (
+                  <Text style={styles.receiptBadge}>{message.unreadCount}</Text>
+                ) : null}
+              </View>
+            ) : null}
+            <Text style={[styles.meta, isMine && styles.metaMine]}>
+              {tLabel(message.at)}
+              {isMine && message.delivery
+                ? ` · ${message.delivery === 'sending' ? sendingLabel : message.delivery === 'sent' ? sentLabel : readLabel}`
+                : ''}
+            </Text>
+          </View>
+          {isMine && roomIsGroup && message.readByNames?.length ? (
+            <Text style={styles.readersText} numberOfLines={1}>
+              {`${isKo ? '읽음' : 'Read'} ${message.readByNames.slice(0, 3).join(', ')}${
+                message.readByNames.length > 3 ? ` +${message.readByNames.length - 3}` : ''
+              }`}
+            </Text>
+          ) : null}
+        </View>
+      </View>
+    </>
+  );
+});
+
+const ChatMessageList = memo(function ChatMessageList(props: ChatMessageListProps) {
+  const {
+    listRef,
+    entries,
+    roomIsGroup,
+    directReadCutoff,
+    isKo,
+    sendingLabel,
+    sentLabel,
+    readLabel,
+    noMessageTitle,
+    noMessageBody,
+    firstMessageLabel,
+    helloSeed,
+    onSeedMessage,
+    linkFailedTitle,
+    linkFailedBody,
+    setMediaViewer,
+    setAvatarViewer,
+  } = props;
+
+  return (
+    <FlatList
+      ref={listRef}
+      data={entries}
+      keyExtractor={(item) => item.message.id}
+      renderItem={({ item }) => (
+        <ChatMessageRow
+          entry={item}
+          roomIsGroup={roomIsGroup}
+          directReadCutoff={directReadCutoff}
+          isKo={isKo}
+          sendingLabel={sendingLabel}
+          sentLabel={sentLabel}
+          readLabel={readLabel}
+          linkFailedTitle={linkFailedTitle}
+          linkFailedBody={linkFailedBody}
+          setMediaViewer={setMediaViewer}
+          setAvatarViewer={setAvatarViewer}
+        />
+      )}
+      contentContainerStyle={styles.list}
+      keyboardShouldPersistTaps="handled"
+      initialNumToRender={20}
+      maxToRenderPerBatch={12}
+      windowSize={7}
+      removeClippedSubviews={Platform.OS === 'android'}
+      ListEmptyComponent={
+        <View style={[styles.empty, styles.emptyCove]}>
+          <Text style={styles.h1}>{noMessageTitle}</Text>
+          <Text style={styles.sub}>{noMessageBody}</Text>
+          <Pressable
+            style={styles.btn}
+            onPress={() => {
+              onSeedMessage(helloSeed);
+            }}
+          >
+            <Text style={styles.btnText}>{firstMessageLabel}</Text>
+          </Pressable>
+        </View>
+      }
+    />
+  );
+});
+
 const randomReply = (isKo: boolean) => {
   const arr = isKo
     ? ['Sounds good!', 'Okay, I will reply soon.', 'Great idea.']
@@ -1873,7 +2075,7 @@ function App() {
   const defaultBackendBaseUrl = normalizeBackendBaseUrl(pickValue(
     extra.backend?.baseUrl,
     runtimeEnv.EXPO_PUBLIC_BACKEND_BASE_URL
-  )) || 'http://wowjini0228.synology.me:7083';
+  )) || DEFAULT_BACKEND_BASE_URL;
   const devBackendBaseUrl = useMemo(() => buildDevBackendBaseUrl(defaultBackendBaseUrl), [defaultBackendBaseUrl]);
 
   const hasGoogle = !!Platform.select({
@@ -2013,10 +2215,10 @@ function App() {
     release: null,
     errorMessage: '',
   });
-  const [isInstallingAppUpdate, setIsInstallingAppUpdate] = useState(false);
+  const [appUpdateInstallPhase, setAppUpdateInstallPhase] = useState<AppUpdateInstallPhase>('idle');
   const [directReadCutoffs, setDirectReadCutoffs] = useState<Record<string, number>>({});
 
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<FlatList<ChatMessageEntry> | null>(null);
   const cropOpenedAtRef = useRef(0);
   const sessionRestoreStartedRef = useRef(false);
   const hiddenServerTapCountRef = useRef(0);
@@ -2038,6 +2240,19 @@ function App() {
   const friendTabRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const friendTabRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const backendBaseUrl = normalizeBackendBaseUrl(backendOverrideUrl) || defaultBackendBaseUrl;
+  const activeBackendPreset = detectBackendPreset(backendBaseUrl, defaultBackendBaseUrl, devBackendBaseUrl);
+  const activeBackendLabel =
+    activeBackendPreset === 'dev'
+      ? isKo
+        ? '현재 개발 서버 사용 중'
+        : 'Currently using the dev server'
+      : activeBackendPreset === 'custom'
+        ? isKo
+          ? '현재 직접 입력 서버 사용 중'
+          : 'Currently using a custom server'
+        : isKo
+          ? '현재 운영 서버 사용 중'
+          : 'Currently using the prod server';
 
   const applyPersistedAppSnapshot = (snapshot: PersistedAppSnapshot | null) => {
     if (!snapshot) return;
@@ -2163,7 +2378,7 @@ function App() {
     });
   };
   const openServerMenu = () => {
-    setServerMenuDraft(backendBaseUrl);
+    setServerMenuDraft('');
     setShowServerMenu(true);
   };
   const shouldAutoMarkRoomRead = (roomId: string) =>
@@ -2282,6 +2497,20 @@ function App() {
     () => (activeRoomId ? messages[activeRoomId] ?? [] : []),
     [messages, activeRoomId]
   );
+  const activeDirectReadCutoff = activeRoom && !activeRoom.isGroup ? directReadCutoffs[activeRoom.id] ?? 0 : 0;
+  const activeMessageEntries = useMemo<ChatMessageEntry[]>(
+    () =>
+      activeMsgs.map((message, index) => ({
+        message,
+        showDayChip: index === 0 || dayKey(activeMsgs[index - 1].at) !== dayKey(message.at),
+        isMine: message.mine || (!!message.senderId && message.senderId === currentUserId),
+        avatarUri:
+          message.mine || (!!message.senderId && message.senderId === currentUserId)
+            ? ''
+            : friendMapById.get(message.senderId)?.avatarUri || '',
+      })),
+    [activeMsgs, currentUserId, friendMapById]
+  );
 
   const stats = useMemo(
     () => ({
@@ -2294,7 +2523,6 @@ function App() {
 
   const roomMap = useMemo(() => new Map(rooms.map((r) => [r.id, r])), [rooms]);
   const knockCount = friendRequestsIncoming.length + friendRequestsOutgoing.length + roomInvitationsIncoming.length;
-  const activeRoomCompanions = activeRoom?.members.filter((m) => m !== currentUserId).length ?? 0;
   const topAvatarUri = tab === 'chats' && activeRoom ? roomAvatarUri(activeRoom) : profile.avatarUri;
   const familyUpgradeTarget = useMemo(
     () => friends.find((friend) => friend.id === familyUpgradeTargetId) ?? null,
@@ -2381,10 +2609,15 @@ function App() {
           : isKo
             ? '\uD504\uB85C\uD544 \uD0ED\uC5D0\uC11C \uCD5C\uC2E0 \uBC84\uC804 \uC5EC\uBD80\uB97C \uD655\uC778\uD574\uC694.'
             : 'The profile tab checks whether a newer version is available.';
+  const isInstallingAppUpdate = appUpdateInstallPhase !== 'idle';
   const appUpdateButtonLabel = isInstallingAppUpdate
-    ? isKo
-      ? '\uC124\uCE58 \uD654\uBA74 \uC5EC\uB294 \uC911...'
-      : 'Opening installer...'
+    ? appUpdateInstallPhase === 'downloading'
+      ? isKo
+        ? '\uC5C5\uB370\uC774\uD2B8 \uB2E4\uC6B4\uB85C\uB4DC \uC911...'
+        : 'Downloading update...'
+      : isKo
+        ? '\uC124\uCE58 \uD654\uBA74 \uC5EC\uB294 \uC911...'
+        : 'Opening installer...'
     : isKo
       ? '\uCD5C\uC2E0 \uBC84\uC804 \uC5C5\uB370\uC774\uD2B8'
       : 'Update to latest';
@@ -2394,11 +2627,13 @@ function App() {
     if (!appUpdateStatus.downloadUrl || !appUpdateStatus.latestVersion) return;
     if (isInstallingAppUpdate) return;
 
-    setIsInstallingAppUpdate(true);
+    setAppUpdateInstallPhase('downloading');
     try {
-      await downloadAndInstallAppUpdate(appUpdateStatus.downloadUrl, appUpdateStatus.latestVersion, isKo);
+      await downloadAndInstallAppUpdate(appUpdateStatus.downloadUrl, appUpdateStatus.latestVersion, isKo, (stage) => {
+        setAppUpdateInstallPhase(stage);
+      });
     } finally {
-      setIsInstallingAppUpdate(false);
+      setAppUpdateInstallPhase('idle');
     }
   };
   const handleFriendsTabPress = () => {
@@ -2420,7 +2655,7 @@ function App() {
       const stored = await readBackendOverrideFromStorage();
       if (cancelled) return;
       setBackendOverrideUrl(stored);
-      setServerMenuDraft(stored || defaultBackendBaseUrl);
+      setServerMenuDraft('');
       setIsBackendConfigReady(true);
     };
     void run();
@@ -2827,6 +3062,32 @@ function App() {
 
     const request = (async () => {
       const performRefresh = async (refreshTokenCandidate: string): Promise<string> => {
+        if (hasNativeAuthRefreshSupport()) {
+          let nativeSession: PersistedSession | null = null;
+          try {
+            nativeSession = await refreshNativeAuthSession(backendBaseUrl, refreshTokenCandidate);
+          } catch (error) {
+            const nativeCode =
+              typeof (error as { code?: unknown }).code === 'string' ? String((error as { code?: string }).code) : '';
+            throw createBackendRequestError(errorMessage(error) || 'Token refresh failed.', {
+              ...(nativeCode ? { code: nativeCode } : {}),
+            });
+          }
+          const nextAccessToken = (nativeSession?.accessToken || '').trim();
+          const nextRefreshToken = (nativeSession?.refreshToken || refreshTokenCandidate).trim();
+          if (!nextAccessToken) {
+            throw createBackendRequestError('Refresh token is invalid or expired.', {
+              code: 'AUTH_REFRESH_INVALID',
+            });
+          }
+          setSessionTokens(nextAccessToken, nextRefreshToken);
+          await writeSessionToStorage({
+            accessToken: nextAccessToken,
+            ...(nextRefreshToken ? { refreshToken: nextRefreshToken } : {}),
+          });
+          return nextAccessToken;
+        }
+
         let refreshed: Response;
         try {
           refreshed = await fetch(`${backendBaseUrl}/v1/auth/refresh`, {
@@ -4328,6 +4589,7 @@ function App() {
   useEffect(() => {
     if (!isBackendConfigReady) return;
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const run = async () => {
       setBackendState('checking');
       setBackendStateMsg('');
@@ -4350,11 +4612,19 @@ function App() {
         if (!sessionRestoreStartedRef.current) {
           setIsSessionRestoring(false);
         }
+        retryTimer = setTimeout(() => {
+          if (!cancelled) {
+            void run();
+          }
+        }, 10_000);
       }
     };
-    run();
+    void run();
     return () => {
       cancelled = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
     };
   }, [backendBaseUrl, isBackendConfigReady, s.loginServerError, s.loginServerReady]);
 
@@ -4431,7 +4701,6 @@ function App() {
 
   useEffect(() => {
     if (!isBackendConfigReady) return;
-    if (backendState !== 'ready') return;
     if (sessionRestoreStartedRef.current) return;
     sessionRestoreStartedRef.current = true;
     let cancelled = false;
@@ -6895,7 +7164,7 @@ function App() {
     setRoomMenuId(null);
   };
 
-  const resetForLogout = () => {
+  const resetForLogout = useCallback(() => {
     setSessionTokens('', '');
     void clearAppSnapshotInStorage();
     if (friendTabRefreshTimerRef.current) {
@@ -6951,7 +7220,7 @@ function App() {
     setFamilyUpgradeTargetId('');
     setRoomMenuId(null);
     setLoginErr('');
-  };
+  }, [appLocaleTag]);
 
   useEffect(() => {
     const originalAlert = Alert.alert.bind(Alert);
@@ -6965,11 +7234,12 @@ function App() {
           sessionInvalidRecoveryInFlightRef.current = true;
           void (async () => {
             try {
-              setSessionTokens('', '');
-              await clearSessionInStorage();
+              const recovered = await recoverOrResetSession().catch(() => false);
+              if (recovered) {
+                return;
+              }
             } finally {
               setIsSessionRestoring(false);
-              resetForLogout();
               sessionInvalidRecoveryInFlightRef.current = false;
             }
           })();
@@ -6983,10 +7253,10 @@ function App() {
     return () => {
       Alert.alert = originalAlert as typeof Alert.alert;
     };
-  }, []);
+  }, [recoverOrResetSession]);
 
   const switchBackendServer = async (nextUrl: string) => {
-    const normalized = normalizeBackendBaseUrl(nextUrl);
+    const normalized = normalizeBackendBaseUrl(nextUrl) || defaultBackendBaseUrl;
     if (!normalized) {
       Alert.alert(isKo ? '서버 주소를 입력해 주세요.' : 'Enter a server URL.');
       return;
@@ -6994,7 +7264,7 @@ function App() {
 
     if (normalized === backendBaseUrl) {
       setShowServerMenu(false);
-      setServerMenuDraft(normalized);
+      setServerMenuDraft('');
       return;
     }
 
@@ -7019,7 +7289,7 @@ function App() {
       setBackendState('checking');
       setBackendStateMsg('');
       setShowServerMenu(false);
-      setServerMenuDraft(normalized);
+      setServerMenuDraft('');
       setIsSessionRestoring(true);
       resetForLogout();
     }
@@ -7056,6 +7326,29 @@ function App() {
       },
     ]);
   };
+
+  async function recoverOrResetSession() {
+    const stored = await readSessionFromStorage().catch(() => null);
+    const storedAccessToken = (stored?.accessToken || '').trim();
+    const storedRefreshToken = (stored?.refreshToken || '').trim();
+
+    if (storedRefreshToken) {
+      const refreshedAccessToken = await refreshAccessToken(storedRefreshToken).catch(() => '');
+      if (refreshedAccessToken) {
+        return true;
+      }
+    }
+
+    if (storedAccessToken) {
+      setSessionTokens(storedAccessToken, storedRefreshToken);
+      return true;
+    }
+
+    setSessionTokens('', '');
+    await clearSessionInStorage();
+    resetForLogout();
+    return false;
+  }
 
   const kbBehavior = Platform.OS === 'ios' ? 'padding' : 'height';
   const sheetBottomInset = Math.max(insets.bottom, 12);
@@ -7256,15 +7549,6 @@ function App() {
                 )}
                 <View style={styles.headerCopy}>
                   <Text style={styles.title}>{roomTitle(activeRoom)}</Text>
-                  {activeRoom.isGroup ? (
-                    <Text style={styles.headerMeta}>
-                      {activeRoom.type === 'family'
-                        ? isKo
-                          ? `${activeRoomCompanions}명과 함께하는 가족방`
-                          : `Family room with ${activeRoomCompanions} others`
-                        : `${activeRoomCompanions} ${isKo ? '명과 함께' : 'companions nearby'}`}
-                    </Text>
-                  ) : null}
                 </View>
                 <Pressable style={styles.iconDark} onPress={() => setRoomMenuId(activeRoom.id)}>
                   <Ionicons name="ellipsis-horizontal" size={18} color={FOREST.text} />
@@ -7272,7 +7556,7 @@ function App() {
               </View>
 
               <View style={styles.main}>
-                <ScrollView ref={scrollRef} contentContainerStyle={styles.list}>
+                {false ? <ScrollView contentContainerStyle={styles.list}>
                   {activeMsgs.length === 0 ? (
                     <View style={[styles.empty, styles.emptyCove]}>
                       <Text style={styles.h1}>{s.noMsg}</Text>
@@ -7341,7 +7625,7 @@ function App() {
                               <View style={styles.receiptWrap}>
                                 {m.delivery === 'read' ||
                                 m.unreadCount === 0 ||
-                                (!activeRoom.isGroup && (directReadCutoffs[activeRoom.id] ?? 0) >= m.at) ? (
+                                (!activeRoom!.isGroup && (directReadCutoffs[activeRoom!.id] ?? 0) >= m.at) ? (
                                   <Text style={styles.receiptCheck}>✓</Text>
                                 ) : typeof m.unreadCount === 'number' && m.unreadCount > 0 ? (
                                   <Text style={styles.receiptBadge}>{m.unreadCount}</Text>
@@ -7355,7 +7639,7 @@ function App() {
                                 : ''}
                             </Text>
                           </View>
-                          {isMine && activeRoom.isGroup && m.readByNames?.length ? (
+                          {isMine && activeRoom!.isGroup && m.readByNames?.length ? (
                             <Text style={styles.readersText} numberOfLines={1}>
                               {`${isKo ? '읽음' : 'Read'} ${m.readByNames.slice(0, 3).join(', ')}${
                                 m.readByNames.length > 3 ? ` +${m.readByNames.length - 3}` : ''
@@ -7368,7 +7652,27 @@ function App() {
                       );
                     })
                   )}
-                </ScrollView>
+                </ScrollView> : (
+                  <ChatMessageList
+                    listRef={scrollRef}
+                    entries={activeMessageEntries}
+                    roomIsGroup={activeRoom.isGroup}
+                    directReadCutoff={activeDirectReadCutoff}
+                    isKo={isKo}
+                    sendingLabel={s.sending}
+                    sentLabel={s.sent}
+                    readLabel={s.read}
+                    noMessageTitle={s.noMsg}
+                    noMessageBody={s.denQuietNote}
+                    firstMessageLabel={s.firstMsg}
+                    helloSeed={s.hello}
+                    onSeedMessage={setInput}
+                    linkFailedTitle={s.linkFailedTitle}
+                    linkFailedBody={s.linkFailedBody}
+                    setMediaViewer={setMediaViewer}
+                    setAvatarViewer={setAvatarViewer}
+                  />
+                )}
               </View>
 
               <View style={styles.composer}>
@@ -8289,7 +8593,7 @@ function App() {
               behavior={kbBehavior}
             >
               <ScrollView
-                contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
+                contentContainerStyle={styles.sheetScrollContent}
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={false}
               >
@@ -8535,23 +8839,34 @@ function App() {
           <View style={styles.overlay}>
             <Pressable style={styles.backdrop} onPress={() => setShowServerMenu(false)} />
             <KeyboardAvoidingView
-              style={[styles.sheetWrap, { paddingBottom: sheetBottomInset }]}
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPaddingRoomy }]}
               behavior={kbBehavior}
+              keyboardVerticalOffset={0}
             >
-              <View style={styles.sheet}>
+              <ScrollView
+                contentContainerStyle={[styles.sheetScrollContent, styles.sheetScrollContentRoomy]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheet}>
                 <Text style={styles.h1}>{isKo ? '숨김 서버 메뉴' : 'Hidden Server Menu'}</Text>
-                <Text style={styles.sub}>{isKo ? '현재 앱이 연결할 서버 주소예요.' : 'This app will talk to the server below.'}</Text>
-                <Text style={styles.itemTitle}>{backendBaseUrl}</Text>
+                <Text style={styles.sub}>{isKo ? '주소는 숨김 처리된 상태로만 표시됩니다.' : 'Addresses stay hidden in this menu.'}</Text>
+                <Text style={styles.itemTitle}>{activeBackendLabel}</Text>
+                <Text style={styles.sub}>
+                  {isKo
+                    ? '현재 서버 주소는 이 화면에서 숨김 처리됩니다.'
+                    : 'The current server address is hidden in this menu.'}
+                </Text>
                 <Text style={styles.sub}>
                   {isKo ? '서버를 바꾸면 저장된 로그인 세션과 캐시가 정리돼요.' : 'Switching servers clears the saved login session and local cache.'}
                 </Text>
                 <Pressable style={styles.item} onPress={() => void switchBackendServer(defaultBackendBaseUrl)}>
                   <Text style={styles.itemTitle}>{isKo ? '운영 서버 사용' : 'Use Prod Server'}</Text>
-                  <Text style={styles.sub}>{defaultBackendBaseUrl}</Text>
+                  <Text style={styles.sub}>{isKo ? '기본 운영 서버로 전환합니다.' : 'Switch to the production server.'}</Text>
                 </Pressable>
                 <Pressable style={styles.item} onPress={() => void switchBackendServer(devBackendBaseUrl)}>
-                  <Text style={styles.itemTitle}>{isKo ? '개발 서버 사용 (7084)' : 'Use Dev Server (7084)'}</Text>
-                  <Text style={styles.sub}>{devBackendBaseUrl}</Text>
+                  <Text style={styles.itemTitle}>{isKo ? '개발 서버 사용' : 'Use Dev Server'}</Text>
+                  <Text style={styles.sub}>{isKo ? '개발 점검용 서버로 전환합니다.' : 'Switch to the development server.'}</Text>
                 </Pressable>
                 <TextInput
                   style={styles.field}
@@ -8562,6 +8877,11 @@ function App() {
                   placeholder={isKo ? '직접 서버 URL 입력' : 'Enter custom server URL'}
                   placeholderTextColor={FOREST.placeholder}
                 />
+                <Text style={styles.sub}>
+                  {isKo
+                    ? '직접 입력하면 해당 서버를 사용하고, 비워 두고 적용하면 기본 운영 서버를 사용합니다.'
+                    : 'Use the typed server when provided, or apply with an empty field to return to the default production server.'}
+                </Text>
                 <View style={styles.row}>
                   <Pressable style={styles.smallBtn} onPress={() => setShowServerMenu(false)}>
                     <Text style={styles.smallBtnText}>{isKo ? '닫기' : 'Close'}</Text>
@@ -8570,7 +8890,8 @@ function App() {
                     <Text style={styles.smallBtnText}>{isKo ? '이 주소로 적용' : 'Apply URL'}</Text>
                   </Pressable>
                 </View>
-              </View>
+                </View>
+              </ScrollView>
             </KeyboardAvoidingView>
           </View>
         </Modal>
@@ -9626,7 +9947,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.92)',
   },
   headerCopy: { flex: 1, gap: 2 },
-  headerMeta: { color: FOREST.textMuted, fontSize: 12, fontWeight: '600' },
   iconDark: {
     width: 36,
     height: 36,

@@ -30,11 +30,6 @@ import java.util.Locale
 import java.util.TimeZone
 
 class LocationCaptureService : Service() {
-  private data class RefreshedTokens(
-    val accessToken: String,
-    val refreshToken: String
-  )
-
   private val handler = Handler(Looper.getMainLooper())
 
   override fun onBind(intent: Intent?): IBinder? = null
@@ -177,7 +172,7 @@ class LocationCaptureService : Service() {
       val responseCode = connection.responseCode
       if (responseCode == HttpURLConnection.HTTP_UNAUTHORIZED && tokens.refreshToken.isNotEmpty()) {
         connection.disconnect()
-        val refreshedTokens = refreshAccessToken(baseUrl, tokens.refreshToken) ?: return
+        val refreshedTokens = refreshTokens(baseUrl, tokens.refreshToken) ?: return
         uploadLocation(baseUrl, refreshedTokens.accessToken, refreshedTokens.refreshToken, "", source, location)
       }
     } finally {
@@ -216,7 +211,7 @@ class LocationCaptureService : Service() {
     }
   }
 
-  private fun patchLocationSharingEnabled(baseUrl: String, tokens: RefreshedTokens) {
+  private fun patchLocationSharingEnabled(baseUrl: String, tokens: StoredSession) {
     val payload = JSONObject().apply {
       put("locationSharingEnabled", true)
     }
@@ -235,7 +230,7 @@ class LocationCaptureService : Service() {
       val responseCode = connection.responseCode
       if (responseCode == HttpURLConnection.HTTP_UNAUTHORIZED && tokens.refreshToken.isNotEmpty()) {
         connection.disconnect()
-        val refreshedTokens = refreshAccessToken(baseUrl, tokens.refreshToken) ?: return
+        val refreshedTokens = refreshTokens(baseUrl, tokens.refreshToken) ?: return
         patchLocationSharingEnabled(baseUrl, refreshedTokens)
       }
     } finally {
@@ -243,57 +238,24 @@ class LocationCaptureService : Service() {
     }
   }
 
-  private fun ensureTokens(baseUrl: String, accessToken: String, refreshToken: String): RefreshedTokens? {
+  private fun ensureTokens(baseUrl: String, accessToken: String, refreshToken: String): StoredSession? {
     if (accessToken.isNotEmpty()) {
-      return RefreshedTokens(accessToken = accessToken, refreshToken = refreshToken)
+      return StoredSession(accessToken = accessToken.trim(), refreshToken = refreshToken.trim())
     }
-    if (refreshToken.isEmpty()) return null
-    return refreshAccessToken(baseUrl, refreshToken)
+    val stored = LocationSessionStore.read(this)
+    if (stored.accessToken.isNotEmpty()) {
+      return stored
+    }
+    if (refreshToken.isEmpty() && stored.refreshToken.isEmpty()) return null
+    return refreshTokens(baseUrl, refreshToken)
   }
 
-  private fun refreshAccessToken(baseUrl: String, refreshToken: String): RefreshedTokens? {
-    val payload = JSONObject().apply {
-      put("refreshToken", refreshToken)
+  private fun refreshTokens(baseUrl: String, refreshToken: String): StoredSession? {
+    val outcome = LocationAuthSessionManager.refreshSession(this, baseUrl, refreshToken)
+    if (outcome.session == null && outcome.errorMessage?.isNotBlank() == true) {
+      Log.w(LOG_TAG, "Shared token refresh failed: ${outcome.errorMessage}")
     }
-    val connection = (URL("$baseUrl/v1/auth/refresh").openConnection() as HttpURLConnection).apply {
-      requestMethod = "POST"
-      connectTimeout = NETWORK_TIMEOUT_MS
-      readTimeout = NETWORK_TIMEOUT_MS
-      doOutput = true
-      setRequestProperty("Content-Type", "application/json")
-    }
-    return try {
-      OutputStreamWriter(connection.outputStream, StandardCharsets.UTF_8).use { writer ->
-        writer.write(payload.toString())
-      }
-      val responseCode = connection.responseCode
-      if (responseCode !in 200..299) {
-        if (responseCode == HttpURLConnection.HTTP_UNAUTHORIZED) {
-          LocationSessionStore.clear(this)
-        }
-        null
-      } else {
-        val responseText = connection.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
-        val root = JSONObject(responseText)
-        val data = if (root.optBoolean("success")) root.optJSONObject("data") else root
-        val accessToken = data?.optString("accessToken").orEmpty().trim()
-        val tokens = data?.optJSONObject("tokens")
-        val nextRefreshToken = data?.optString("refreshToken").orEmpty().ifBlank {
-          tokens?.optString("refreshToken").orEmpty()
-        }.trim().ifEmpty { refreshToken }
-        if (accessToken.isBlank()) {
-          null
-        } else {
-          LocationSessionStore.save(this, accessToken, nextRefreshToken)
-          RefreshedTokens(accessToken = accessToken, refreshToken = nextRefreshToken)
-        }
-      }
-    } catch (error: Exception) {
-      Log.e(LOG_TAG, "Token refresh failed", error)
-      null
-    } finally {
-      connection.disconnect()
-    }
+    return outcome.session
   }
 
   private fun finishService(startId: Int) {
