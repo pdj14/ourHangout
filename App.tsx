@@ -74,6 +74,9 @@ type Stage = 'login' | 'setup_name' | 'setup_intro' | 'app';
 type Tab = 'chats' | 'friends' | 'profile';
 type ChatsMode = 'direct' | 'group';
 type CreateRoomKind = 'group' | 'family';
+type FriendModalTab = 'friend' | 'pobi';
+type FriendsMode = 'friends' | 'pobis';
+type DirectChatsMode = 'friends' | 'pobis';
 type MsgKind = 'text' | 'image' | 'video' | 'system';
 type Delivery = 'sending' | 'sent' | 'read';
 type FamilyLabel = 'mother' | 'father' | 'guardian' | 'child';
@@ -147,7 +150,7 @@ type Profile = {
 type DraftMedia = { kind: 'image' | 'video'; uri: string; mimeType: string };
 type MediaViewer = { kind: 'image' | 'video'; uri: string };
 type AvatarViewer = { uri: string; title: string };
-type CropTarget = 'profile' | 'chat';
+type CropTarget = 'profile' | 'pobi' | 'chat';
 type ProfilePhotoCrop = {
   uri: string;
   imageWidth: number;
@@ -254,12 +257,61 @@ type BackendBot = {
   userId?: string;
   isActive?: boolean;
 };
+type BackendPobi = {
+  id?: string;
+  name?: string;
+  theme?: string;
+  botId?: string;
+  botKey?: string;
+  botUserId?: string;
+  status?: string;
+  avatarUri?: string;
+  isDefault?: boolean;
+  isActive?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+type BackendPobiOpenClawInfo = {
+  pobi?: BackendPobi;
+  openclaw?: {
+    mode?: 'mock' | 'http' | 'connector';
+    botKey?: string;
+    connected?: boolean;
+    status?: 'connected' | 'pairing_pending' | 'not_connected';
+    deviceName?: string;
+    lastSeenAt?: string;
+    pairingCode?: string;
+    pairingExpiresAt?: string;
+    pairingPersistent?: boolean;
+    matchedConnectors?: Array<{
+      connectorId?: string;
+      wildcard?: boolean;
+      botKeys?: string[];
+      lastSeenAt?: string;
+    }>;
+    matchedChannels?: Array<{
+      accountId?: string;
+      pobiIds?: string[];
+      botKeys?: string[];
+      lastSeenAt?: string;
+    }>;
+  };
+};
+type BackendPobiOpenClawPairing = {
+  pairingCode?: string;
+  expiresAt?: string;
+  persistent?: boolean;
+  pobi?: BackendPobi;
+};
 type BotSummary = {
   id: string;
   botKey: string;
   name: string;
   description: string;
   userId: string;
+  status?: string;
+  avatarUri?: string;
+  isDefault?: boolean;
 };
 type BackendRoom = {
   id?: string;
@@ -456,6 +508,8 @@ type PersistedAppSnapshot = {
   currentUserId?: string;
   tab?: Tab;
   chatsMode?: ChatsMode;
+  friendsMode?: FriendsMode;
+  directChatsMode?: DirectChatsMode;
   directReadCutoffs?: Record<string, number>;
 };
 type BackendSyncOptions = {
@@ -840,6 +894,15 @@ const cropGeometry = (imageWidth: number, imageHeight: number, scale: number) =>
   return { renderWidth, renderHeight, overflowX, overflowY };
 };
 const normalizeBackendBaseUrl = (value?: string | null): string => (value || '').trim().replace(/\/+$/, '');
+const pobiDescription = (status: string | undefined, isDefault: boolean, isKo: boolean): string => {
+  const normalizedStatus = (status || '').trim();
+  if (normalizedStatus) {
+    return isDefault
+      ? `${normalizedStatus}${isKo ? ' · 대표 포비' : ' · Default Pobi'}`
+      : normalizedStatus;
+  }
+  return isDefault ? (isKo ? '대표 포비' : 'Default Pobi') : isKo ? '내 포비' : 'My Pobi';
+};
 const detectBackendPreset = (
   value: string | null | undefined,
   prodBaseUrl: string,
@@ -1368,10 +1431,20 @@ const TEXT = {
     noSearchFriends: 'No friends match your search.',
     goFriends: 'Go to Friends',
     newGroup: 'New Group',
-    botsTitle: 'Assistant',
-    botStart: 'Chat with assistant',
-    botLoadFailed: 'Failed to load bot list.',
+    botsTitle: 'Pobi',
+    botStart: 'Start chatting with your Pobi',
+    botLoadFailed: 'Failed to load Pobi list.',
     addFriend: 'Add friend',
+    friendModalFriendTab: 'Friends',
+    friendModalPobiTab: 'Pobi',
+    pobiTitle: 'My Pobi',
+    pobiIntro: 'Create a small AI companion linked to your OpenClaw setup.',
+    pobiNamePlaceholder: 'Name your Pobi',
+    pobiCreate: 'Create Pobi',
+    pobiCreateDone: 'Pobi created.',
+    pobiCreateFailed: 'Could not create Pobi.',
+    pobiListEmpty: 'You have no Pobi yet.',
+    pobiChatAction: 'Chat',
     friendName: 'Friend name',
     friendStatus: 'Status message',
     friendLookupPlaceholder: 'Enter friend email',
@@ -1520,10 +1593,20 @@ const TEXT = {
     noSearchFriends: '검색 결과가 없어요.',
     goFriends: '친구로 이동',
     newGroup: '그룹 만들기',
-    botsTitle: '도우미',
-    botStart: '도우미와 대화',
-    botLoadFailed: '봇 목록을 불러오지 못했어요.',
+    botsTitle: '포비',
+    botStart: '포비와 대화 시작',
+    botLoadFailed: '포비 목록을 불러오지 못했어요.',
     addFriend: '친구 추가',
+    friendModalFriendTab: '친구',
+    friendModalPobiTab: '포비',
+    pobiTitle: '내 포비',
+    pobiIntro: '포비는 내 OpenClaw와 연결되는 나만의 작은 동료예요.',
+    pobiNamePlaceholder: '포비 이름',
+    pobiCreate: '포비 만들기',
+    pobiCreateDone: '포비를 만들었어요.',
+    pobiCreateFailed: '포비를 만들지 못했어요.',
+    pobiListEmpty: '아직 만든 포비가 없어요.',
+    pobiChatAction: '대화',
     friendName: '친구 이름',
     friendStatus: '상태 메시지',
     friendLookupPlaceholder: '친구 이메일 입력',
@@ -1680,6 +1763,13 @@ const roomTimeLabel = (ms: number) => {
     return tLabel(ms);
   }
   return target.toLocaleDateString([], { month: 'short', day: 'numeric' });
+};
+const pairingRemainingLabel = (remainingMs: number, isKo: boolean): string => {
+  const safe = Math.max(0, Math.floor(remainingMs / 1000));
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe % 60;
+  const value = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  return isKo ? `남은 시간 ${value}` : `Time left ${value}`;
 };
 function InAppVideoPlayer({ uri }: { uri: string }) {
   const player = useVideoPlayer(uri, (videoPlayer) => {
@@ -2087,6 +2177,8 @@ function App() {
   const [stage, setStage] = useState<Stage>('login');
   const [tab, setTab] = useState<Tab>('friends');
   const [chatsMode, setChatsMode] = useState<ChatsMode>('direct');
+  const [friendsMode, setFriendsMode] = useState<FriendsMode>('friends');
+  const [directChatsMode, setDirectChatsMode] = useState<DirectChatsMode>('friends');
   const [profile, setProfile] = useState<Profile>({
     name: '',
     status: '',
@@ -2145,10 +2237,21 @@ function App() {
   });
 
   const [showFriendModal, setShowFriendModal] = useState(false);
+  const [friendModalTab, setFriendModalTab] = useState<FriendModalTab>('friend');
   const [friendLookupQuery, setFriendLookupQuery] = useState('');
   const [friendLookupResults, setFriendLookupResults] = useState<FriendLookupResult[]>([]);
   const [friendLookupMsg, setFriendLookupMsg] = useState('');
   const [isFriendLookupLoading, setIsFriendLookupLoading] = useState(false);
+  const [pobiNameDraft, setPobiNameDraft] = useState('');
+  const [pobiStatusDraft, setPobiStatusDraft] = useState('');
+  const [pobiPhotoDraft, setPobiPhotoDraft] = useState('');
+  const [showPobiProfileModal, setShowPobiProfileModal] = useState(false);
+  const [editingPobiId, setEditingPobiId] = useState('');
+  const [pobiActionKey, setPobiActionKey] = useState('');
+  const [isPobiOpenClawLoading, setIsPobiOpenClawLoading] = useState(false);
+  const [pobiOpenClawInfo, setPobiOpenClawInfo] = useState<BackendPobiOpenClawInfo | null>(null);
+  const [pobiPairingActionKey, setPobiPairingActionKey] = useState('');
+  const [pobiPairingNowMs, setPobiPairingNowMs] = useState(() => Date.now());
   const [friendRequestsIncoming, setFriendRequestsIncoming] = useState<FriendRequestItem[]>([]);
   const [friendRequestsOutgoing, setFriendRequestsOutgoing] = useState<FriendRequestItem[]>([]);
   const [familyRequestsIncoming, setFamilyRequestsIncoming] = useState<FamilyUpgradeRequestItem[]>([]);
@@ -2192,6 +2295,7 @@ function App() {
   const [roomMembersCanKickMembers, setRoomMembersCanKickMembers] = useState(false);
   const [isRoomMembersLoading, setIsRoomMembersLoading] = useState(false);
   const [roomMembersActionKey, setRoomMembersActionKey] = useState('');
+  const [roomPobiActionKey, setRoomPobiActionKey] = useState('');
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [familyStructureRoomId, setFamilyStructureRoomId] = useState<string | null>(null);
   const [familyStructureProfiles, setFamilyStructureProfiles] = useState<FamilyRoomMemberProfile[]>([]);
@@ -2272,6 +2376,12 @@ function App() {
     if (snapshot.chatsMode === 'direct' || snapshot.chatsMode === 'group') {
       setChatsMode(snapshot.chatsMode);
     }
+    if (snapshot.friendsMode === 'friends' || snapshot.friendsMode === 'pobis') {
+      setFriendsMode(snapshot.friendsMode);
+    }
+    if (snapshot.directChatsMode === 'friends' || snapshot.directChatsMode === 'pobis') {
+      setDirectChatsMode(snapshot.directChatsMode);
+    }
     if (snapshot.directReadCutoffs) {
       setDirectReadCutoffs(snapshot.directReadCutoffs);
     }
@@ -2331,9 +2441,9 @@ function App() {
   const roomAvatarUri = (room: Room) => {
     if (room.type !== 'direct') return '';
     const peerId = room.members.find((member) => member !== currentUserId) ?? '';
-    return getFriend(peerId)?.avatarUri || '';
+    return getFriend(peerId)?.avatarUri || getBot(peerId)?.avatarUri || '';
   };
-  const messageAvatarUri = (message: Message) => getFriend(message.senderId)?.avatarUri || '';
+  const messageAvatarUri = (message: Message) => getFriend(message.senderId)?.avatarUri || getBot(message.senderId)?.avatarUri || '';
   const roomTitle = (room: Room) =>
     room.type !== 'direct'
       ? room.title
@@ -2426,10 +2536,6 @@ function App() {
     }, HIDDEN_SERVER_MENU_TAP_WINDOW_MS);
   };
 
-  const visibleBots = useMemo(
-    () => bots.filter((bot) => bot.botKey !== 'openclaw-assistant'),
-    [bots]
-  );
   const sortedRooms = useMemo(
     () =>
       rooms
@@ -2471,10 +2577,29 @@ function App() {
     [friends]
   );
   const directRooms = useMemo(() => filteredRooms.filter((room) => room.type === 'direct'), [filteredRooms]);
+  const isPobiDirectRoom = useCallback(
+    (room: Room) => {
+      const peerId = room.members.find((member) => member !== currentUserId) ?? '';
+      return !!getBot(peerId);
+    },
+    [currentUserId, botMapByUserId]
+  );
+  const friendDirectRooms = useMemo(() => directRooms.filter((room) => !isPobiDirectRoom(room)), [directRooms, isPobiDirectRoom]);
+  const pobiDirectRooms = useMemo(() => directRooms.filter((room) => isPobiDirectRoom(room)), [directRooms, isPobiDirectRoom]);
   const groupRooms = useMemo(() => filteredRooms.filter((room) => room.type === 'group'), [filteredRooms]);
   const familyRooms = useMemo(() => filteredRooms.filter((room) => room.type === 'family'), [filteredRooms]);
-  const favoriteDirectRooms = useMemo(() => directRooms.filter((room) => room.favorite), [directRooms]);
-  const otherDirectRooms = useMemo(() => directRooms.filter((room) => !room.favorite), [directRooms]);
+  const favoriteFriendDirectRooms = useMemo(() => friendDirectRooms.filter((room) => room.favorite), [friendDirectRooms]);
+  const otherFriendDirectRooms = useMemo(() => friendDirectRooms.filter((room) => !room.favorite), [friendDirectRooms]);
+  const favoritePobiDirectRooms = useMemo(() => pobiDirectRooms.filter((room) => room.favorite), [pobiDirectRooms]);
+  const otherPobiDirectRooms = useMemo(() => pobiDirectRooms.filter((room) => !room.favorite), [pobiDirectRooms]);
+  const favoriteDirectRooms = useMemo(
+    () => (directChatsMode === 'pobis' ? favoritePobiDirectRooms : favoriteFriendDirectRooms),
+    [directChatsMode, favoritePobiDirectRooms, favoriteFriendDirectRooms]
+  );
+  const otherDirectRooms = useMemo(
+    () => (directChatsMode === 'pobis' ? otherPobiDirectRooms : otherFriendDirectRooms),
+    [directChatsMode, otherPobiDirectRooms, otherFriendDirectRooms]
+  );
   const favoriteGroupRooms = useMemo(() => groupRooms.filter((room) => room.favorite), [groupRooms]);
   const otherGroupRooms = useMemo(() => groupRooms.filter((room) => !room.favorite), [groupRooms]);
   const favoriteFamilyRooms = useMemo(() => familyRooms.filter((room) => room.favorite), [familyRooms]);
@@ -2488,6 +2613,13 @@ function App() {
   );
   const favoriteFriends = useMemo(() => sortedFriendsByTrust.filter((friend) => friend.trusted), [sortedFriendsByTrust]);
   const otherFriends = useMemo(() => sortedFriendsByTrust.filter((friend) => !friend.trusted), [sortedFriendsByTrust]);
+  const sortedPobis = useMemo(
+    () =>
+      [...bots].sort((a, b) =>
+        (a.isDefault === b.isDefault ? a.name.localeCompare(b.name) : a.isDefault ? -1 : 1)
+      ),
+    [bots]
+  );
 
   const activeRoom = useMemo(
     () => rooms.find((r) => r.id === activeRoomId) ?? null,
@@ -2507,9 +2639,9 @@ function App() {
         avatarUri:
           message.mine || (!!message.senderId && message.senderId === currentUserId)
             ? ''
-            : friendMapById.get(message.senderId)?.avatarUri || '',
+            : friendMapById.get(message.senderId)?.avatarUri || botMapByUserId.get(message.senderId)?.avatarUri || '',
       })),
-    [activeMsgs, currentUserId, friendMapById]
+    [activeMsgs, currentUserId, friendMapById, botMapByUserId]
   );
 
   const stats = useMemo(
@@ -2555,6 +2687,17 @@ function App() {
     const pendingTargetIds = new Set(roomMembersPendingInvitations.map((invitation) => invitation.targetUserId));
     return friends.filter((friend) => !memberIds.has(friend.id) && !pendingTargetIds.has(friend.id));
   }, [friends, roomMembers, roomMembersPendingInvitations, roomMembersRoomId]);
+  const roomMembersJoinedPobis = useMemo(() => {
+    if (!roomMembersRoomId) return [];
+    const memberIds = new Set(roomMembers.map((member) => member.userId));
+    return bots.filter((bot) => memberIds.has(bot.userId));
+  }, [bots, roomMembers, roomMembersRoomId]);
+  const roomMembersInviteablePobis = useMemo(() => {
+    if (!roomMembersRoomId) return [];
+    if (roomMembersJoinedPobis.length > 0) return [];
+    const memberIds = new Set(roomMembers.map((member) => member.userId));
+    return bots.filter((bot) => !memberIds.has(bot.userId));
+  }, [bots, roomMembers, roomMembersJoinedPobis, roomMembersRoomId]);
   const familyStructureProfileMap = useMemo(
     () => new Map(familyStructureProfiles.map((profile) => [profile.userId, profile])),
     [familyStructureProfiles]
@@ -2571,8 +2714,35 @@ function App() {
   const familyStructureChildId = '';
   const setFamilyStructureGuardianId = (_value: string) => undefined;
   const setFamilyStructureChildId = (_value: string) => undefined;
+  const pobiPairingRemainingMs = useMemo(() => {
+    const expiresAt = pobiOpenClawInfo?.openclaw?.pairingExpiresAt;
+    if (!expiresAt) return 0;
+    const expiresMs = Date.parse(String(expiresAt));
+    if (!Number.isFinite(expiresMs)) return 0;
+    return Math.max(0, expiresMs - pobiPairingNowMs);
+  }, [pobiOpenClawInfo, pobiPairingNowMs]);
+  const pobiPairingActive = pobiPairingRemainingMs > 0;
+  const pobiPairingPersistent = !!pobiOpenClawInfo?.openclaw?.pairingPersistent;
+  const pobiHasOpenClawBinding = useMemo(() => {
+    const openclaw = pobiOpenClawInfo?.openclaw;
+    if (!openclaw) return false;
+    if (openclaw.connected) return true;
+    if (String(openclaw.deviceName || '').trim()) return true;
+    if ((openclaw.matchedConnectors?.length ?? 0) > 0) return true;
+    if ((openclaw.matchedChannels?.length ?? 0) > 0) return true;
+    return false;
+  }, [pobiOpenClawInfo]);
   const friendsTabLabel = s.tabsFriends;
   const friendsTabHint = isKo ? '친구 목록' : 'Friend list';
+  const activeFriendsTabLabel = friendsMode === 'pobis' ? (isKo ? '포비' : 'Pobi') : s.tabsFriends;
+  const activeFriendsTabHint =
+    friendsMode === 'pobis'
+      ? isKo
+        ? '다시 누르면 친구'
+        : 'Tap again: Friends'
+      : isKo
+        ? '다시 누르면 포비'
+        : 'Tap again: Pobi';
   const chatsTabLabel =
     chatsMode === 'group' ? (isKo ? '그룹' : 'Groups') : isKo ? '1:1' : 'Direct';
   const chatsTabHint =
@@ -2585,7 +2755,7 @@ function App() {
         : 'Tap again: Groups';
   const currentSectionLabel =
     tab === 'friends'
-      ? friendsTabLabel
+      ? activeFriendsTabLabel
       : tab === 'chats'
         ? chatsTabLabel
         : s.tabsProfile;
@@ -2638,6 +2808,10 @@ function App() {
   };
   const handleFriendsTabPress = () => {
     if (activeRoomRef.current) return;
+    if (tab === 'friends') {
+      setFriendsMode((prev) => (prev === 'friends' ? 'pobis' : 'friends'));
+      return;
+    }
     setTab('friends');
   };
   const handleChatsTabPress = () => {
@@ -2967,9 +3141,23 @@ function App() {
       currentUserId,
       tab,
       chatsMode,
+      friendsMode,
+      directChatsMode,
       directReadCutoffs,
     });
-  }, [stage, isSessionRestoring, profile, friends, bots, rooms, currentUserId, tab, chatsMode, directReadCutoffs]);
+  }, [stage, isSessionRestoring, profile, friends, bots, rooms, currentUserId, tab, chatsMode, friendsMode, directChatsMode, directReadCutoffs]);
+
+  useEffect(() => {
+    if (!showPobiProfileModal) return;
+    if (!pobiOpenClawInfo?.openclaw?.pairingExpiresAt) return;
+
+    setPobiPairingNowMs(Date.now());
+    const interval = setInterval(() => {
+      setPobiPairingNowMs(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [showPobiProfileModal, pobiOpenClawInfo?.openclaw?.pairingExpiresAt]);
 
   useEffect(() => {
     if (tab !== 'chats') return;
@@ -3289,7 +3477,7 @@ function App() {
       id: String(message.id || uid()),
       roomId: String(message.roomId || activeRoomId || ''),
       senderId,
-      senderName: String(message.senderName || getFriend(senderId)?.name || profile.name || s.me),
+      senderName: String(message.senderName || getFriend(senderId)?.name || getBot(senderId)?.name || profile.name || s.me),
       mine,
       kind: (message.kind || 'text') as MsgKind,
       ...(message.text ? { text: String(message.text) } : {}),
@@ -3420,6 +3608,64 @@ function App() {
     const completedUrl = resolveBackendMediaUrl(String(completed.fileUrl || fileUrl));
     if (!completedUrl) {
       throw new Error('Avatar upload did not return a file URL.');
+    }
+
+    return completedUrl;
+  };
+
+  const uploadPobiPhotoToBackend = async (token: string, localUri: string): Promise<string> => {
+    const fileInfo = await FileSystem.getInfoAsync(localUri);
+    if (!fileInfo.exists || fileInfo.isDirectory) {
+      throw new Error('Failed to read local Pobi photo.');
+    }
+
+    const mimeType = inferMediaMimeType(localUri, 'image', 'image/jpeg');
+    const issued = await backendRequest<BackendMediaUploadTicket>(
+      '/v1/media/upload-url',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'image',
+          mimeType,
+          size: fileInfo.size,
+        }),
+      },
+      token
+    );
+
+    const uploadUrl = resolveBackendApiUrl(String(issued.uploadUrl || ''));
+    const fileUrl = String(issued.fileUrl || '').trim();
+    if (!uploadUrl || !fileUrl) {
+      throw new Error('Pobi photo upload URL was not issued.');
+    }
+
+    const uploadResult = await FileSystem.uploadAsync(uploadUrl, localUri, {
+      httpMethod: 'PUT',
+      uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': mimeType,
+      },
+    });
+    if (uploadResult.status < 200 || uploadResult.status >= 300) {
+      throw new Error(`Pobi photo upload failed (${uploadResult.status}).`);
+    }
+
+    const completed = await backendRequest<BackendCompletedMedia>(
+      '/v1/media/complete',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          fileUrl,
+          kind: 'image',
+        }),
+      },
+      token
+    );
+
+    const completedUrl = resolveBackendMediaUrl(String(completed.fileUrl || fileUrl));
+    if (!completedUrl) {
+      throw new Error('Pobi photo upload did not return a file URL.');
     }
 
     return completedUrl;
@@ -3852,6 +4098,37 @@ function App() {
     );
   };
 
+  const renderPobiRow = (bot: BotSummary) => {
+    const subtitle = bot.status?.trim() || bot.description || s.botStart;
+    return (
+      <View key={bot.id} style={styles.friendItem}>
+        <Pressable
+          style={styles.listAvatar}
+          disabled={!bot.avatarUri}
+          onPress={() => openAvatarViewer(bot.avatarUri || '', bot.name)}
+        >
+          {bot.avatarUri ? (
+            <Image source={{ uri: bot.avatarUri }} style={styles.listAvatarImage} />
+          ) : (
+            <Text style={styles.listAvatarText}>{bot.name.slice(0, 1).toUpperCase()}</Text>
+          )}
+        </Pressable>
+        <View style={styles.friendItemCopy}>
+          <Text style={styles.itemTitle}>{bot.name}</Text>
+          <Text style={styles.friendStatusText} numberOfLines={1}>
+            {subtitle}
+          </Text>
+        </View>
+        <Pressable style={styles.iconLight} onPress={() => void startBotRoom(bot.id)}>
+          <Ionicons name="chatbubble-ellipses" size={16} color={FOREST.text} />
+        </Pressable>
+        <Pressable style={[styles.iconLight, !!pobiActionKey && styles.off]} disabled={!!pobiActionKey} onPress={() => openPobiProfileEditor(bot)}>
+          <Ionicons name="ellipsis-horizontal" size={16} color={FOREST.text} />
+        </Pressable>
+      </View>
+    );
+  };
+
   const syncLocationSharingRuntime = async (enabled: boolean, options?: { immediate?: boolean }) => {
     void enabled;
     void options;
@@ -4162,19 +4439,26 @@ function App() {
   };
 
   const refreshBotsFromBackend = async (token: string) => {
-    const raw = await backendRequest<BackendBot[] | BackendListData<BackendBot>>('/v1/bots', { method: 'GET' }, token).catch(
+    const raw = await backendRequest<BackendPobi[] | BackendListData<BackendPobi>>('/v1/pobis', { method: 'GET' }, token).catch(
       () => null
     );
     if (!raw) return;
-    const items = asListItems<BackendBot>(raw)
-      .filter((bot) => !!bot?.id && !!bot?.userId)
-      .map((bot) => ({
-        id: String(bot.id),
-        botKey: String(bot.botKey || ''),
-        name: String(bot.name || 'Assistant'),
-        description: String(bot.description || ''),
-        userId: String(bot.userId),
-      }));
+    const items = asListItems<BackendPobi>(raw)
+      .filter((pobi) => !!pobi?.id && !!pobi?.botUserId)
+      .map((pobi) => {
+        const isDefault = !!pobi.isDefault;
+        const status = String(pobi.status || '').trim();
+        return {
+          id: String(pobi.id),
+          botKey: String(pobi.botKey || ''),
+          name: String(pobi.name || (isKo ? '포비' : 'Pobi')),
+          description: pobiDescription(status, isDefault, isKo),
+          userId: String(pobi.botUserId),
+          ...(status ? { status } : {}),
+          ...(pobi.avatarUri ? { avatarUri: resolveBackendMediaUrl(String(pobi.avatarUri)) } : {}),
+          isDefault,
+        };
+      });
     setBots(items);
   };
 
@@ -5154,8 +5438,8 @@ function App() {
     const token = accessToken.trim();
     if (!token) return;
     try {
-      const result = await backendRequest<{ bot?: BackendBot; room?: BackendRoom }>(
-        `/v1/bots/${botId}/rooms`,
+      const result = await backendRequest<{ pobi?: BackendPobi; room?: BackendRoom }>(
+        `/v1/pobis/${botId}/direct-room`,
         { method: 'POST' },
         token
       );
@@ -5171,6 +5455,250 @@ function App() {
       const msg = err instanceof Error ? err.message : '';
       Alert.alert(normalizeBackendErrorMessage(msg || s.botLoadFailed, isKo));
     }
+  };
+
+  const createPobi = async () => {
+    const token = await requireAccessToken();
+    if (!token) return;
+
+    const name = pobiNameDraft.trim();
+    if (!name) {
+      Alert.alert(isKo ? '포비 이름을 먼저 입력해 주세요.' : 'Enter a Pobi name first.');
+      return;
+    }
+
+    const actionKey = `create:${name}`;
+    setPobiActionKey(actionKey);
+    try {
+      const draftAvatarUri = pobiPhotoDraft.trim();
+      const nextAvatarUri =
+        token && draftAvatarUri && isLocalAssetUri(draftAvatarUri)
+          ? await uploadPobiPhotoToBackend(token, draftAvatarUri)
+          : resolveBackendMediaUrl(draftAvatarUri);
+      const created = await backendRequest<BackendPobi>(
+        '/v1/pobis',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            status: pobiStatusDraft.trim(),
+            avatarUri: nextAvatarUri,
+          }),
+        },
+        token
+      );
+
+      await refreshBotsFromBackend(token);
+      setPobiNameDraft('');
+      setPobiStatusDraft('');
+      setPobiPhotoDraft('');
+
+      const createdId = String(created?.id || '').trim();
+      if (createdId) {
+        setShowFriendModal(false);
+        await startBotRoom(createdId);
+      } else {
+        Alert.alert(s.pobiCreateDone);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.pobiCreateFailed, isKo));
+    } finally {
+      setPobiActionKey('');
+    }
+  };
+
+  const loadPobiOpenClawInfo = async (token: string, pobiId: string) => {
+    if (!token || !pobiId) return;
+    setIsPobiOpenClawLoading(true);
+    try {
+      const raw = await backendRequest<BackendPobiOpenClawInfo>(`/v1/pobis/${pobiId}/openclaw`, { method: 'GET' }, token);
+      setPobiOpenClawInfo(raw);
+    } catch {
+      setPobiOpenClawInfo(null);
+    } finally {
+      setIsPobiOpenClawLoading(false);
+    }
+  };
+
+  const createPobiOpenClawPairing = async () => {
+    const token = await requireAccessToken();
+    const pobiId = editingPobiId.trim();
+    if (!token || !pobiId) return;
+
+    const actionKey = `pairing:${pobiId}`;
+    setPobiPairingActionKey(actionKey);
+    try {
+      await backendRequest<BackendPobiOpenClawPairing>(
+        `/v1/pobis/${pobiId}/openclaw/pairings`,
+        {
+          method: 'POST',
+        },
+        token
+      );
+      await loadPobiOpenClawInfo(token, pobiId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setPobiPairingActionKey('');
+    }
+  };
+
+  const disconnectPobiOpenClaw = async () => {
+    const token = await requireAccessToken();
+    const pobiId = editingPobiId.trim();
+    if (!token || !pobiId) return;
+
+    const actionKey = `disconnect:${pobiId}`;
+    setPobiPairingActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/pobis/${pobiId}/openclaw`, { method: 'DELETE' }, token);
+      await loadPobiOpenClawInfo(token, pobiId);
+      Alert.alert(isKo ? 'OpenClaw 연결을 해제했어요.' : 'OpenClaw disconnected.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setPobiPairingActionKey('');
+    }
+  };
+
+  const requestDisconnectPobiOpenClaw = () => {
+    if (!editingPobiId.trim() || !!pobiPairingActionKey) return;
+    Alert.alert(
+      isKo ? '현재 OpenClaw 장치를 해제할까요?' : 'Disconnect the current OpenClaw device?',
+      isKo
+        ? '고정 연결 코드는 그대로 남아 있어서, 나중에 같은 포비를 다시 연결할 수 있어요.'
+        : 'The fixed pairing code will stay available, so you can connect this Pobi again later.',
+      [
+        { text: s.cancel, style: 'cancel' },
+        {
+          text: isKo ? '연결 해제' : 'Disconnect',
+          style: 'destructive',
+          onPress: () => {
+            void disconnectPobiOpenClaw();
+          },
+        },
+      ]
+    );
+  };
+
+  const openPobiProfileEditor = (bot: BotSummary) => {
+    setEditingPobiId(bot.id);
+    setPobiNameDraft(bot.name);
+    setPobiStatusDraft(bot.status || '');
+    setPobiPhotoDraft(bot.avatarUri || '');
+    setPobiOpenClawInfo(null);
+    setShowPobiProfileModal(true);
+    const token = accessToken.trim();
+    if (token) {
+      void loadPobiOpenClawInfo(token, bot.id);
+    }
+  };
+
+  const closePobiProfileModal = () => {
+    setShowPobiProfileModal(false);
+    setEditingPobiId('');
+    setPobiNameDraft('');
+    setPobiStatusDraft('');
+    setPobiPhotoDraft('');
+    setPobiActionKey('');
+    setPobiPairingActionKey('');
+    setIsPobiOpenClawLoading(false);
+    setPobiOpenClawInfo(null);
+  };
+
+  const savePobiProfile = async () => {
+    const token = await requireAccessToken();
+    const pobiId = editingPobiId.trim();
+    if (!token || !pobiId) return;
+
+    const name = pobiNameDraft.trim();
+    if (!name) {
+      Alert.alert(isKo ? '포비 이름을 먼저 입력해 주세요.' : 'Enter a Pobi name first.');
+      return;
+    }
+
+    const actionKey = `update:${pobiId}`;
+    setPobiActionKey(actionKey);
+    try {
+      const draftAvatarUri = pobiPhotoDraft.trim();
+      const nextAvatarUri =
+        token && draftAvatarUri && isLocalAssetUri(draftAvatarUri)
+          ? await uploadPobiPhotoToBackend(token, draftAvatarUri)
+          : resolveBackendMediaUrl(draftAvatarUri);
+
+      await backendRequest(
+        `/v1/pobis/${pobiId}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({
+            name,
+            status: pobiStatusDraft.trim(),
+            avatarUri: nextAvatarUri || null,
+          }),
+        },
+        token
+      );
+      await refreshBotsFromBackend(token);
+      await loadPobiOpenClawInfo(token, pobiId).catch(() => null);
+      closePobiProfileModal();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.pobiCreateFailed, isKo));
+    } finally {
+      setPobiActionKey('');
+    }
+  };
+
+  const deletePobi = async () => {
+    const token = await requireAccessToken();
+    const pobiId = editingPobiId.trim();
+    if (!token || !pobiId) return;
+
+    const targetBot = bots.find((bot) => bot.id === pobiId) || null;
+    const shouldCloseActiveRoom =
+      !!targetBot &&
+      !!activeRoomRef.current &&
+      rooms.some((room) => room.id === activeRoomRef.current && room.members.includes(targetBot.userId));
+
+    const actionKey = `delete:${pobiId}`;
+    setPobiActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/pobis/${pobiId}`, { method: 'DELETE' }, token);
+      await Promise.all([refreshBotsFromBackend(token), refreshRoomsFromBackend(token)]).catch(() => null);
+      if (shouldCloseActiveRoom) {
+        setActiveRoomId(null);
+      }
+      closePobiProfileModal();
+      Alert.alert(isKo ? '포비를 삭제했어요.' : 'Pobi deleted.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.pobiCreateFailed, isKo));
+    } finally {
+      setPobiActionKey('');
+    }
+  };
+
+  const requestDeletePobi = () => {
+    if (!editingPobiId.trim() || !!pobiActionKey) return;
+    Alert.alert(
+      isKo ? '이 포비를 삭제할까요?' : 'Delete this Pobi?',
+      isKo
+        ? '포비가 방에서 빠지고 OpenClaw 연결도 함께 정리돼요. 이 작업은 되돌릴 수 없어요.'
+        : 'This removes the Pobi from rooms and clears its OpenClaw link. This cannot be undone.',
+      [
+        { text: s.cancel, style: 'cancel' },
+        {
+          text: isKo ? '포비 삭제' : 'Delete Pobi',
+          style: 'destructive',
+          onPress: () => {
+            void deletePobi();
+          },
+        },
+      ]
+    );
   };
 
   const openRoom = (rid: string) => {
@@ -5424,6 +5952,7 @@ function App() {
     setRoomMembersCanKickMembers(false);
     setIsRoomMembersLoading(false);
     setRoomMembersActionKey('');
+    setRoomPobiActionKey('');
   };
 
   const loadRoomMembers = async (token: string, roomId: string) => {
@@ -5518,6 +6047,40 @@ function App() {
       Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
     } finally {
       setRoomMembersActionKey('');
+    }
+  };
+
+  const joinPobiToRoom = async (pobiId: string) => {
+    const token = await requireAccessToken();
+    const roomId = roomMembersRoomId || '';
+    if (!token || !roomId || !pobiId) return;
+    const actionKey = `join:${roomId}:${pobiId}`;
+    setRoomPobiActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/rooms/${roomId}/pobis/${pobiId}/join`, { method: 'POST' }, token);
+      await Promise.all([loadRoomMembers(token, roomId), refreshRoomsFromBackend(token)]).catch(() => null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setRoomPobiActionKey('');
+    }
+  };
+
+  const leavePobiFromRoom = async (pobiId: string) => {
+    const token = await requireAccessToken();
+    const roomId = roomMembersRoomId || '';
+    if (!token || !roomId || !pobiId) return;
+    const actionKey = `leave:${roomId}:${pobiId}`;
+    setRoomPobiActionKey(actionKey);
+    try {
+      await backendRequest(`/v1/rooms/${roomId}/pobis/${pobiId}`, { method: 'DELETE' }, token);
+      await Promise.all([loadRoomMembers(token, roomId), refreshRoomsFromBackend(token)]).catch(() => null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+    } finally {
+      setRoomPobiActionKey('');
     }
   };
 
@@ -5632,9 +6195,13 @@ function App() {
   };
 
   const openFriendModal = () => {
+    setFriendModalTab('friend');
     setFriendLookupQuery('');
     setFriendLookupResults([]);
     setFriendLookupMsg('');
+    setPobiNameDraft('');
+    setPobiStatusDraft('');
+    setPobiPhotoDraft('');
     setShowFriendModal(true);
   };
   const openCreateRoomModal = (kind: CreateRoomKind = 'group') => {
@@ -6393,7 +6960,7 @@ function App() {
     });
   };
 
-  const pickProfilePhoto = async () => {
+  const pickProfilePhoto = async (target: 'profile' | 'pobi' = 'profile') => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
       Alert.alert(s.mediaPermissionTitle, s.mediaPermissionBody);
@@ -6409,7 +6976,11 @@ function App() {
       });
       if (r.canceled || !r.assets.length || !r.assets[0].uri) return;
       const sourceUri = await normalizeImageForCrop(r.assets[0].uri);
-      setProfilePhotoDraft(sourceUri);
+      if (target === 'pobi') {
+        setPobiPhotoDraft(sourceUri);
+      } else {
+        setProfilePhotoDraft(sourceUri);
+      }
     } catch {
       Alert.alert(s.mediaPickFailed);
     }
@@ -6758,6 +7329,8 @@ function App() {
       );
       if (cropTarget === 'chat') {
         setDraftMedia({ kind: 'image', uri: out.uri, mimeType: 'image/jpeg' });
+      } else if (cropTarget === 'pobi') {
+        setPobiPhotoDraft(out.uri);
       } else {
         setProfilePhotoDraft(out.uri);
       }
@@ -6896,11 +7469,37 @@ function App() {
           </View>
         )}
         <View style={styles.profilePhotoActions}>
-          <Pressable style={styles.smallBtn} onPress={pickProfilePhoto}>
+          <Pressable style={styles.smallBtn} onPress={() => void pickProfilePhoto()}>
             <Text style={styles.smallBtnText}>{s.photoPick}</Text>
           </Pressable>
           {profilePhotoDraft ? (
             <Pressable style={styles.smallBtn} onPress={() => setProfilePhotoDraft('')}>
+              <Text style={styles.smallBtnText}>{s.photoRemove}</Text>
+            </Pressable>
+          ) : null}
+          <Text style={styles.sub}>{s.photoCropHint}</Text>
+        </View>
+      </View>
+    </>
+  );
+
+  const renderPobiPhotoEditor = () => (
+    <>
+      <Text style={styles.sub}>{s.profilePhoto}</Text>
+      <View style={styles.profilePhotoRow}>
+        {pobiPhotoDraft ? (
+          <Image source={{ uri: pobiPhotoDraft }} style={styles.profilePhotoPreview} resizeMode="cover" />
+        ) : (
+          <View style={styles.profilePhotoPreviewFallback}>
+            <Ionicons name="sparkles" size={24} color={FOREST.text} />
+          </View>
+        )}
+        <View style={styles.profilePhotoActions}>
+          <Pressable style={styles.smallBtn} onPress={() => void pickProfilePhoto('pobi')}>
+            <Text style={styles.smallBtnText}>{s.photoPick}</Text>
+          </Pressable>
+          {pobiPhotoDraft ? (
+            <Pressable style={styles.smallBtn} onPress={() => setPobiPhotoDraft('')}>
               <Text style={styles.smallBtnText}>{s.photoRemove}</Text>
             </Pressable>
           ) : null}
@@ -7179,6 +7778,8 @@ function App() {
     setCurrentUserId(MY_ID);
     setStage('login');
     setTab('chats');
+    setFriendsMode('friends');
+    setDirectChatsMode('friends');
     setActiveRoomId(null);
     setProfile({ name: '', status: '', email: '', avatarUri: '', localeTag: appLocaleTag, locationSharingEnabled: false });
     setNameDraft('');
@@ -7186,6 +7787,14 @@ function App() {
     setProfilePhotoDraft('');
     setFriends([]);
     setBots([]);
+    setPobiNameDraft('');
+    setPobiStatusDraft('');
+    setPobiPhotoDraft('');
+    setEditingPobiId('');
+    setPobiActionKey('');
+    setPobiPairingActionKey('');
+    setIsPobiOpenClawLoading(false);
+    setPobiOpenClawInfo(null);
     setRooms([]);
     setMessages({});
     setChatQuery('');
@@ -7208,6 +7817,7 @@ function App() {
     setDraftMedia(null);
     setAvatarViewer(null);
     setShowProfileModal(false);
+    setShowPobiProfileModal(false);
     setShowFriendModal(false);
     setShowFamilyPickerModal(false);
     setShowFamilyUpgradeModal(false);
@@ -7783,11 +8393,18 @@ function App() {
               <View style={styles.main}>
                 {tab === 'chats' ? (
                   <ScrollView contentContainerStyle={styles.list}>
-                    {chatsMode === 'direct' && directRooms.length === 0 && visibleBots.length === 0 ? (
+                    {chatsMode === 'direct' && directChatsMode === 'friends' && friendDirectRooms.length === 0 ? (
                       <View style={[styles.empty, styles.emptyCove]}>
                         <Text style={styles.h1}>{isKo ? '1:1 대화가 없어요' : 'No Direct Chats Yet'}</Text>
                         <Text style={styles.sub}>
                           {isKo ? '친구와 대화를 시작하면 여기에서 바로 이어져요.' : 'Start a chat with a friend and it will appear here.'}
+                        </Text>
+                      </View>
+                    ) : chatsMode === 'direct' && directChatsMode === 'pobis' && sortedPobis.length === 0 && pobiDirectRooms.length === 0 ? (
+                      <View style={[styles.empty, styles.emptyCove]}>
+                        <Text style={styles.h1}>{isKo ? '포비가 아직 없어요' : 'No Pobi Yet'}</Text>
+                        <Text style={styles.sub}>
+                          {isKo ? '친구 추가에서 포비를 만들면 여기서 따로 볼 수 있어요.' : 'Create a Pobi from Add friend and it will appear here.'}
                         </Text>
                       </View>
                     ) : chatsMode === 'group' && groupRooms.length === 0 && familyRooms.length === 0 ? (
@@ -7801,31 +8418,32 @@ function App() {
                       <>
                         {chatsMode === 'direct' ? (
                           <>
-                            {visibleBots.length > 0 ? <Text style={styles.sectionTitle}>{s.botsTitle}</Text> : null}
-                            {visibleBots.map((bot) => (
-                              <Pressable key={bot.id} style={styles.roomItem} onPress={() => void startBotRoom(bot.id)}>
-                                <View style={styles.listAvatar}>
-                                  <Text style={styles.listAvatarText}>{bot.name.slice(0, 1).toUpperCase()}</Text>
-                                </View>
-                                <View style={styles.roomItemCopy}>
-                                  <View style={styles.roomItemHead}>
-                                    <Text style={[styles.itemTitle, { flex: 1 }]}>{bot.name}</Text>
-                                  </View>
-                                  <Text style={styles.roomPreview} numberOfLines={1}>
-                                    {bot.description || s.botStart}
-                                  </Text>
-                                </View>
-                                <View style={styles.itemRight}>
-                                  <Pressable style={styles.iconLight} onPress={() => void startBotRoom(bot.id)}>
-                                    <Ionicons name="chatbubble-ellipses" size={16} color={FOREST.text} />
-                                  </Pressable>
-                                </View>
+                            <View style={styles.modalTabs}>
+                              <Pressable
+                                style={[styles.modalTab, directChatsMode === 'friends' && styles.modalTabOn]}
+                                onPress={() => setDirectChatsMode('friends')}
+                              >
+                                <Text style={[styles.modalTabText, directChatsMode === 'friends' && styles.modalTabTextOn]}>
+                                  {isKo ? '친구' : 'Friends'}
+                                </Text>
                               </Pressable>
-                            ))}
+                              <Pressable
+                                style={[styles.modalTab, directChatsMode === 'pobis' && styles.modalTabOn]}
+                                onPress={() => setDirectChatsMode('pobis')}
+                              >
+                                <Text style={[styles.modalTabText, directChatsMode === 'pobis' && styles.modalTabTextOn]}>
+                                  {isKo ? '포비' : 'Pobi'}
+                                </Text>
+                              </Pressable>
+                            </View>
                             {favoriteDirectRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '즐겨찾기' : 'Favorites'}</Text> : null}
                             {favoriteDirectRooms.map(renderRoomRow)}
                             {otherDirectRooms.length > 0 ? <Text style={styles.sectionTitle}>{isKo ? '1:1 대화' : 'Direct Chats'}</Text> : null}
                             {otherDirectRooms.map(renderRoomRow)}
+                            {directChatsMode === 'pobis' && pobiDirectRooms.length === 0 && sortedPobis.length > 0 ? (
+                              <Text style={styles.sectionTitle}>{isKo ? '내 포비' : 'My Pobi'}</Text>
+                            ) : null}
+                            {directChatsMode === 'pobis' && pobiDirectRooms.length === 0 ? sortedPobis.map(renderPobiRow) : null}
                           </>
                         ) : (
                           <>
@@ -8030,7 +8648,30 @@ function App() {
                         </ScrollView>
                       </>
                     ) : null}
-                    {friends.length === 0 ? (
+                    {friendsMode === 'pobis' ? (
+                      sortedPobis.length === 0 ? (
+                        <View style={[styles.empty, styles.emptyCove]}>
+                          <Pressable onPress={openFriendModal}>
+                            <Text style={[styles.h1, { textDecorationLine: 'underline' }]}>{s.pobiListEmpty}</Text>
+                          </Pressable>
+                          <Text style={styles.sub}>{s.pobiIntro}</Text>
+                          <Pressable style={styles.smallBtn} onPress={openFriendModal}>
+                            <Text style={styles.smallBtnText}>{s.pobiCreate}</Text>
+                          </Pressable>
+                        </View>
+                      ) : (
+                        <>
+                          {sortedPobis.filter((bot) => bot.isDefault).length > 0 ? (
+                            <Text style={styles.sectionTitle}>{isKo ? '대표 포비' : 'Default Pobi'}</Text>
+                          ) : null}
+                          {sortedPobis.filter((bot) => bot.isDefault).map(renderPobiRow)}
+                          {sortedPobis.filter((bot) => !bot.isDefault).length > 0 ? (
+                            <Text style={styles.sectionTitle}>{isKo ? '내 포비' : 'My Pobi'}</Text>
+                          ) : null}
+                          {sortedPobis.filter((bot) => !bot.isDefault).map(renderPobiRow)}
+                        </>
+                      )
+                    ) : friends.length === 0 ? (
                       <View style={[styles.empty, styles.emptyCove]}>
                         <Pressable onPress={openFriendModal}>
                           <Text style={[styles.h1, { textDecorationLine: 'underline' }]}>{s.noFriends}</Text>
@@ -8163,8 +8804,8 @@ function App() {
               <View style={styles.tabs}>
                 <Pressable style={[styles.tab, tab === 'friends' && styles.tabOn]} onPress={handleFriendsTabPress}>
                   <Ionicons name="people" size={18} color={tab === 'friends' ? FOREST.text : FOREST.textMuted} />
-                  <Text style={styles.tabText}>{friendsTabLabel}</Text>
-                  <Text style={styles.tabHint}>{friendsTabHint}</Text>
+                  <Text style={styles.tabText}>{activeFriendsTabLabel}</Text>
+                  <Text style={styles.tabHint}>{activeFriendsTabHint}</Text>
                   {knockCount > 0 ? (
                     <View style={styles.tabBadge}>
                       <Text style={styles.badgeText}>{knockCount > 99 ? '99+' : knockCount}</Text>
@@ -8206,89 +8847,193 @@ function App() {
                 showsVerticalScrollIndicator={false}
               >
                 <View style={styles.sheet}>
-                <Text style={styles.h1}>{s.addFriend}</Text>
-                <TextInput
-                  style={styles.field}
-                  placeholder={s.friendLookupPlaceholder}
-                  placeholderTextColor={FOREST.placeholder}
-                  value={friendLookupQuery}
-                  onChangeText={setFriendLookupQuery}
-                  onSubmitEditing={() => {
-                    void searchFriendCandidates();
-                  }}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                <View style={styles.row}>
-                  <Pressable
-                    style={[styles.smallBtn, (!friendLookupQuery.trim() || isFriendLookupLoading) && styles.off]}
-                    disabled={!friendLookupQuery.trim() || isFriendLookupLoading}
-                    onPress={() => {
-                      void searchFriendCandidates();
-                    }}
-                  >
-                    <Text style={styles.smallBtnText}>{s.friendLookupAction}</Text>
-                  </Pressable>
-                  <Pressable style={styles.smallBtn} onPress={() => setShowFriendModal(false)}>
-                    <Text style={styles.smallBtnText}>{s.cancel}</Text>
-                  </Pressable>
-                </View>
-                {isFriendLookupLoading ? <Text style={styles.sub}>{s.friendLoading}</Text> : null}
-                {friendLookupMsg ? <Text style={styles.sub}>{friendLookupMsg}</Text> : null}
-                <ScrollView style={{ maxHeight: 260 }} contentContainerStyle={styles.list}>
-                  {friendLookupResults.map((item) => {
-                    const incomingReq = friendRequestsIncoming.find((req) => req.peerUserId === item.id);
-                    const outgoingReq = friendRequestsOutgoing.find((req) => req.peerUserId === item.id);
-                    const hasOutgoing = item.outgoingPending || !!outgoingReq;
-                    const hasIncoming = item.incomingPending || !!incomingReq;
-                    let actionLabel: string = s.friendRequestSend;
-                    let actionDisabled = !!friendActionKey;
-                    let actionHandler: (() => void) | null = () => {
-                      void sendFriendRequest(item.id);
-                    };
+                  <Text style={styles.h1}>{s.addFriend}</Text>
+                  <View style={styles.modalTabs}>
+                    <Pressable
+                      style={[styles.modalTab, friendModalTab === 'friend' && styles.modalTabOn]}
+                      onPress={() => setFriendModalTab('friend')}
+                    >
+                      <Text style={[styles.modalTabText, friendModalTab === 'friend' && styles.modalTabTextOn]}>
+                        {s.friendModalFriendTab}
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.modalTab, friendModalTab === 'pobi' && styles.modalTabOn]}
+                      onPress={() => setFriendModalTab('pobi')}
+                    >
+                      <Text style={[styles.modalTabText, friendModalTab === 'pobi' && styles.modalTabTextOn]}>
+                        {s.friendModalPobiTab}
+                      </Text>
+                    </Pressable>
+                  </View>
 
-                    if (item.isFriend) {
-                      actionLabel = s.friendAlready;
-                      actionDisabled = true;
-                      actionHandler = null;
-                    } else if (hasIncoming && incomingReq) {
-                      actionLabel = s.friendRequestAccept;
-                      actionHandler = () => {
-                        void acceptFriendRequest(incomingReq.id);
-                      };
-                    } else if (hasOutgoing || hasIncoming) {
-                      actionLabel = s.friendRequestSent;
-                      actionDisabled = true;
-                      actionHandler = null;
-                    }
-
-                    return (
-                      <View key={item.id} style={styles.item}>
-                        <View style={styles.listAvatar}>
-                          {item.avatarUri ? (
-                            <Image source={{ uri: item.avatarUri }} style={styles.listAvatarImage} />
-                          ) : (
-                            <Text style={styles.listAvatarText}>{item.name.slice(0, 1).toUpperCase()}</Text>
-                          )}
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.itemTitle}>{item.name}</Text>
-                          <Text style={styles.sub} numberOfLines={1}>
-                            {item.status || item.email}
-                          </Text>
-                        </View>
+                  {friendModalTab === 'friend' ? (
+                    <>
+                      <TextInput
+                        style={styles.field}
+                        placeholder={s.friendLookupPlaceholder}
+                        placeholderTextColor={FOREST.placeholder}
+                        value={friendLookupQuery}
+                        onChangeText={setFriendLookupQuery}
+                        onSubmitEditing={() => {
+                          void searchFriendCandidates();
+                        }}
+                        keyboardType="email-address"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                      />
+                      <View style={styles.row}>
                         <Pressable
-                          style={[styles.requestBtn, actionDisabled && styles.off]}
-                          disabled={actionDisabled || !actionHandler}
-                          onPress={() => actionHandler?.()}
+                          style={[styles.smallBtn, (!friendLookupQuery.trim() || isFriendLookupLoading) && styles.off]}
+                          disabled={!friendLookupQuery.trim() || isFriendLookupLoading}
+                          onPress={() => {
+                            void searchFriendCandidates();
+                          }}
                         >
-                          <Text style={styles.requestBtnText}>{actionLabel}</Text>
+                          <Text style={styles.smallBtnText}>{s.friendLookupAction}</Text>
+                        </Pressable>
+                        <Pressable style={styles.smallBtn} onPress={() => setShowFriendModal(false)}>
+                          <Text style={styles.smallBtnText}>{s.cancel}</Text>
                         </Pressable>
                       </View>
-                    );
-                  })}
-                </ScrollView>
+                      {isFriendLookupLoading ? <Text style={styles.sub}>{s.friendLoading}</Text> : null}
+                      {friendLookupMsg ? <Text style={styles.sub}>{friendLookupMsg}</Text> : null}
+                      <ScrollView style={{ maxHeight: 260 }} contentContainerStyle={styles.list}>
+                        {friendLookupResults.map((item) => {
+                          const incomingReq = friendRequestsIncoming.find((req) => req.peerUserId === item.id);
+                          const outgoingReq = friendRequestsOutgoing.find((req) => req.peerUserId === item.id);
+                          const hasOutgoing = item.outgoingPending || !!outgoingReq;
+                          const hasIncoming = item.incomingPending || !!incomingReq;
+                          let actionLabel: string = s.friendRequestSend;
+                          let actionDisabled = !!friendActionKey;
+                          let actionHandler: (() => void) | null = () => {
+                            void sendFriendRequest(item.id);
+                          };
+
+                          if (item.isFriend) {
+                            actionLabel = s.friendAlready;
+                            actionDisabled = true;
+                            actionHandler = null;
+                          } else if (hasIncoming && incomingReq) {
+                            actionLabel = s.friendRequestAccept;
+                            actionHandler = () => {
+                              void acceptFriendRequest(incomingReq.id);
+                            };
+                          } else if (hasOutgoing || hasIncoming) {
+                            actionLabel = s.friendRequestSent;
+                            actionDisabled = true;
+                            actionHandler = null;
+                          }
+
+                          return (
+                            <View key={item.id} style={styles.item}>
+                              <View style={styles.listAvatar}>
+                                {item.avatarUri ? (
+                                  <Image source={{ uri: item.avatarUri }} style={styles.listAvatarImage} />
+                                ) : (
+                                  <Text style={styles.listAvatarText}>{item.name.slice(0, 1).toUpperCase()}</Text>
+                                )}
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.itemTitle}>{item.name}</Text>
+                                <Text style={styles.sub} numberOfLines={1}>
+                                  {item.status || item.email}
+                                </Text>
+                              </View>
+                              <Pressable
+                                style={[styles.requestBtn, actionDisabled && styles.off]}
+                                disabled={actionDisabled || !actionHandler}
+                                onPress={() => actionHandler?.()}
+                              >
+                                <Text style={styles.requestBtnText}>{actionLabel}</Text>
+                              </Pressable>
+                            </View>
+                          );
+                        })}
+                      </ScrollView>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={styles.itemTitle}>{s.pobiTitle}</Text>
+                      <Text style={styles.sub}>{s.pobiIntro}</Text>
+                      <TextInput
+                        style={styles.field}
+                        placeholder={s.pobiNamePlaceholder}
+                        placeholderTextColor={FOREST.placeholder}
+                        value={pobiNameDraft}
+                        onChangeText={setPobiNameDraft}
+                        autoCapitalize="words"
+                        autoCorrect={false}
+                        onSubmitEditing={() => {
+                          void createPobi();
+                        }}
+                      />
+                      {renderPobiPhotoEditor()}
+                      <TextInput
+                        style={styles.field}
+                        placeholder={s.friendStatus}
+                        placeholderTextColor={FOREST.placeholder}
+                        value={pobiStatusDraft}
+                        onChangeText={setPobiStatusDraft}
+                      />
+                      <View style={styles.row}>
+                        <Pressable
+                          style={[styles.smallBtn, (!pobiNameDraft.trim() || !!pobiActionKey) && styles.off]}
+                          disabled={!pobiNameDraft.trim() || !!pobiActionKey}
+                          onPress={() => {
+                            void createPobi();
+                          }}
+                        >
+                          <Text style={styles.smallBtnText}>{s.pobiCreate}</Text>
+                        </Pressable>
+                        <Pressable style={styles.smallBtn} onPress={() => setShowFriendModal(false)}>
+                          <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                        </Pressable>
+                      </View>
+                      <ScrollView style={{ maxHeight: 280 }} contentContainerStyle={styles.list}>
+                        {bots.length === 0 ? (
+                          <View style={[styles.empty, styles.emptyCove]}>
+                            <Text style={styles.sub}>{s.pobiListEmpty}</Text>
+                          </View>
+                        ) : (
+                          sortedPobis.map((bot) => (
+                            <View key={bot.id} style={styles.item}>
+                              <View style={styles.listAvatar}>
+                                {bot.avatarUri ? (
+                                  <Image source={{ uri: bot.avatarUri }} style={styles.listAvatarImage} />
+                                ) : (
+                                  <Text style={styles.listAvatarText}>{bot.name.slice(0, 1).toUpperCase()}</Text>
+                                )}
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.itemTitle}>{bot.name}</Text>
+                                <Text style={styles.sub} numberOfLines={1}>
+                                  {bot.description || s.botStart}
+                                </Text>
+                              </View>
+                              <Pressable
+                                style={[styles.iconLight, !!pobiActionKey && styles.off]}
+                                disabled={!!pobiActionKey}
+                                onPress={() => openPobiProfileEditor(bot)}
+                              >
+                                <Ionicons name="create-outline" size={16} color={FOREST.text} />
+                              </Pressable>
+                              <Pressable
+                                style={[styles.requestBtn, !!pobiActionKey && styles.off]}
+                                disabled={!!pobiActionKey}
+                                onPress={() => {
+                                  setShowFriendModal(false);
+                                  void startBotRoom(bot.id);
+                                }}
+                              >
+                                <Text style={styles.requestBtnText}>{s.pobiChatAction}</Text>
+                              </Pressable>
+                            </View>
+                          ))
+                        )}
+                      </ScrollView>
+                    </>
+                  )}
                 </View>
               </ScrollView>
             </KeyboardAvoidingView>
@@ -8818,6 +9563,172 @@ function App() {
                       style={[styles.smallBtn, !nameDraft.trim() && styles.off]}
                       disabled={!nameDraft.trim()}
                       onPress={saveProfile}
+                    >
+                      <Text style={styles.smallBtnText}>{s.save}</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={showPobiProfileModal}
+          transparent
+          animationType="slide"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={closePobiProfileModal}
+        >
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={closePobiProfileModal} />
+            <KeyboardAvoidingView
+              style={[styles.sheetWrap, { paddingBottom: sheetKeyboardPadding }]}
+              behavior={kbBehavior}
+              keyboardVerticalOffset={0}
+            >
+              <ScrollView
+                contentContainerStyle={styles.sheetScrollContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheet}>
+                  <Text style={styles.h1}>{s.pobiTitle}</Text>
+                  {renderPobiPhotoEditor()}
+                  <TextInput
+                    style={styles.field}
+                    value={pobiNameDraft}
+                    onChangeText={setPobiNameDraft}
+                    placeholder={s.pobiNamePlaceholder}
+                    placeholderTextColor={FOREST.placeholder}
+                  />
+                  <TextInput
+                    style={styles.field}
+                    value={pobiStatusDraft}
+                    onChangeText={setPobiStatusDraft}
+                    placeholder={s.friendStatus}
+                    placeholderTextColor={FOREST.placeholder}
+                  />
+                  <View style={styles.familyStructureCard}>
+                    <Text style={styles.itemTitle}>{isKo ? 'OpenClaw 연결' : 'OpenClaw connection'}</Text>
+                    {isPobiOpenClawLoading ? (
+                      <Text style={styles.sub}>{isKo ? '연결 정보를 확인하는 중...' : 'Checking connection info...'}</Text>
+                    ) : pobiOpenClawInfo?.openclaw ? (
+                      <>
+                        <Text style={styles.sub}>
+                          {pobiOpenClawInfo.openclaw.connected
+                            ? isKo
+                              ? '현재 이 포비를 처리할 OpenClaw connector가 연결되어 있어요.'
+                              : 'A matching OpenClaw connector is currently connected for this Pobi.'
+                            : isKo
+                              ? '아직 이 포비를 처리할 OpenClaw connector가 연결되지 않았어요.'
+                              : 'No matching OpenClaw connector is currently connected for this Pobi.'}
+                        </Text>
+                        {pobiOpenClawInfo.openclaw.deviceName ? (
+                          <Text style={styles.sub}>
+                            {isKo
+                              ? `장치 이름: ${pobiOpenClawInfo.openclaw.deviceName}`
+                              : `Device: ${pobiOpenClawInfo.openclaw.deviceName}`}
+                          </Text>
+                        ) : null}
+                        <Text style={styles.sub} selectable>
+                          {`botKey: ${String(pobiOpenClawInfo.openclaw.botKey || '')}`}
+                        </Text>
+                        {pobiOpenClawInfo.openclaw.pairingCode ? (
+                          <Text style={styles.sub} selectable>
+                            {`${
+                              pobiPairingPersistent
+                                ? isKo
+                                  ? '고정 연결 코드'
+                                  : 'Fixed pairing code'
+                                : isKo
+                                  ? '연결 코드'
+                                  : 'Pairing code'
+                            }: ${String(pobiOpenClawInfo.openclaw.pairingCode)}`}
+                          </Text>
+                        ) : null}
+                        {pobiOpenClawInfo.openclaw.pairingExpiresAt ? (
+                          <Text style={styles.sub}>
+                            {isKo
+                              ? `만료: ${new Date(String(pobiOpenClawInfo.openclaw.pairingExpiresAt)).toLocaleString()}`
+                              : `Expires: ${new Date(String(pobiOpenClawInfo.openclaw.pairingExpiresAt)).toLocaleString()}`}
+                          </Text>
+                        ) : null}
+                        {pobiPairingActive ? (
+                          <Text style={styles.sub}>{pairingRemainingLabel(pobiPairingRemainingMs, isKo)}</Text>
+                        ) : null}
+                        {pobiPairingPersistent && pobiOpenClawInfo.openclaw.pairingCode ? (
+                          <Text style={styles.sub}>
+                            {isKo
+                              ? '이 코드는 포비마다 고정돼요. 나중에 다시 연결할 때도 같은 코드를 계속 쓸 수 있어요.'
+                              : 'This code stays fixed for this Pobi, so you can reuse it when reconnecting later.'}
+                          </Text>
+                        ) : null}
+                        <Text style={styles.sub}>
+                          {isKo
+                            ? '라즈베리파이 OpenClaw 화면에서 연결 코드를 입력하면 돼요. botKey는 내부 채널 식별용이에요.'
+                            : 'Enter the pairing code on your Raspberry Pi OpenClaw screen. botKey is used as the internal channel identifier.'}
+                        </Text>
+                        <View style={styles.row}>
+                          <Pressable
+                            style={[styles.smallBtn, (pobiPairingPersistent || !!pobiPairingActionKey) && styles.off]}
+                            disabled={pobiPairingPersistent || !!pobiPairingActionKey}
+                            onPress={() => {
+                              void createPobiOpenClawPairing();
+                            }}
+                          >
+                            <Text style={styles.smallBtnText}>
+                              {pobiPairingPersistent
+                                ? isKo
+                                  ? '고정 연결 코드 사용 중'
+                                  : 'Using fixed pairing code'
+                                : pobiOpenClawInfo.openclaw.pairingCode
+                                  ? isKo
+                                    ? '고정 연결 코드로 바꾸기'
+                                    : 'Make fixed pairing code'
+                                  : isKo
+                                    ? '고정 연결 코드 만들기'
+                                    : 'Create fixed pairing code'}
+                            </Text>
+                          </Pressable>
+                          {pobiHasOpenClawBinding ? (
+                            <Pressable
+                              style={[styles.smallBtn, !!pobiPairingActionKey && styles.off]}
+                              disabled={!!pobiPairingActionKey}
+                              onPress={requestDisconnectPobiOpenClaw}
+                            >
+                              <Text style={[styles.smallBtnText, { color: '#D05E85' }]}>
+                                {isKo ? '기기 연결 해제' : 'Disconnect device'}
+                              </Text>
+                            </Pressable>
+                          ) : null}
+                        </View>
+                      </>
+                    ) : (
+                      <Text style={styles.sub}>
+                        {isKo ? 'OpenClaw 연결 정보를 아직 불러오지 못했어요.' : 'OpenClaw connection info is not available yet.'}
+                      </Text>
+                    )}
+                  </View>
+                  <Pressable style={styles.item} onPress={requestDeletePobi}>
+                    <Text style={[styles.itemTitle, { color: '#D05E85' }]}>
+                      {isKo ? '포비 삭제' : 'Delete Pobi'}
+                    </Text>
+                    <Text style={styles.sub}>
+                      {isKo
+                        ? '이 포비를 방과 OpenClaw 연결에서 완전히 정리해요.'
+                        : 'Remove this Pobi from rooms and clear its OpenClaw connection.'}
+                    </Text>
+                  </Pressable>
+                  <View style={styles.row}>
+                    <Pressable style={styles.smallBtn} onPress={closePobiProfileModal}>
+                      <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.smallBtn, (!pobiNameDraft.trim() || !!pobiActionKey) && styles.off]}
+                      disabled={!pobiNameDraft.trim() || !!pobiActionKey}
+                      onPress={savePobiProfile}
                     >
                       <Text style={styles.smallBtnText}>{s.save}</Text>
                     </Pressable>
@@ -9536,15 +10447,20 @@ function App() {
                     <Text style={styles.sub}>{isKo ? '불러오는 중...' : 'Loading...'}</Text>
                   ) : (
                     roomMembers.map((member) => {
+                      const memberBot = getBot(member.userId);
+                      const isPobiMember = !!memberBot;
                       const isSelf = member.userId === currentUserId;
-                      const canTransfer = roomMembersCanTransferOwnership && !member.isOwner;
-                      const canPromote = roomMembersCanManageAdmins && !member.isOwner && member.role === 'member';
-                      const canDemote = roomMembersCanManageAdmins && !member.isOwner && member.role === 'admin';
+                      const canTransfer = roomMembersCanTransferOwnership && !member.isOwner && !isPobiMember;
+                      const canPromote =
+                        roomMembersCanManageAdmins && !member.isOwner && member.role === 'member' && !isPobiMember;
+                      const canDemote =
+                        roomMembersCanManageAdmins && !member.isOwner && member.role === 'admin' && !isPobiMember;
                       const canKick =
                         roomMembersCanKickMembers &&
                         !member.isOwner &&
                         !isSelf &&
                         (roomMembersCanTransferOwnership || member.role === 'member');
+                      const canLeaveOwnedPobi = !!memberBot;
                       return (
                         <View key={member.userId} style={styles.familyStructureCard}>
                           <View style={styles.familyStructureHeader}>
@@ -9622,6 +10538,22 @@ function App() {
                               </Pressable>
                             ) : null}
                           </View>
+                          {canLeaveOwnedPobi ? (
+                            <View style={styles.row}>
+                              <Pressable
+                                style={[
+                                  styles.smallBtn,
+                                  roomPobiActionKey === `leave:${roomMembersRoomId}:${memberBot.id}` && styles.off,
+                                ]}
+                                disabled={!!roomPobiActionKey}
+                                onPress={() => {
+                                  void leavePobiFromRoom(memberBot.id);
+                                }}
+                              >
+                                <Text style={styles.smallBtnText}>{isKo ? '포비 내보내기' : 'Remove Pobi'}</Text>
+                              </Pressable>
+                            </View>
+                          ) : null}
                         </View>
                       );
                     })
@@ -9653,6 +10585,57 @@ function App() {
                         <Text style={styles.sub}>{isKo ? '아직 보낸 초대가 없어요.' : 'No pending invites yet.'}</Text>
                       )}
                       <Text style={styles.sectionTitle}>{isKo ? '친구 초대' : 'Invite friends'}</Text>
+                      <Text style={styles.sectionTitle}>{isKo ? '내 포비' : 'My Pobi'}</Text>
+                      {roomMembersJoinedPobis.length > 0 ? (
+                        roomMembersJoinedPobis.map((bot) => (
+                          <View key={`joined-pobi-${bot.id}`} style={styles.item}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.itemTitle}>{bot.name}</Text>
+                              <Text style={styles.sub}>{bot.description || s.botStart}</Text>
+                            </View>
+                            <Pressable
+                              style={[
+                                styles.requestBtn,
+                                roomPobiActionKey === `leave:${roomMembersRoomId}:${bot.id}` && styles.off,
+                              ]}
+                              disabled={!!roomPobiActionKey}
+                              onPress={() => {
+                                void leavePobiFromRoom(bot.id);
+                              }}
+                            >
+                              <Text style={styles.requestBtnText}>{isKo ? '내보내기' : 'Remove'}</Text>
+                            </Pressable>
+                          </View>
+                        ))
+                      ) : roomMembersInviteablePobis.length > 0 ? (
+                        roomMembersInviteablePobis.map((bot) => (
+                          <View key={`invite-pobi-${bot.id}`} style={styles.item}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.itemTitle}>{bot.name}</Text>
+                              <Text style={styles.sub}>{bot.description || s.botStart}</Text>
+                            </View>
+                            <Pressable
+                              style={[
+                                styles.requestBtn,
+                                roomPobiActionKey === `join:${roomMembersRoomId}:${bot.id}` && styles.off,
+                              ]}
+                              disabled={!!roomPobiActionKey}
+                              onPress={() => {
+                                void joinPobiToRoom(bot.id);
+                              }}
+                            >
+                              <Text style={styles.requestBtnText}>{isKo ? '포비 초대' : 'Invite Pobi'}</Text>
+                            </Pressable>
+                          </View>
+                        ))
+                      ) : (
+                        <Text style={styles.sub}>
+                          {isKo
+                            ? '이 방에 초대할 수 있는 내 포비가 없어요.'
+                            : 'There is no Pobi available to invite to this room right now.'}
+                        </Text>
+                      )}
+                      <Text style={styles.sectionTitle}>{isKo ? '移쒓뎄 珥덈?' : 'Invite friends'}</Text>
                       {roomMembersInviteableFriends.length > 0 ? (
                         roomMembersInviteableFriends.map((friend) => (
                           <View key={`invite-friend-${friend.id}`} style={styles.item}>
@@ -9927,6 +10910,60 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   smallBtnText: { color: FOREST.text, fontSize: 14, fontWeight: '700' },
+  modalTabs: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 6,
+  },
+  modalTab: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.7)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+  },
+  modalTabOn: {
+    backgroundColor: 'rgba(255, 214, 122, 0.28)',
+    borderColor: FOREST.buttonBorder,
+  },
+  modalTabText: {
+    color: FOREST.textMuted,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  modalTabTextOn: {
+    color: FOREST.text,
+  },
+  choiceChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  choiceChip: {
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.75)',
+    borderWidth: 1,
+    borderColor: FOREST.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  choiceChipOn: {
+    backgroundColor: 'rgba(255, 214, 122, 0.28)',
+    borderColor: FOREST.buttonBorder,
+  },
+  choiceChipText: {
+    color: FOREST.textSoft,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  choiceChipTextOn: {
+    color: FOREST.text,
+  },
   linkBtn: { alignSelf: 'flex-start' },
   link: { color: FOREST.link, fontSize: 13, fontWeight: '700' },
   off: { opacity: 0.42 },
