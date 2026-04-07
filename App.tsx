@@ -2439,6 +2439,11 @@ function App() {
   const getFriend = (fid: string) => friendMapById.get(fid);
   const getBot = (botUserId: string) => botMapByUserId.get(botUserId);
   const isOpenClawAssistantBotUser = (botUserId: string) => getBot(botUserId)?.botKey === 'openclaw-assistant';
+  const hasKnownDirectPeer = (room: Room) => {
+    if (room.type !== 'direct') return true;
+    const peerId = room.members.find((member) => member !== currentUserId) ?? '';
+    return !!peerId && (!!getFriend(peerId) || !!getBot(peerId));
+  };
   const roomAvatarUri = (room: Room) => {
     if (room.type !== 'direct') return '';
     const peerId = room.members.find((member) => member !== currentUserId) ?? '';
@@ -2542,13 +2547,22 @@ function App() {
       rooms
         .filter((room) => {
           const peerId = room.members.find((member) => member !== currentUserId) ?? '';
-          return !isOpenClawAssistantBotUser(peerId);
+          if (isOpenClawAssistantBotUser(peerId)) return false;
+          return hasKnownDirectPeer(room);
         })
         .sort((a, b) =>
           a.favorite === b.favorite ? b.updatedAt - a.updatedAt : a.favorite ? -1 : 1
         ),
-    [rooms, bots, currentUserId]
+    [rooms, bots, currentUserId, friends]
   );
+
+  useEffect(() => {
+    if (!activeRoomId) return;
+    const activeRoom = rooms.find((room) => room.id === activeRoomId);
+    if (!activeRoom || hasKnownDirectPeer(activeRoom)) return;
+    activeRoomRef.current = null;
+    setActiveRoomId(null);
+  }, [activeRoomId, rooms, currentUserId, friends, bots]);
 
   const filteredRooms = useMemo(() => {
     const q = chatQuery.trim().toLowerCase();
@@ -4454,11 +4468,11 @@ function App() {
     return raw;
   };
 
-  const refreshBotsFromBackend = async (token: string) => {
+  const refreshBotsFromBackend = async (token: string): Promise<BotSummary[] | null> => {
     const raw = await backendRequest<BackendPobi[] | BackendListData<BackendPobi>>('/v1/pobis', { method: 'GET' }, token).catch(
       () => null
     );
-    if (!raw) return;
+    if (!raw) return null;
     const items = asListItems<BackendPobi>(raw)
       .filter((pobi) => !!pobi?.id && !!pobi?.botUserId)
       .map((pobi) => {
@@ -4476,6 +4490,7 @@ function App() {
         };
       });
     setBots(items);
+    return items;
   };
 
   const refreshRoomsFromBackend = async (
@@ -5691,6 +5706,16 @@ function App() {
         }
         closePobiProfileModal();
         Alert.alert(isKo ? '이미 삭제된 포비예요.' : 'This Pobi was already deleted.');
+        return;
+      }
+      const refreshedBots = await refreshBotsFromBackend(token).catch(() => null);
+      if (refreshedBots && !refreshedBots.some((bot) => bot.id === pobiId)) {
+        await refreshRoomsFromBackend(token).catch(() => null);
+        if (shouldCloseActiveRoom) {
+          setActiveRoomId(null);
+        }
+        closePobiProfileModal();
+        Alert.alert(isKo ? '포비를 삭제했어요.' : 'Pobi deleted.');
         return;
       }
       const msg = err instanceof Error ? err.message : '';
