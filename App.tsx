@@ -7759,17 +7759,7 @@ function App() {
   const toggleGroupPick = (fid: string) =>
     setGroupPick((p) => (p.includes(fid) ? p.filter((x) => x !== fid) : [...p, fid]));
 
-  const deleteRoom = async (rid: string) => {
-    const token = accessToken.trim();
-    if (token) {
-      try {
-        await backendRequest(`/v1/rooms/${rid}`, { method: 'DELETE' }, token);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : '';
-        Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
-        return;
-      }
-    }
+  const removeRoomLocally = (rid: string) => {
     setRooms((p) => p.filter((r) => r.id !== rid));
     setMessages((p) => {
       const next = { ...p };
@@ -7778,6 +7768,25 @@ function App() {
     });
     if (activeRoomRef.current === rid) setActiveRoomId(null);
     setRoomMenuId(null);
+  };
+
+  const deleteRoom = async (rid: string) => {
+    const token = accessToken.trim();
+    if (token) {
+      try {
+        await backendRequest(`/v1/rooms/${rid}`, { method: 'DELETE' }, token);
+      } catch (err) {
+        const refreshedRooms = await refreshRoomsFromBackend(token).catch(() => null);
+        if (refreshedRooms && !refreshedRooms.some((room) => room.id === rid)) {
+          removeRoomLocally(rid);
+          return;
+        }
+        const msg = err instanceof Error ? err.message : '';
+        Alert.alert(normalizeBackendErrorMessage(msg || s.loginBackendSyncFailed, isKo));
+        return;
+      }
+    }
+    removeRoomLocally(rid);
   };
 
   const leaveRoom = async (rid: string) => {
@@ -7791,14 +7800,7 @@ function App() {
         return;
       }
     }
-    setRooms((p) => p.filter((r) => r.id !== rid));
-    setMessages((p) => {
-      const next = { ...p };
-      delete next[rid];
-      return next;
-    });
-    if (activeRoomRef.current === rid) setActiveRoomId(null);
-    setRoomMenuId(null);
+    removeRoomLocally(rid);
   };
 
   const reportRoom = (rid: string) => {
