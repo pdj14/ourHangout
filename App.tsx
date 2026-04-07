@@ -2247,6 +2247,7 @@ function App() {
   const [pobiPhotoDraft, setPobiPhotoDraft] = useState('');
   const [showPobiProfileModal, setShowPobiProfileModal] = useState(false);
   const [editingPobiId, setEditingPobiId] = useState('');
+  const [showPobiDeleteConfirm, setShowPobiDeleteConfirm] = useState(false);
   const [pobiActionKey, setPobiActionKey] = useState('');
   const [isPobiOpenClawLoading, setIsPobiOpenClawLoading] = useState(false);
   const [pobiOpenClawInfo, setPobiOpenClawInfo] = useState<BackendPobiOpenClawInfo | null>(null);
@@ -3699,6 +3700,21 @@ function App() {
     }
 
     logSessionTrace('auth:require_token_missing');
+    return '';
+  };
+
+  const requireAccessTokenOrAlert = async (): Promise<string> => {
+    const token = await requireAccessToken();
+    if (token) {
+      return token;
+    }
+
+    Alert.alert(
+      isKo ? '다시 로그인해 주세요.' : 'Please sign in again.',
+      isKo
+        ? '서버를 바꾼 뒤에는 로그인 세션이 초기화될 수 있어요. 다시 로그인한 후 시도해 주세요.'
+        : 'Your login session may have been cleared after switching servers. Sign in again and try once more.'
+    );
     return '';
   };
 
@@ -5514,15 +5530,29 @@ function App() {
     try {
       const raw = await backendRequest<BackendPobiOpenClawInfo>(`/v1/pobis/${pobiId}/openclaw`, { method: 'GET' }, token);
       setPobiOpenClawInfo(raw);
-    } catch {
+    } catch (err) {
       setPobiOpenClawInfo(null);
+      if (isPobiMissingError(err)) {
+        setBots((prev) => prev.filter((bot) => bot.id !== pobiId));
+        await refreshBotsFromBackend(token).catch(() => null);
+        closePobiProfileModal();
+        Alert.alert(isKo ? '이미 삭제된 포비예요.' : 'This Pobi was already deleted.');
+      }
     } finally {
       setIsPobiOpenClawLoading(false);
     }
   };
 
+  const isPobiMissingError = (error: unknown): boolean => {
+    if (!(error instanceof Error)) return false;
+    const status = typeof (error as BackendRequestError).status === 'number' ? (error as BackendRequestError).status : 0;
+    const code = String((error as BackendRequestError).code || '').trim().toUpperCase();
+    const message = String(error.message || '').trim().toLowerCase();
+    return (status === 404 || code === 'RESOURCE_NOT_FOUND') && message.includes('pobi not found');
+  };
+
   const createPobiOpenClawPairing = async () => {
-    const token = await requireAccessToken();
+    const token = await requireAccessTokenOrAlert();
     const pobiId = editingPobiId.trim();
     if (!token || !pobiId) return;
 
@@ -5546,7 +5576,7 @@ function App() {
   };
 
   const disconnectPobiOpenClaw = async () => {
-    const token = await requireAccessToken();
+    const token = await requireAccessTokenOrAlert();
     const pobiId = editingPobiId.trim();
     if (!token || !pobiId) return;
 
@@ -5589,6 +5619,7 @@ function App() {
     setPobiNameDraft(bot.name);
     setPobiStatusDraft(bot.status || '');
     setPobiPhotoDraft(bot.avatarUri || '');
+    setShowPobiDeleteConfirm(false);
     setPobiOpenClawInfo(null);
     setShowPobiProfileModal(true);
     const token = accessToken.trim();
@@ -5603,6 +5634,7 @@ function App() {
     setPobiNameDraft('');
     setPobiStatusDraft('');
     setPobiPhotoDraft('');
+    setShowPobiDeleteConfirm(false);
     setPobiActionKey('');
     setPobiPairingActionKey('');
     setIsPobiOpenClawLoading(false);
@@ -5610,7 +5642,7 @@ function App() {
   };
 
   const savePobiProfile = async () => {
-    const token = await requireAccessToken();
+    const token = await requireAccessTokenOrAlert();
     const pobiId = editingPobiId.trim();
     if (!token || !pobiId) return;
 
@@ -5619,6 +5651,12 @@ function App() {
       Alert.alert(isKo ? '포비 이름을 먼저 입력해 주세요.' : 'Enter a Pobi name first.');
       return;
     }
+
+    const targetBot = bots.find((bot) => bot.id === pobiId) || null;
+    const shouldCloseActiveRoom =
+      !!targetBot &&
+      !!activeRoomRef.current &&
+      rooms.some((room) => room.id === activeRoomRef.current && room.members.includes(targetBot.userId));
 
     const actionKey = `update:${pobiId}`;
     setPobiActionKey(actionKey);
@@ -5645,6 +5683,16 @@ function App() {
       await loadPobiOpenClawInfo(token, pobiId).catch(() => null);
       closePobiProfileModal();
     } catch (err) {
+      if (isPobiMissingError(err)) {
+        setBots((prev) => prev.filter((bot) => bot.id !== pobiId));
+        await Promise.all([refreshBotsFromBackend(token), refreshRoomsFromBackend(token)]).catch(() => null);
+        if (shouldCloseActiveRoom) {
+          setActiveRoomId(null);
+        }
+        closePobiProfileModal();
+        Alert.alert(isKo ? '이미 삭제된 포비예요.' : 'This Pobi was already deleted.');
+        return;
+      }
       const msg = err instanceof Error ? err.message : '';
       Alert.alert(normalizeBackendErrorMessage(msg || s.pobiCreateFailed, isKo));
     } finally {
@@ -5653,7 +5701,7 @@ function App() {
   };
 
   const deletePobi = async () => {
-    const token = await requireAccessToken();
+    const token = await requireAccessTokenOrAlert();
     const pobiId = editingPobiId.trim();
     if (!token || !pobiId) return;
 
@@ -5674,6 +5722,16 @@ function App() {
       closePobiProfileModal();
       Alert.alert(isKo ? '포비를 삭제했어요.' : 'Pobi deleted.');
     } catch (err) {
+      if (isPobiMissingError(err)) {
+        setBots((prev) => prev.filter((bot) => bot.id !== pobiId));
+        await Promise.all([refreshBotsFromBackend(token), refreshRoomsFromBackend(token)]).catch(() => null);
+        if (shouldCloseActiveRoom) {
+          setActiveRoomId(null);
+        }
+        closePobiProfileModal();
+        Alert.alert(isKo ? '이미 삭제된 포비예요.' : 'This Pobi was already deleted.');
+        return;
+      }
       const msg = err instanceof Error ? err.message : '';
       Alert.alert(normalizeBackendErrorMessage(msg || s.pobiCreateFailed, isKo));
     } finally {
@@ -5683,22 +5741,7 @@ function App() {
 
   const requestDeletePobi = () => {
     if (!editingPobiId.trim() || !!pobiActionKey) return;
-    Alert.alert(
-      isKo ? '이 포비를 삭제할까요?' : 'Delete this Pobi?',
-      isKo
-        ? '포비가 방에서 빠지고 OpenClaw 연결도 함께 정리돼요. 이 작업은 되돌릴 수 없어요.'
-        : 'This removes the Pobi from rooms and clears its OpenClaw link. This cannot be undone.',
-      [
-        { text: s.cancel, style: 'cancel' },
-        {
-          text: isKo ? '포비 삭제' : 'Delete Pobi',
-          style: 'destructive',
-          onPress: () => {
-            void deletePobi();
-          },
-        },
-      ]
-    );
+    setShowPobiDeleteConfirm(true);
   };
 
   const openRoom = (rid: string) => {
@@ -7939,7 +7982,6 @@ function App() {
 
   async function recoverOrResetSession() {
     const stored = await readSessionFromStorage().catch(() => null);
-    const storedAccessToken = (stored?.accessToken || '').trim();
     const storedRefreshToken = (stored?.refreshToken || '').trim();
 
     if (storedRefreshToken) {
@@ -7949,12 +7991,12 @@ function App() {
       }
     }
 
-    if (storedAccessToken) {
-      setSessionTokens(storedAccessToken, storedRefreshToken);
-      return true;
-    }
-
     setSessionTokens('', '');
+    setLoginErr(
+      isKo
+        ? '세션이 만료되었거나 서버가 바뀌었어요. 다시 로그인해 주세요.'
+        : 'Your session expired or the server changed. Please sign in again.'
+    );
     await clearSessionInStorage();
     resetForLogout();
     return false;
@@ -9711,7 +9753,45 @@ function App() {
                       </Text>
                     )}
                   </View>
-                  <Pressable style={styles.item} onPress={requestDeletePobi}>
+                  {showPobiDeleteConfirm ? (
+                    <View style={[styles.familyStructureCard, { borderColor: 'rgba(208, 94, 133, 0.32)' }]}>
+                      <Text style={[styles.itemTitle, { color: '#D05E85' }]}>
+                        {isKo ? '포비를 삭제할까요?' : 'Delete this Pobi?'}
+                      </Text>
+                      <Text style={styles.sub}>
+                        {isKo
+                          ? '이 포비는 방과 OpenClaw 연결에서 완전히 정리돼요. 삭제 후에는 되돌릴 수 없어요.'
+                          : 'This removes the Pobi from rooms and clears its OpenClaw link. This cannot be undone.'}
+                      </Text>
+                      <View style={styles.row}>
+                        <Pressable
+                          style={[styles.smallBtn, !!pobiActionKey && styles.off]}
+                          disabled={!!pobiActionKey}
+                          onPress={() => setShowPobiDeleteConfirm(false)}
+                        >
+                          <Text style={styles.smallBtnText}>{s.cancel}</Text>
+                        </Pressable>
+                        <Pressable
+                          style={[styles.smallBtn, !!pobiActionKey && styles.off]}
+                          disabled={!!pobiActionKey}
+                          onPress={() => {
+                            void deletePobi();
+                          }}
+                        >
+                          <Text style={[styles.smallBtnText, { color: '#D05E85' }]}>
+                            {pobiActionKey === `delete:${editingPobiId.trim()}`
+                              ? isKo
+                                ? '삭제 중...'
+                                : 'Deleting...'
+                              : isKo
+                                ? '포비 삭제'
+                                : 'Delete Pobi'}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : (
+                    <Pressable style={styles.item} onPress={requestDeletePobi}>
                     <Text style={[styles.itemTitle, { color: '#D05E85' }]}>
                       {isKo ? '포비 삭제' : 'Delete Pobi'}
                     </Text>
@@ -9720,14 +9800,15 @@ function App() {
                         ? '이 포비를 방과 OpenClaw 연결에서 완전히 정리해요.'
                         : 'Remove this Pobi from rooms and clear its OpenClaw connection.'}
                     </Text>
-                  </Pressable>
+                    </Pressable>
+                  )}
                   <View style={styles.row}>
                     <Pressable style={styles.smallBtn} onPress={closePobiProfileModal}>
                       <Text style={styles.smallBtnText}>{s.cancel}</Text>
                     </Pressable>
                     <Pressable
-                      style={[styles.smallBtn, (!pobiNameDraft.trim() || !!pobiActionKey) && styles.off]}
-                      disabled={!pobiNameDraft.trim() || !!pobiActionKey}
+                      style={[styles.smallBtn, (!pobiNameDraft.trim() || !!pobiActionKey || showPobiDeleteConfirm) && styles.off]}
+                      disabled={!pobiNameDraft.trim() || !!pobiActionKey || showPobiDeleteConfirm}
                       onPress={savePobiProfile}
                     >
                       <Text style={styles.smallBtnText}>{s.save}</Text>
