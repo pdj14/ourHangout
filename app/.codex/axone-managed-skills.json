@@ -31,6 +31,51 @@
           "contribution": "Workspace-scoped artifact delivery."
         }
       ]
+    },
+    {
+      "id": "design-helper",
+      "precedence": 50,
+      "mode": "optional",
+      "userEditable": false,
+      "influences": [
+        {
+          "name": "UI-UX-Pro-Max",
+          "contribution": "Practical UI systems, responsive layout, and usability guidance."
+        },
+        {
+          "name": "Taste",
+          "contribution": "Visual critique, hierarchy, and intentional design judgment."
+        },
+        {
+          "name": "Impeccable",
+          "contribution": "Anti-generic polish and finished-output quality standards."
+        },
+        {
+          "name": "AxOneMux",
+          "contribution": "Unifies the sources into shared UI, document, and accessibility rules."
+        }
+      ]
+    },
+    {
+      "id": "coding-helper",
+      "precedence": 60,
+      "mode": "optional",
+      "userEditable": false,
+      "influences": [
+        {
+          "name": "Superpowers",
+          "contribution": "Evidence-first planning, implementation, and verification discipline."
+        },
+        {
+          "name": "Smart Caveman",
+          "contribution": "High-signal, concise engineering communication."
+        },
+        {
+          "name": "Ponytail",
+          "contribution": "Smallest adequate solution ladder after correctness and safety.",
+          "url": "https://github.com/DietrichGebert/ponytail"
+        }
+      ]
     }
   ]
 }

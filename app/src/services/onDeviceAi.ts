@@ -13,6 +13,7 @@ export type OnDeviceChatMessage = {
   role: 'user' | 'assistant';
   content: string;
   createdAt: number;
+  imageUri?: string;
 };
 
 export type OnDeviceModelLoadProgress = {
@@ -76,12 +77,18 @@ function trimConversation(messages: OnDeviceChatMessage[], characterBudget: numb
 class OnDeviceAiEngine {
   private context: LlamaContext | null = null;
   private modelUri = '';
+  private projectorUri = '';
   private operationId = 0;
   private contextSize = 2048;
+  private imageTokenLimit = 256;
   private generating = false;
 
   isLoaded(modelUri?: string) {
     return !!this.context && (!modelUri || this.modelUri === modelUri);
+  }
+
+  isVisionReady(projectorUri?: string) {
+    return !!this.context && !!this.projectorUri && (!projectorUri || this.projectorUri === projectorUri);
   }
 
   async loadModel(
@@ -106,6 +113,7 @@ class OnDeviceAiEngine {
     if (operationId !== this.operationId) return;
 
     this.contextSize = capacity.totalMemoryBytes < 7 * GIB ? 1024 : 2048;
+    this.imageTokenLimit = capacity.totalMemoryBytes < 8 * GIB ? 256 : 384;
     const threadCount = capacity.totalMemoryBytes < 6 * GIB ? 3 : 4;
     onProgress?.({ phase: 'loading', progress: 0 });
 
@@ -141,24 +149,87 @@ class OnDeviceAiEngine {
     onProgress?.({ phase: 'loading', progress: 1 });
   }
 
+  async configureVision(
+    projector: NativeAiModelFile,
+    onProgress?: (progress: OnDeviceModelLoadProgress) => void
+  ) {
+    const context = this.context;
+    if (!context) throw new Error('먼저 대화 모델을 준비해 주세요.');
+    if (this.isVisionReady(projector.uri)) return;
+
+    const operationId = this.operationId;
+    if (this.projectorUri) {
+      await context.releaseMultimodal().catch(() => undefined);
+      this.projectorUri = '';
+    }
+
+    onProgress?.({ phase: 'preparing', progress: projector.prepared ? 1 : 0 });
+    const preparedPath = await requireStorageModule().prepareModel(projector.uri);
+    if (operationId !== this.operationId || context !== this.context) return;
+
+    try {
+      onProgress?.({ phase: 'loading', progress: 0 });
+      const initialized = await context.initMultimodal({
+        path: pathToFileUri(preparedPath),
+        use_gpu: false,
+        image_min_tokens: 128,
+        image_max_tokens: this.imageTokenLimit,
+      });
+      if (!initialized) throw new Error('이 비전 프로젝터를 초기화하지 못했습니다. 모델과 mmproj 조합을 확인해 주세요.');
+
+      const support = await context.getMultimodalSupport();
+      if (!support.vision) throw new Error('선택한 mmproj는 이미지 입력을 지원하지 않습니다.');
+      if (operationId !== this.operationId || context !== this.context) {
+        await context.releaseMultimodal().catch(() => undefined);
+        return;
+      }
+      this.projectorUri = projector.uri;
+      onProgress?.({ phase: 'loading', progress: 1 });
+    } catch (error) {
+      await context.releaseMultimodal().catch(() => undefined);
+      this.projectorUri = '';
+      throw error;
+    }
+  }
+
+  async disableVision() {
+    const context = this.context;
+    this.projectorUri = '';
+    if (context) await context.releaseMultimodal().catch(() => undefined);
+  }
+
   async complete(
     messages: OnDeviceChatMessage[],
-    onPartial: (content: string) => void
+    onPartial: (content: string) => void,
+    imageUri?: string
   ): Promise<string> {
     const context = this.context;
     if (!context) throw new Error('먼저 사용할 GGUF 모델을 선택해 주세요.');
     if (this.generating) throw new Error('이미 답변을 생성하고 있습니다.');
+    if (imageUri && !this.isVisionReady()) {
+      throw new Error('사진 대화를 사용하려면 이 VLM과 맞는 mmproj 파일을 연결해 주세요.');
+    }
 
     const characterBudget = this.contextSize <= 1024 ? 1200 : 2800;
+    const recentMessages = trimConversation(messages, characterBudget);
+    const imageMessageId = imageUri ? recentMessages.at(-1)?.id : undefined;
     const promptMessages: RNLlamaOAICompatibleMessage[] = [
       {
         role: 'system',
-        content: 'You are a helpful private on-device assistant. Answer in Korean unless the user requests another language.',
+        content: '당신은 우리들의 아지트를 지키는 작은 숲 지킴이입니다. 다정하고 차분하며 실용적으로 답하세요. 사용자가 다른 언어를 요청하지 않으면 자연스러운 한국어를 사용하고, 모르는 내용은 솔직히 말하세요.',
       },
-      ...trimConversation(messages, characterBudget).map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
+      ...recentMessages.map((message) => {
+        if (imageUri && message.id === imageMessageId) {
+          return {
+            role: message.role,
+            content: [
+              { type: 'text', text: message.content },
+              { type: 'image_url', image_url: { url: imageUri } },
+            ],
+          } satisfies RNLlamaOAICompatibleMessage;
+        }
+        return { role: message.role, content: message.content } satisfies RNLlamaOAICompatibleMessage;
+      }),
     ];
 
     this.generating = true;
@@ -217,6 +288,7 @@ class OnDeviceAiEngine {
     const context = this.context;
     this.context = null;
     this.modelUri = '';
+    this.projectorUri = '';
     this.generating = false;
     if (context) await context.release().catch(() => undefined);
   }

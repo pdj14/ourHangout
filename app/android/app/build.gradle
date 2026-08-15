@@ -12,12 +12,15 @@ def googleServicesEnvPath = (
 )?.trim()
 def googleServicesSourceFile = googleServicesEnvPath ? file(googleServicesEnvPath) : null
 def googleServicesTargetFile = file("google-services.json")
-def buildVersionInfo = new JsonSlurper().parseText(
-    ["node", "-e", "const path=require('path');process.stdout.write(JSON.stringify(require('../scripts/build-version').getBuildVersionInfo({rootDir:path.resolve(process.cwd(),'..')})))"]
-        .execute(null, rootDir)
-        .text
-        .trim()
-)
+def buildVersionOutput = providers.exec {
+    workingDir(rootDir)
+    commandLine(
+        "node",
+        "-e",
+        "const path=require('path');process.stdout.write(JSON.stringify(require('../scripts/build-version').getBuildVersionInfo({rootDir:path.resolve(process.cwd(),'..')})))"
+    )
+}.standardOutput.asText.get().trim()
+def buildVersionInfo = new JsonSlurper().parseText(buildVersionOutput)
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 

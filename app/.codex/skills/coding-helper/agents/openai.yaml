@@ -1,0 +1,4 @@
+interface:
+  display_name: "Coding Helper"
+  short_description: "Evidence-first coding with minimal, verified changes"
+  default_prompt: "Use $coding-helper to make the smallest safe change with focused evidence and verification."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Design Helper"
+  short_description: "Polished UI and document visual design"
+  default_prompt: "Use $design-helper to refine this interface or document with intentional hierarchy, typography, usability, and visual polish."

@@ -15,6 +15,7 @@ if not defined BUILD_VERSION (
 echo Building release APK for version %BUILD_VERSION% from %ROOT_DIR% ...
 pushd "%ROOT_DIR%\android" >nul
 set "NODE_ENV=production"
+if not defined GRADLE_USER_HOME set "GRADLE_USER_HOME=%ROOT_DIR%\g"
 call gradlew.bat :app:assembleRelease --no-daemon
 set "GRADLE_EXIT=%ERRORLEVEL%"
 popd >nul
