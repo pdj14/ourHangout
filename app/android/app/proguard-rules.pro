@@ -12,3 +12,6 @@
 -keep class com.facebook.react.turbomodule.** { *; }
 
 # Add any project specific keep options here:
+
+# llama.rn on-device inference bridge
+-keep class com.rnllama.** { *; }

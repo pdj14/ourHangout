@@ -11,6 +11,7 @@ import com.facebook.react.ReactHost
 import com.facebook.react.common.ReleaseLevel
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
 import com.google.firebase.FirebaseApp
+import com.ourhangout.ai.AiModelStoragePackage
 import com.ourhangout.location.LocationCapturePackage
 import com.ourhangout.push.PushTokenPackage
 
@@ -24,6 +25,7 @@ class MainApplication : Application(), ReactApplication {
       context = applicationContext,
       packageList =
         PackageList(this).packages.apply {
+          add(AiModelStoragePackage())
           add(LocationCapturePackage())
           add(PushTokenPackage())
         }

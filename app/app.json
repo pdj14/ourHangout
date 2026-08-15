@@ -59,6 +59,14 @@
       "@react-native-google-signin/google-signin",
       "expo-video",
       [
+        "llama.rn",
+        {
+          "enableEntitlements": false,
+          "forceCxx20": true,
+          "enableOpenCLAndHexagon": false
+        }
+      ],
+      [
         "expo-image-picker",
         {
           "photosPermission": "우리들의 아지트에서 채팅 이미지와 영상을 선택할 수 있도록 허용해 주세요.",

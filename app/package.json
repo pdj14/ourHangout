@@ -32,6 +32,7 @@
     "expo-status-bar": "~55.0.4",
     "expo-system-ui": "~55.0.19",
     "expo-video": "~55.0.18",
+    "llama.rn": "0.12.9",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-native": "0.83.6",

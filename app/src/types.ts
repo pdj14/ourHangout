@@ -1,4 +1,4 @@
-export type TabKey = 'chats' | 'people' | 'family' | 'me';
+export type TabKey = 'chats' | 'people' | 'family' | 'ai' | 'me';
 
 export type RoomType = 'direct' | 'group' | 'family';
 

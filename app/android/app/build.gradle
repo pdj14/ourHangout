@@ -172,6 +172,12 @@ tasks.matching { it.name == "preBuild" }.configureEach {
     dependsOn("prepareGoogleServicesConfig")
 }
 
+// The first release is deliberately CPU-only. Avoid copying experimental HTP
+// runtime assets into the application until accelerator support is validated.
+tasks.matching { it.name == "syncRNLlamaHtpAssets" }.configureEach {
+    enabled = false
+}
+
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
 // Accepts values in comma delimited lists, example:
 // android.packagingOptions.pickFirsts=/LICENSE,**/picasa.ini
@@ -197,6 +203,7 @@ dependencies {
     implementation("com.facebook.react:react-android")
     implementation("com.google.firebase:firebase-messaging:25.0.1")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("androidx.documentfile:documentfile:1.1.0")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

@@ -16,6 +16,7 @@ type NavItem = {
 const items: NavItem[] = [
   { key: 'people', label: '사람', icon: 'people-outline' },
   { key: 'chats', label: '대화', icon: 'chatbubbles-outline' },
+  { key: 'ai', label: 'AI', icon: 'hardware-chip-outline' },
   { key: 'family', label: '가족', icon: 'shield-checkmark-outline' },
   { key: 'me', label: '프로필', icon: 'person-circle-outline' },
 ];

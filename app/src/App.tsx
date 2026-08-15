@@ -33,6 +33,7 @@ import { ChatsScreen } from './screens/ChatsScreen';
 import { FamilyScreen } from './screens/FamilyScreen';
 import { LaunchScreen } from './screens/LaunchScreen';
 import { LoginScreen } from './screens/LoginScreen';
+import { OnDeviceAiScreen } from './screens/OnDeviceAiScreen';
 import { PeopleScreen } from './screens/PeopleScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
 import { RoomScreen } from './screens/RoomScreen';
@@ -2234,6 +2235,7 @@ function RenewalApp() {
             onOpenLocationMap={(latitude, longitude) => void openLocationMap(latitude, longitude)}
           />
         ) : null}
+        {tab === 'ai' ? <OnDeviceAiScreen /> : null}
         {tab === 'me' ? (
           <ProfileScreen
             profile={profile}
