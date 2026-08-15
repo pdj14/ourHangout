@@ -1,0 +1,45 @@
+{
+  "name": "ourhangout-app",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "check": "npm run typecheck && npm run config:check",
+    "typecheck": "tsc --noEmit",
+    "config:check": "expo config --type public",
+    "android:prebuild": "expo prebuild --platform android --no-install",
+    "android:release": "tools\\build-release-named.bat"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-google-signin/google-signin": "^16.1.2",
+    "expo": "~55.0.4",
+    "expo-application": "~55.0.16",
+    "expo-constants": "~55.0.16",
+    "expo-device": "~55.0.18",
+    "expo-file-system": "~55.0.23",
+    "expo-font": "~55.0.8",
+    "expo-image-manipulator": "~55.0.18",
+    "expo-image-picker": "~55.0.21",
+    "expo-intent-launcher": "~55.0.13",
+    "expo-linear-gradient": "~55.0.8",
+    "expo-secure-store": "~55.0.15",
+    "expo-status-bar": "~55.0.4",
+    "expo-system-ui": "~55.0.19",
+    "expo-video": "~55.0.18",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-native": "0.83.6",
+    "react-native-safe-area-context": "~5.6.2",
+    "react-native-web": "^0.21.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~5.9.2"
+  }
+}

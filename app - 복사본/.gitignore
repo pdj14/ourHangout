@@ -1,0 +1,13 @@
+node_modules/
+.expo/
+.build-meta/
+dist/
+web-build/
+builds/
+android/app/google-services.json
+android/local.properties
+android/.gradle/
+android/app/build/
+expo-*.log
+expo-*.err
+npm-debug.log*

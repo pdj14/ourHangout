@@ -1,0 +1,71 @@
+{
+  "expo": {
+    "name": "우리들의 아지트",
+    "slug": "our-hangout",
+    "scheme": [
+      "ourhangout",
+      "com.googleusercontent.apps.599659668409-311tkiv1ikkk55apu33h9j9pfk2rkvof",
+      "com.googleusercontent.apps.599659668409-jo6tdh99iht1tle9mf089k8ba3en08ou"
+    ],
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/hideout-splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F6F8FB"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.ourhangout",
+      "icon": "./assets/icon.png"
+    },
+    "android": {
+      "package": "com.ourhangout",
+      "permissions": [
+        "REQUEST_INSTALL_PACKAGES"
+      ],
+      "blockedPermissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
+      "softwareKeyboardLayoutMode": "resize",
+      "usesCleartextTraffic": true,
+      "predictiveBackGestureEnabled": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#17212B"
+      }
+    },
+    "extra": {
+      "product": {
+        "concept": "family-first private chat"
+      },
+      "googleAuth": {
+        "androidClientId": "599659668409-311tkiv1ikkk55apu33h9j9pfk2rkvof.apps.googleusercontent.com",
+        "iosClientId": "",
+        "webClientId": "599659668409-jo6tdh99iht1tle9mf089k8ba3en08ou.apps.googleusercontent.com"
+      },
+      "backend": {
+        "baseUrl": "http://wowjini0228.synology.me:7083"
+      }
+    },
+    "plugins": [
+      "expo-font",
+      "expo-secure-store",
+      "@react-native-google-signin/google-signin",
+      "expo-video",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "우리들의 아지트에서 채팅 이미지와 영상을 선택할 수 있도록 허용해 주세요.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ]
+    ]
+  }
+}
