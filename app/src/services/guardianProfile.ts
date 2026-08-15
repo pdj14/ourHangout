@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { DEFAULT_OPENROUTER_MODEL_ID } from './openRouterClient';
+
 export type GuardianRule = {
   id: string;
   title: string;
@@ -13,6 +15,8 @@ export type GuardianProfile = {
   synopsis: string;
   rules: GuardianRule[];
   webBrowsingEnabled: boolean;
+  aiEngineType: 'onDevice' | 'openRouter';
+  openRouterModelId: string;
 };
 
 const STORAGE_KEY = 'on_device_ai:guardian_profile_v1';
@@ -46,6 +50,8 @@ export const DEFAULT_GUARDIAN_PROFILE: GuardianProfile = {
   synopsis: '우리 가족의 이야기를 차분히 듣고, 따뜻하면서도 실용적인 도움을 주는 기기 속 동반자',
   rules: DEFAULT_RULES,
   webBrowsingEnabled: true,
+  aiEngineType: 'onDevice',
+  openRouterModelId: DEFAULT_OPENROUTER_MODEL_ID,
 };
 
 function cleanText(value: unknown, maxLength: number) {
@@ -74,6 +80,8 @@ export function normalizeGuardianProfile(value: Partial<GuardianProfile> | null 
     synopsis: cleanText(value?.synopsis, 1000) || DEFAULT_GUARDIAN_PROFILE.synopsis,
     rules,
     webBrowsingEnabled: value?.webBrowsingEnabled !== false,
+    aiEngineType: value?.aiEngineType === 'openRouter' ? 'openRouter' : 'onDevice',
+    openRouterModelId: cleanText(value?.openRouterModelId, 200) || DEFAULT_OPENROUTER_MODEL_ID,
   };
 }
 

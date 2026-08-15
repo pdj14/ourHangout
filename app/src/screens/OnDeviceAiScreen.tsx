@@ -37,6 +37,18 @@ import {
   type OnDeviceModelLoadProgress,
 } from '../services/onDeviceAi';
 import { cancelGuardianWebTool } from '../services/onDeviceWebTools';
+import {
+  connectOpenRouter,
+  disconnectOpenRouter,
+  hasOpenRouterConnection,
+} from '../services/openRouterAuth';
+import {
+  cancelOpenRouterCompletion,
+  fetchOpenRouterModels,
+  formatOpenRouterModelName,
+  OpenRouterClientError,
+  type OpenRouterModel,
+} from '../services/openRouterClient';
 import { colors, radius, spacing, type } from '../theme';
 
 const guardianMascot = require('../../assets/forest-guardian.png');
@@ -52,6 +64,7 @@ const STARTER_PROMPTS = [
 
 type Phase = 'idle' | 'scanning' | 'preparing' | 'loading' | 'ready' | 'generating' | 'stopping';
 type StoredHistory = { modelUri: string; messages: OnDeviceChatMessage[] };
+type RetryState = { baseMessages: OnDeviceChatMessage[]; content: string };
 
 function createMessage(
   role: OnDeviceChatMessage['role'],
@@ -69,6 +82,11 @@ function isProjectorFile(model: NativeAiModelFile) {
   return /(^|[-_.\s])(mmproj|projector)([-_.\s]|$)/i.test(model.name);
 }
 
+function normalizeGuardianError(error: unknown) {
+  if (error instanceof OpenRouterClientError) return error.message;
+  return normalizeOnDeviceAiError(error);
+}
+
 export function OnDeviceAiScreen() {
   const insets = useSafeAreaInsets();
   const [models, setModels] = useState<NativeAiModelFile[]>([]);
@@ -81,6 +99,12 @@ export function OnDeviceAiScreen() {
   const [statusMessage, setStatusMessage] = useState('지킴이가 기억을 살펴보고 있어요.');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [guardianProfile, setGuardianProfile] = useState<GuardianProfile>(DEFAULT_GUARDIAN_PROFILE);
+  const [openRouterConnected, setOpenRouterConnected] = useState(false);
+  const [openRouterBusy, setOpenRouterBusy] = useState(false);
+  const [openRouterMessage, setOpenRouterMessage] = useState('');
+  const [openRouterModels, setOpenRouterModels] = useState<OpenRouterModel[]>([]);
+  const [activeOpenRouterModelId, setActiveOpenRouterModelId] = useState(DEFAULT_GUARDIAN_PROFILE.openRouterModelId);
+  const [retryState, setRetryState] = useState<RetryState | null>(null);
   const mountedRef = useRef(true);
   const messagesRef = useRef<OnDeviceChatMessage[]>([]);
   const selectedUriRef = useRef('');
@@ -102,8 +126,11 @@ export function OnDeviceAiScreen() {
     [chatModels, selectedUri]
   );
   const busy = ['scanning', 'preparing', 'loading', 'generating', 'stopping'].includes(phase);
+  const engineReady = guardianProfile.aiEngineType === 'openRouter'
+    ? openRouterConnected && !!guardianProfile.openRouterModelId
+    : !!selectedModel;
   const canSend = phase === 'ready'
-    && !!selectedModel
+    && engineReady
     && !!draft.trim();
 
   const commitMessages = useCallback((next: OnDeviceChatMessage[], modelUri?: string) => {
@@ -147,12 +174,19 @@ export function OnDeviceAiScreen() {
 
   const applyDirectory = useCallback(async (
     result: Awaited<ReturnType<typeof getOnDeviceModels>>,
-    preferredUri = ''
+    preferredUri = '',
+    loadModel = true
   ) => {
     const nextModels = result.models || [];
     const nextChatModels = nextModels.filter((model) => !isProjectorFile(model));
     setModels(nextModels);
     setDirectoryName(result.directoryName || '');
+    const preferred = nextChatModels.find((model) => model.uri === preferredUri);
+    if (preferred) {
+      selectedUriRef.current = preferred.uri;
+      setSelectedUri(preferred.uri);
+    }
+    if (!loadModel) return;
     if (!result.directoryUri) {
       setPhase('idle');
       setStatusMessage('먼저 스마트폰의 AiModels 폴더를 연결해 주세요.');
@@ -164,10 +198,7 @@ export function OnDeviceAiScreen() {
       return;
     }
 
-    const preferred = nextChatModels.find((model) => model.uri === preferredUri);
     if (preferred) {
-      selectedUriRef.current = preferred.uri;
-      setSelectedUri(preferred.uri);
       await loadSelectedModel(preferred);
     } else {
       setPhase('idle');
@@ -192,15 +223,18 @@ export function OnDeviceAiScreen() {
 
     void (async () => {
       try {
-        const [storedUri, storedHistory, result, storedGuardianProfile] = await Promise.all([
+        const [storedUri, storedHistory, result, storedGuardianProfile, connected] = await Promise.all([
           AsyncStorage.getItem(SELECTED_MODEL_KEY),
           AsyncStorage.getItem(HISTORY_KEY),
           getOnDeviceModels(),
           readGuardianProfile(),
+          hasOpenRouterConnection().catch(() => false),
         ]);
         await AsyncStorage.removeItem(LEGACY_SELECTED_PROJECTOR_KEY);
         if (!mountedRef.current) return;
         setGuardianProfile(storedGuardianProfile);
+        setActiveOpenRouterModelId(storedGuardianProfile.openRouterModelId);
+        setOpenRouterConnected(connected);
         if (storedHistory) {
           try {
             const parsed = JSON.parse(storedHistory) as StoredHistory;
@@ -211,7 +245,27 @@ export function OnDeviceAiScreen() {
             await AsyncStorage.removeItem(HISTORY_KEY);
           }
         }
-        await applyDirectory(result, storedUri || '');
+        if (storedGuardianProfile.aiEngineType === 'openRouter') {
+          await applyDirectory(result, storedUri || '', false);
+          await onDeviceAiEngine.unload().catch(() => undefined);
+          setPhase(connected ? 'ready' : 'idle');
+          setStatusMessage(connected
+            ? `${storedGuardianProfile.name}가 OpenRouter에서 기다리고 있어요.`
+            : '지킴이 설정에서 OpenRouter 계정을 연결해 주세요.');
+          if (connected) {
+            try {
+              const cloudModels = await fetchOpenRouterModels();
+              if (mountedRef.current) {
+                setOpenRouterModels(cloudModels);
+                setOpenRouterMessage(`${cloudModels.length}개 모델을 불러왔어요.`);
+              }
+            } catch (error) {
+              if (mountedRef.current) setOpenRouterMessage(normalizeGuardianError(error));
+            }
+          }
+        } else {
+          await applyDirectory(result, storedUri || '');
+        }
       } catch (error) {
         if (!mountedRef.current) return;
         setPhase('idle');
@@ -223,6 +277,7 @@ export function OnDeviceAiScreen() {
       mountedRef.current = false;
       subscription?.remove();
       stopRequestedRef.current = true;
+      cancelOpenRouterCompletion();
       void cancelGuardianWebTool();
       void onDeviceAiEngine.unload();
     };
@@ -276,12 +331,83 @@ export function OnDeviceAiScreen() {
     await loadSelectedModel(model);
   }, [commitMessages, loadSelectedModel, selectedUri]);
 
+  const refreshOpenRouterModels = useCallback(async () => {
+    setOpenRouterBusy(true);
+    setOpenRouterMessage('사용 가능한 모델을 불러오고 있어요.');
+    try {
+      const cloudModels = await fetchOpenRouterModels();
+      if (!mountedRef.current) return;
+      setOpenRouterModels(cloudModels);
+      setOpenRouterMessage(`${cloudModels.length}개 모델을 불러왔어요.`);
+    } catch (error) {
+      if (!mountedRef.current) return;
+      if (error instanceof OpenRouterClientError && (error.code === 'unauthorized' || error.code === 'not_connected')) {
+        setOpenRouterConnected(false);
+        if (guardianProfile.aiEngineType === 'openRouter') setPhase('idle');
+      }
+      setOpenRouterMessage(normalizeGuardianError(error));
+    } finally {
+      if (mountedRef.current) setOpenRouterBusy(false);
+    }
+  }, [guardianProfile.aiEngineType]);
+
+  const connectOpenRouterAccount = useCallback(async () => {
+    setOpenRouterBusy(true);
+    setOpenRouterMessage('OpenRouter 승인 페이지를 열고 있어요.');
+    try {
+      const result = await connectOpenRouter();
+      if (!mountedRef.current) return;
+      if (result.status === 'cancelled') {
+        setOpenRouterMessage('계정 연결을 취소했어요. 기존 설정은 그대로 유지됩니다.');
+        return;
+      }
+      setOpenRouterConnected(true);
+      setOpenRouterMessage('계정 연결이 완료됐어요. 모델 목록을 확인하고 있어요.');
+      if (guardianProfile.aiEngineType === 'openRouter') {
+        setPhase('ready');
+        setStatusMessage(`${guardianProfile.name}가 OpenRouter에서 기다리고 있어요.`);
+      }
+      const cloudModels = await fetchOpenRouterModels();
+      if (!mountedRef.current) return;
+      setOpenRouterModels(cloudModels);
+      setOpenRouterMessage(`연결 완료 · ${cloudModels.length}개 모델을 불러왔어요.`);
+    } catch (error) {
+      if (!mountedRef.current) return;
+      setOpenRouterConnected(false);
+      if (guardianProfile.aiEngineType === 'openRouter') setPhase('idle');
+      setOpenRouterMessage(normalizeGuardianError(error));
+    } finally {
+      if (mountedRef.current) setOpenRouterBusy(false);
+    }
+  }, [guardianProfile.aiEngineType, guardianProfile.name]);
+
+  const disconnectOpenRouterAccount = useCallback(async () => {
+    setOpenRouterBusy(true);
+    try {
+      cancelOpenRouterCompletion();
+      await disconnectOpenRouter();
+      if (!mountedRef.current) return;
+      setOpenRouterConnected(false);
+      setOpenRouterModels([]);
+      setOpenRouterMessage('이 기기에서 OpenRouter 연결을 해제했어요.');
+      if (guardianProfile.aiEngineType === 'openRouter') {
+        setPhase('idle');
+        setStatusMessage('지킴이 설정에서 OpenRouter 계정을 연결해 주세요.');
+      }
+    } finally {
+      if (mountedRef.current) setOpenRouterBusy(false);
+    }
+  }, [guardianProfile.aiEngineType]);
+
   const clearConversation = useCallback(async () => {
     if (phase !== 'ready') return;
-    await onDeviceAiEngine.clearConversation().catch(() => undefined);
+    if (guardianProfile.aiEngineType === 'onDevice') {
+      await onDeviceAiEngine.clearConversation().catch(() => undefined);
+    }
     commitMessages([]);
+    setRetryState(null);
     setStatusMessage('지킴이가 새 이야기로 기억을 비웠어요.');
-  }, [commitMessages, phase]);
+  }, [commitMessages, guardianProfile.aiEngineType, phase]);
 
   const stopGeneration = useCallback(async () => {
     if (phase !== 'generating') return;
@@ -291,26 +417,50 @@ export function OnDeviceAiScreen() {
     await Promise.all([
       onDeviceAiEngine.stop().catch(() => undefined),
       cancelGuardianWebTool(),
+      Promise.resolve(cancelOpenRouterCompletion()),
     ]);
   }, [guardianProfile.name, phase]);
 
   const saveGuardianProfile = useCallback(async (nextProfile: GuardianProfile) => {
+    const previousEngine = guardianProfile.aiEngineType;
     const saved = await writeGuardianProfile(nextProfile);
     setGuardianProfile(saved);
+    setActiveOpenRouterModelId(saved.openRouterModelId);
+    if (previousEngine !== saved.aiEngineType) {
+      commitMessages([]);
+      setRetryState(null);
+      if (saved.aiEngineType === 'openRouter') {
+        await onDeviceAiEngine.unload().catch(() => undefined);
+        setPhase(openRouterConnected ? 'ready' : 'idle');
+        setStatusMessage(openRouterConnected
+          ? `${saved.name}가 OpenRouter에서 기다리고 있어요.`
+          : 'OpenRouter 계정을 연결하면 바로 대화할 수 있어요.');
+      } else if (selectedModel) {
+        await loadSelectedModel(selectedModel);
+      } else {
+        setPhase('idle');
+        setStatusMessage('온디바이스 대화에 사용할 GGUF 모델을 선택해 주세요.');
+      }
+      return;
+    }
     setStatusMessage(`${saved.name}의 설정을 저장했어요.`);
-  }, []);
+  }, [commitMessages, guardianProfile.aiEngineType, loadSelectedModel, openRouterConnected, selectedModel]);
 
-  const sendMessage = useCallback(async () => {
-    if (!canSend) return;
-    const content = draft.trim();
-    const userMessage = createMessage('user', content);
+  const runCompletion = useCallback(async (
+    baseMessages: OnDeviceChatMessage[],
+    failedContent: string
+  ) => {
     const assistantMessage = createMessage('assistant', '');
-    const baseMessages = [...messagesRef.current, userMessage];
     stopRequestedRef.current = false;
-    setDraft('');
+    setRetryState(null);
     commitMessages([...baseMessages, assistantMessage]);
     setPhase('generating');
-    setStatusMessage(`${guardianProfile.name}가 기기 안에서 생각하고 있어요.`);
+    if (guardianProfile.aiEngineType === 'openRouter') {
+      setActiveOpenRouterModelId(guardianProfile.openRouterModelId);
+      setStatusMessage(`${guardianProfile.name}가 OpenRouter에 연결하고 있어요.`);
+    } else {
+      setStatusMessage(`${guardianProfile.name}가 기기 안에서 생각하고 있어요.`);
+    }
     scheduleScrollToLatest(false);
     try {
       const finalText = await completeGuardianConversation(baseMessages, guardianProfile, {
@@ -323,6 +473,9 @@ export function OnDeviceAiScreen() {
         onStatus: (message) => {
           if (mountedRef.current && !stopRequestedRef.current) setStatusMessage(message);
         },
+        onModel: (modelId) => {
+          if (mountedRef.current && !stopRequestedRef.current) setActiveOpenRouterModelId(modelId);
+        },
         shouldStop: () => stopRequestedRef.current,
       });
       const next = [
@@ -331,35 +484,65 @@ export function OnDeviceAiScreen() {
       ];
       commitMessages(next);
       setPhase('ready');
+      setRetryState(null);
       setStatusMessage(finalText ? `${guardianProfile.name}가 다음 이야기를 기다리고 있어요.` : '답변 생성을 멈췄어요.');
       scheduleScrollToLatest(false);
     } catch (error) {
       if (!mountedRef.current) return;
       const partial = messagesRef.current.find((message) => message.id === assistantMessage.id)?.content.trim();
       const stopped = stopRequestedRef.current;
+      const message = normalizeGuardianError(error);
       const next = partial || stopped
         ? messagesRef.current.filter((message) => message.id !== assistantMessage.id || !!message.content.trim())
-        : [...baseMessages, { ...assistantMessage, content: `잠시 길을 잃었어요. ${normalizeOnDeviceAiError(error)}` }];
+        : [...baseMessages, { ...assistantMessage, content: `잠시 길을 잃었어요. ${message}` }];
       commitMessages(next);
-      setPhase('ready');
-      setStatusMessage(stopped ? '답변 생성을 멈췄어요.' : normalizeOnDeviceAiError(error));
+      const disconnected = error instanceof OpenRouterClientError
+        && (error.code === 'unauthorized' || error.code === 'not_connected');
+      if (disconnected) setOpenRouterConnected(false);
+      setPhase(disconnected ? 'idle' : 'ready');
+      setStatusMessage(stopped ? '답변 생성을 멈췄어요.' : message);
+      setRetryState(stopped || disconnected ? null : { baseMessages, content: failedContent });
       stopRequestedRef.current = false;
     }
-  }, [canSend, commitMessages, draft, guardianProfile, scheduleScrollToLatest]);
+  }, [commitMessages, guardianProfile, scheduleScrollToLatest]);
+
+  const sendMessage = useCallback(async () => {
+    const content = draft.trim();
+    if (phase !== 'ready' || !engineReady || !content) return;
+    const userMessage = createMessage('user', content);
+    const baseMessages = [...messagesRef.current, userMessage];
+    setDraft('');
+    await runCompletion(baseMessages, content);
+  }, [draft, engineReady, phase, runCompletion]);
+
+  const retryLastResponse = useCallback(async () => {
+    if (!retryState || phase !== 'ready' || !engineReady) return;
+    await runCompletion(retryState.baseMessages, retryState.content);
+  }, [engineReady, phase, retryState, runCompletion]);
 
   const chooseStarter = useCallback((prompt: string) => {
     setDraft(prompt);
     requestAnimationFrame(() => inputRef.current?.focus());
   }, []);
 
-  const modelStateTitle = selectedModel
-    ? phase === 'ready' || phase === 'generating'
-      ? `${guardianProfile.name}가 깨어 있어요`
-      : `${guardianProfile.name}를 준비하고 있어요`
-    : `${guardianProfile.name}의 기억을 연결해 주세요`;
-  const modelStateDetail = selectedModel
-    ? `${selectedModel.name} · 기기 내 대화`
-    : directoryName || 'AiModels 폴더가 필요해요';
+  const displayedOpenRouterModelId = phase === 'generating'
+    ? activeOpenRouterModelId
+    : guardianProfile.openRouterModelId;
+  const displayedOpenRouterModelName = formatOpenRouterModelName(displayedOpenRouterModelId, openRouterModels);
+  const modelStateTitle = guardianProfile.aiEngineType === 'openRouter'
+    ? openRouterConnected
+      ? `${guardianProfile.name}가 클라우드에 연결되어 있어요`
+      : 'OpenRouter 계정을 연결해 주세요'
+    : selectedModel
+      ? phase === 'ready' || phase === 'generating'
+        ? `${guardianProfile.name}가 깨어 있어요`
+        : `${guardianProfile.name}를 준비하고 있어요`
+      : `${guardianProfile.name}의 기억을 연결해 주세요`;
+  const modelStateDetail = guardianProfile.aiEngineType === 'openRouter'
+    ? `${displayedOpenRouterModelName} · OpenRouter`
+    : selectedModel
+      ? `${selectedModel.name} · 기기 내 대화`
+      : directoryName || 'AiModels 폴더가 필요해요';
 
   return (
     <ChatKeyboardLayout
@@ -407,9 +590,15 @@ export function OnDeviceAiScreen() {
           />
         )}
         <Text style={styles.statusText} numberOfLines={2}>{statusMessage}</Text>
-        {phase === 'ready' && messages.length ? (
+        {phase === 'ready' && messages.length && !retryState ? (
           <Pressable accessibilityRole="button" accessibilityLabel="지킴이 대화 초기화" onPress={() => void clearConversation()}>
             <Text style={styles.clearText}>새 이야기</Text>
+          </Pressable>
+        ) : null}
+        {phase === 'ready' && retryState ? (
+          <Pressable accessibilityRole="button" accessibilityLabel="마지막 지킴이 답변 다시 시도" onPress={() => void retryLastResponse()} style={styles.retryButton}>
+            <Ionicons name="refresh" size={15} color={colors.tealDark} />
+            <Text style={styles.retryText}>재시도</Text>
           </Pressable>
         ) : null}
       </View>
@@ -443,7 +632,9 @@ export function OnDeviceAiScreen() {
               ) : null}
               <View style={[styles.bubble, user ? styles.userBubble : styles.assistantBubble]}>
                 <Text style={[styles.bubbleLabel, user && styles.userBubbleText]}>
-                  {user ? '나' : guardianProfile.name}
+                  {user ? '나' : guardianProfile.aiEngineType === 'openRouter'
+                    ? `${guardianProfile.name} · ${displayedOpenRouterModelName}`
+                    : guardianProfile.name}
                 </Text>
                 <Text style={[styles.bubbleText, user && styles.userBubbleText]}>{item.content || '…'}</Text>
               </View>
@@ -458,19 +649,27 @@ export function OnDeviceAiScreen() {
               <View style={styles.guardianWelcome}>
                 <Text style={styles.emptyEyebrow}>{guardianProfile.name}</Text>
                 <Text style={styles.emptyTitle}>오늘은 어떤 이야기를 지켜볼까요?</Text>
-                <Text style={styles.emptyText}>마음속 이야기와 일상의 고민을 편하게 들려주세요. 이곳에서 나눈 내용은 기기 밖으로 나가지 않아요.</Text>
+                <Text style={styles.emptyText}>{guardianProfile.aiEngineType === 'openRouter'
+                  ? '마음속 이야기와 일상의 고민을 편하게 들려주세요. 답변 생성에 필요한 내용은 선택한 클라우드 모델로 안전하게 전송됩니다.'
+                  : '마음속 이야기와 일상의 고민을 편하게 들려주세요. 이곳에서 나눈 내용은 기기 밖으로 나가지 않아요.'}</Text>
               </View>
             </View>
 
-            {!selectedModel ? (
+            {!engineReady ? (
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={directoryName ? '지킴이 모델 선택' : 'AiModels 폴더 연결'}
-                onPress={() => directoryName ? setSettingsOpen(true) : void pickDirectory()}
+                accessibilityLabel={guardianProfile.aiEngineType === 'openRouter'
+                  ? 'OpenRouter 계정 연결 설정 열기'
+                  : directoryName ? '지킴이 모델 선택' : 'AiModels 폴더 연결'}
+                onPress={() => guardianProfile.aiEngineType === 'openRouter'
+                  ? setSettingsOpen(true)
+                  : directoryName ? setSettingsOpen(true) : void pickDirectory()}
                 style={styles.wakeButton}
               >
-                <Ionicons name="leaf-outline" size={18} color="#FFFFFF" />
-                <Text style={styles.wakeButtonText}>{directoryName ? '지킴이 깨우기' : '기억 폴더 연결하기'}</Text>
+                <Ionicons name={guardianProfile.aiEngineType === 'openRouter' ? 'cloud-outline' : 'leaf-outline'} size={18} color="#FFFFFF" />
+                <Text style={styles.wakeButtonText}>{guardianProfile.aiEngineType === 'openRouter'
+                  ? 'OpenRouter 연결하기'
+                  : directoryName ? '지킴이 깨우기' : '기억 폴더 연결하기'}</Text>
               </Pressable>
             ) : phase === 'ready' ? (
               <View style={styles.starters}>
@@ -529,7 +728,14 @@ export function OnDeviceAiScreen() {
         selectedUri={selectedUri}
         directoryName={directoryName}
         busy={busy}
+        openRouterConnected={openRouterConnected}
+        openRouterBusy={openRouterBusy}
+        openRouterMessage={openRouterMessage}
+        openRouterModels={openRouterModels}
         onClose={() => setSettingsOpen(false)}
+        onConnectOpenRouter={() => void connectOpenRouterAccount()}
+        onDisconnectOpenRouter={() => void disconnectOpenRouterAccount()}
+        onRefreshOpenRouterModels={() => void refreshOpenRouterModels()}
         onSaveProfile={saveGuardianProfile}
         onSelectModel={(model) => void selectModel(model)}
         onRefreshModels={() => void refreshModels()}
@@ -555,6 +761,8 @@ const styles = StyleSheet.create({
   statusRow: { minHeight: 42, paddingHorizontal: spacing.lg, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   statusText: { flex: 1, color: colors.inkSoft, fontSize: type.small, lineHeight: 17 },
   clearText: { color: colors.coral, fontSize: type.small, fontWeight: '800' },
+  retryButton: { minHeight: 36, paddingHorizontal: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.teal, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  retryText: { color: colors.tealDark, fontSize: type.small, fontWeight: '900' },
   progressTrack: { height: 3, marginHorizontal: spacing.lg, borderRadius: radius.pill, overflow: 'hidden', backgroundColor: colors.line },
   progressFill: { height: '100%', backgroundColor: colors.tealDark },
   messageList: { flex: 1 },

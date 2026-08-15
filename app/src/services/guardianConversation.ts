@@ -1,6 +1,7 @@
 import type { GuardianProfile } from './guardianProfile';
 import { buildGuardianSystemPrompt } from './guardianProfile';
 import { onDeviceAiEngine, type OnDeviceChatMessage } from './onDeviceAi';
+import { streamOpenRouterConversation } from './openRouterClient';
 import {
   executeGuardianWebTool,
   parseGuardianWebToolCall,
@@ -10,6 +11,7 @@ import {
 type GuardianCompletionCallbacks = {
   onPartial: (content: string) => void;
   onStatus: (message: string) => void;
+  onModel?: (modelId: string) => void;
   shouldStop?: () => boolean;
 };
 
@@ -98,6 +100,22 @@ export async function completeGuardianConversation(
     automaticSearchUsed = true;
     appendWebResult(result);
     callbacks.onStatus(`${profile.name}가 검색 결과를 바탕으로 답변을 준비하고 있어요.`);
+  }
+
+  if (profile.aiEngineType === 'openRouter') {
+    if (callbacks.shouldStop?.()) throw new Error('답변 생성을 중지했어요.');
+    callbacks.onStatus(`${profile.name}가 OpenRouter 클라우드 모델로 답변하고 있어요.`);
+    const result = await streamOpenRouterConversation(
+      workingMessages,
+      buildGuardianSystemPrompt(profile, false, toolCallsUsed > 0),
+      profile.openRouterModelId,
+      {
+        onPartial: callbacks.onPartial,
+        onModel: callbacks.onModel,
+      }
+    );
+    callbacks.onModel?.(result.modelId);
+    return result.content;
   }
 
   for (let attempt = 0; attempt < MAX_COMPLETION_ATTEMPTS; attempt += 1) {
