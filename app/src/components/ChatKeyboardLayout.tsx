@@ -8,8 +8,8 @@ type ChatKeyboardLayoutProps = PropsWithChildren<{
 export function ChatKeyboardLayout({ children, style }: ChatKeyboardLayoutProps) {
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      enabled={Platform.OS === 'ios'}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      enabled
       style={style}
     >
       {children}

@@ -113,7 +113,7 @@ export function buildGuardianSystemPrompt(profile: GuardianProfile, webToolsAvai
     .slice(0, 1600);
   const webInstructions = webToolsAvailable
     ? [
-      '현재 정보나 외부 확인이 꼭 필요할 때만 웹 도구를 사용할 수 있다.',
+      '학습 내용만으로 확실히 답할 수 없거나 현재·최신·외부 정보가 필요한 질문에는 추측하지 말고 반드시 웹 도구를 먼저 사용한다.',
       '도구가 필요하면 다른 문장 없이 정확히 다음 형식만 출력한다:',
       '<tool_call>{"name":"web_search","arguments":{"query":"검색어"}}</tool_call>',
       '또는 <tool_call>{"name":"open_url","arguments":{"url":"https://..."}}</tool_call>',
@@ -122,6 +122,8 @@ export function buildGuardianSystemPrompt(profile: GuardianProfile, webToolsAvai
     : '웹 도구는 사용할 수 없다. 최신 정보를 확인하지 못했다면 그 한계를 솔직히 말한다.';
 
   return [
+    '최우선 규칙: 사용자가 명시적으로 다른 언어를 요청하지 않는 한 모든 최종 답변은 반드시 자연스러운 한국어로 작성한다.',
+    '확실하지 않은 사실을 지어내거나 영어로 대신 답하지 않는다.',
     `당신의 이름은 "${normalized.name}"이다.`,
     `시놉시스: ${normalized.synopsis.slice(0, 400)}`,
     webInstructions,
