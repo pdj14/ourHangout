@@ -12,6 +12,7 @@ import com.facebook.react.common.ReleaseLevel
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
 import com.google.firebase.FirebaseApp
 import com.ourhangout.ai.AiModelStoragePackage
+import com.ourhangout.auth.OpenRouterAuthCallbackPackage
 import com.ourhangout.browser.BrowserToolPackage
 import com.ourhangout.location.LocationCapturePackage
 import com.ourhangout.push.PushTokenPackage
@@ -27,6 +28,7 @@ class MainApplication : Application(), ReactApplication {
       packageList =
         PackageList(this).packages.apply {
           add(AiModelStoragePackage())
+          add(OpenRouterAuthCallbackPackage())
           add(BrowserToolPackage())
           add(LocationCapturePackage())
           add(PushTokenPackage())

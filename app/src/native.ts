@@ -72,6 +72,11 @@ export type NativeBrowserToolModule = {
   cancel: () => Promise<boolean>;
 };
 
+export type NativeOpenRouterAuthCallbackModule = {
+  start: () => Promise<string>;
+  stop: () => Promise<boolean>;
+};
+
 export const NativeLocationCapture = NativeModules.LocationCaptureModule as
   | NativeLocationCaptureModule
   | undefined;
@@ -84,4 +89,8 @@ export const NativeAiModelStorage = NativeModules.AiModelStorageModule as
 
 export const NativeBrowserTool = NativeModules.BrowserToolModule as
   | NativeBrowserToolModule
+  | undefined;
+
+export const NativeOpenRouterAuthCallback = NativeModules.OpenRouterAuthCallbackModule as
+  | NativeOpenRouterAuthCallbackModule
   | undefined;

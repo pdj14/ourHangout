@@ -2,6 +2,8 @@ import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
 
+import { NativeOpenRouterAuthCallback } from '../native';
+
 const OPENROUTER_AUTH_URL = 'https://openrouter.ai/auth';
 const OPENROUTER_KEY_URL = 'https://openrouter.ai/api/v1/auth/keys';
 const OPENROUTER_KEY_STORAGE = 'guardian:openrouter_api_key_v1';
@@ -49,17 +51,26 @@ export async function hasOpenRouterConnection() {
 }
 
 export async function connectOpenRouter(): Promise<OpenRouterAuthResult> {
+  if (!NativeOpenRouterAuthCallback) {
+    throw authError('이 앱 빌드에서는 OpenRouter 인증 콜백을 사용할 수 없어요.');
+  }
   const { verifier, challenge } = await createPkce();
+  const loopbackRedirectUri = await NativeOpenRouterAuthCallback.start();
   const authUrl = new URL(OPENROUTER_AUTH_URL);
-  authUrl.searchParams.set('callback_url', OPENROUTER_REDIRECT_URI);
+  authUrl.searchParams.set('callback_url', loopbackRedirectUri);
   authUrl.searchParams.set('code_challenge', challenge);
   authUrl.searchParams.set('code_challenge_method', 'S256');
 
-  const browserResult = await WebBrowser.openAuthSessionAsync(
-    authUrl.toString(),
-    OPENROUTER_REDIRECT_URI,
-    { showInRecents: false }
-  );
+  let browserResult: Awaited<ReturnType<typeof WebBrowser.openAuthSessionAsync>>;
+  try {
+    browserResult = await WebBrowser.openAuthSessionAsync(
+      authUrl.toString(),
+      OPENROUTER_REDIRECT_URI,
+      { showInRecents: false }
+    );
+  } finally {
+    await NativeOpenRouterAuthCallback.stop().catch(() => false);
+  }
   if (browserResult.type === 'cancel' || browserResult.type === 'dismiss') {
     return { status: 'cancelled' };
   }
