@@ -26,7 +26,7 @@ function internalMessage(role: OnDeviceChatMessage['role'], content: string): On
 
 function canRevealPartial(value: string) {
   const normalized = value.trimStart();
-  if (!normalized || normalized.startsWith('<')) return false;
+  if (!normalized || normalized.startsWith('<') || normalized.startsWith('{')) return false;
   return normalized.length >= 12;
 }
 
@@ -59,6 +59,22 @@ export async function completeGuardianConversation(
     const toolCall = allowWeb && toolIndex < MAX_TOOL_CALLS
       ? parseGuardianWebToolCall(finalText)
       : null;
+    const malformedToolCall = allowWeb
+      && toolIndex < MAX_TOOL_CALLS
+      && /<tool_call>|\"name\"\s*:\s*\"(?:web_search|open_url)\"/i.test(finalText)
+      && !toolCall;
+    if (malformedToolCall) {
+      workingMessages = [
+        ...workingMessages,
+        internalMessage('assistant', finalText),
+        internalMessage(
+          'user',
+          '웹 도구 요청 형식이 올바르지 않습니다. 시스템 안내의 정확한 JSON 형식으로 다시 요청하거나, 도구 없이 최종 답변하세요.'
+        ),
+      ];
+      callbacks.onStatus(`${profile.name}가 웹 요청 형식을 다시 확인하고 있어요.`);
+      continue;
+    }
     if (!toolCall) {
       callbacks.onPartial(finalText);
       return finalText;
