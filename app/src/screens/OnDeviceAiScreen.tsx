@@ -1,11 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImageManipulator from 'expo-image-manipulator';
-import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Image,
   Keyboard,
@@ -37,31 +34,27 @@ import { colors, radius, spacing, type } from '../theme';
 
 const guardianMascot = require('../../assets/forest-guardian.png');
 const SELECTED_MODEL_KEY = 'on_device_ai:selected_model_v1';
-const SELECTED_PROJECTOR_KEY = 'on_device_ai:selected_projector_v1';
+const LEGACY_SELECTED_PROJECTOR_KEY = 'on_device_ai:selected_projector_v1';
 const HISTORY_KEY = 'on_device_ai:history_v1';
-const MAX_IMAGE_SIDE = 1280;
 
 const STARTER_PROMPTS = [
   '오늘 있었던 일을 차분히 정리해 줘',
   '우리 가족이 함께할 작은 놀이를 추천해 줘',
-  '내가 고른 사진을 같이 살펴봐 줘',
+  '오늘 마음이 편해질 이야기를 들려줘',
 ];
 
 type Phase = 'idle' | 'scanning' | 'preparing' | 'loading' | 'ready' | 'generating' | 'stopping';
 type StoredHistory = { modelUri: string; messages: OnDeviceChatMessage[] };
-type LocalImage = { uri: string; width: number; height: number };
 
 function createMessage(
   role: OnDeviceChatMessage['role'],
-  content: string,
-  imageUri?: string
+  content: string
 ): OnDeviceChatMessage {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     role,
     content,
     createdAt: Date.now(),
-    imageUri,
   };
 }
 
@@ -72,7 +65,7 @@ function formatBytes(value: number) {
   return `${(value / 1024).toFixed(0)} KB`;
 }
 
-function isVisionProjector(model: NativeAiModelFile) {
+function isProjectorFile(model: NativeAiModelFile) {
   return /(^|[-_.\s])(mmproj|projector)([-_.\s]|$)/i.test(model.name);
 }
 
@@ -80,12 +73,8 @@ export function OnDeviceAiScreen() {
   const [models, setModels] = useState<NativeAiModelFile[]>([]);
   const [directoryName, setDirectoryName] = useState('');
   const [selectedUri, setSelectedUri] = useState('');
-  const [selectedProjectorUri, setSelectedProjectorUri] = useState('');
-  const [visionReady, setVisionReady] = useState(false);
   const [messages, setMessages] = useState<OnDeviceChatMessage[]>([]);
   const [draft, setDraft] = useState('');
-  const [attachedImage, setAttachedImage] = useState<LocalImage | null>(null);
-  const [viewImageUri, setViewImageUri] = useState('');
   const [phase, setPhase] = useState<Phase>('scanning');
   const [progress, setProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState('지킴이가 기억을 살펴보고 있어요.');
@@ -93,27 +82,20 @@ export function OnDeviceAiScreen() {
   const mountedRef = useRef(true);
   const messagesRef = useRef<OnDeviceChatMessage[]>([]);
   const selectedUriRef = useRef('');
-  const selectedProjectorUriRef = useRef('');
   const listRef = useRef<FlatList<OnDeviceChatMessage> | null>(null);
   const inputRef = useRef<TextInput | null>(null);
   const isNearBottomRef = useRef(true);
   const keyboardTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  const chatModels = useMemo(() => models.filter((model) => !isVisionProjector(model)), [models]);
-  const projectorModels = useMemo(() => models.filter(isVisionProjector), [models]);
+  const chatModels = useMemo(() => models.filter((model) => !isProjectorFile(model)), [models]);
   const selectedModel = useMemo(
     () => chatModels.find((model) => model.uri === selectedUri) ?? null,
     [chatModels, selectedUri]
   );
-  const selectedProjector = useMemo(
-    () => projectorModels.find((model) => model.uri === selectedProjectorUri) ?? null,
-    [projectorModels, selectedProjectorUri]
-  );
   const busy = ['scanning', 'preparing', 'loading', 'generating', 'stopping'].includes(phase);
   const canSend = phase === 'ready'
     && !!selectedModel
-    && (!!draft.trim() || !!attachedImage)
-    && (!attachedImage || visionReady);
+    && !!draft.trim();
 
   const clearKeyboardTimers = useCallback(() => {
     keyboardTimersRef.current.forEach((timer) => clearTimeout(timer));
@@ -142,49 +124,7 @@ export function OnDeviceAiScreen() {
     }
   }, []);
 
-  const prepareVision = useCallback(async (projector: NativeAiModelFile) => {
-    setVisionReady(false);
-    setPhase(projector.prepared ? 'loading' : 'preparing');
-    setProgress(0);
-    setStatusMessage(
-      projector.prepared
-        ? '지킴이에게 사진을 보는 눈을 연결하고 있어요.'
-        : '비전 프로젝터를 앱 저장소에 준비하고 있어요.'
-    );
-    try {
-      await onDeviceAiEngine.configureVision(projector, (update: OnDeviceModelLoadProgress) => {
-        if (!mountedRef.current) return;
-        setPhase(update.phase);
-        setProgress(update.progress);
-        setStatusMessage(
-          update.phase === 'preparing'
-            ? '비전 프로젝터를 준비하고 있어요. 앱을 종료하지 마세요.'
-            : '지킴이에게 사진을 보는 눈을 연결하고 있어요.'
-        );
-      });
-      if (!mountedRef.current || !onDeviceAiEngine.isVisionReady(projector.uri)) return false;
-      setModels((current) => current.map((item) => (
-        item.uri === projector.uri ? { ...item, prepared: true } : item
-      )));
-      setVisionReady(true);
-      setPhase('ready');
-      setProgress(1);
-      setStatusMessage('지킴이가 사진도 함께 볼 수 있어요.');
-      return true;
-    } catch (error) {
-      if (!mountedRef.current) return false;
-      setVisionReady(false);
-      setPhase(onDeviceAiEngine.isLoaded() ? 'ready' : 'idle');
-      setStatusMessage(`텍스트 대화는 가능해요. 사진 기능: ${normalizeOnDeviceAiError(error)}`);
-      return false;
-    }
-  }, []);
-
-  const loadSelectedModel = useCallback(async (
-    model: NativeAiModelFile,
-    projector?: NativeAiModelFile | null
-  ) => {
-    setVisionReady(false);
+  const loadSelectedModel = useCallback(async (model: NativeAiModelFile) => {
     setStatusMessage(model.prepared ? '지킴이를 깨우고 있어요.' : '지킴이의 기억을 앱 저장소에 준비하고 있어요.');
     setPhase(model.prepared ? 'loading' : 'preparing');
     setProgress(0);
@@ -206,22 +146,19 @@ export function OnDeviceAiScreen() {
       setPhase('ready');
       setProgress(1);
       setStatusMessage('지킴이가 아지트에서 기다리고 있어요.');
-      if (projector) await prepareVision(projector);
     } catch (error) {
       if (!mountedRef.current) return;
       setPhase('idle');
       setStatusMessage(normalizeOnDeviceAiError(error));
     }
-  }, [prepareVision]);
+  }, []);
 
   const applyDirectory = useCallback(async (
     result: Awaited<ReturnType<typeof getOnDeviceModels>>,
-    preferredUri = '',
-    preferredProjectorUri = ''
+    preferredUri = ''
   ) => {
     const nextModels = result.models || [];
-    const nextChatModels = nextModels.filter((model) => !isVisionProjector(model));
-    const nextProjectors = nextModels.filter(isVisionProjector);
+    const nextChatModels = nextModels.filter((model) => !isProjectorFile(model));
     setModels(nextModels);
     setDirectoryName(result.directoryName || '');
     if (!result.directoryUri) {
@@ -236,21 +173,10 @@ export function OnDeviceAiScreen() {
     }
 
     const preferred = nextChatModels.find((model) => model.uri === preferredUri);
-    const preferredProjector = nextProjectors.find((model) => model.uri === preferredProjectorUri);
-    if (preferredProjector) {
-      selectedProjectorUriRef.current = preferredProjector.uri;
-      setSelectedProjectorUri(preferredProjector.uri);
-      void AsyncStorage.setItem(SELECTED_PROJECTOR_KEY, preferredProjector.uri);
-    } else if (preferredProjectorUri) {
-      selectedProjectorUriRef.current = '';
-      setSelectedProjectorUri('');
-      void AsyncStorage.removeItem(SELECTED_PROJECTOR_KEY);
-    }
-
     if (preferred) {
       selectedUriRef.current = preferred.uri;
       setSelectedUri(preferred.uri);
-      await loadSelectedModel(preferred, preferredProjector);
+      await loadSelectedModel(preferred);
     } else {
       setPhase('idle');
       setStatusMessage('지킴이가 사용할 GGUF 모델을 선택해 주세요.');
@@ -274,12 +200,12 @@ export function OnDeviceAiScreen() {
 
     void (async () => {
       try {
-        const [storedUri, storedProjectorUri, storedHistory, result] = await Promise.all([
+        const [storedUri, storedHistory, result] = await Promise.all([
           AsyncStorage.getItem(SELECTED_MODEL_KEY),
-          AsyncStorage.getItem(SELECTED_PROJECTOR_KEY),
           AsyncStorage.getItem(HISTORY_KEY),
           getOnDeviceModels(),
         ]);
+        await AsyncStorage.removeItem(LEGACY_SELECTED_PROJECTOR_KEY);
         if (!mountedRef.current) return;
         if (storedHistory) {
           try {
@@ -291,7 +217,7 @@ export function OnDeviceAiScreen() {
             await AsyncStorage.removeItem(HISTORY_KEY);
           }
         }
-        await applyDirectory(result, storedUri || '', storedProjectorUri || '');
+        await applyDirectory(result, storedUri || '');
       } catch (error) {
         if (!mountedRef.current) return;
         setPhase('idle');
@@ -323,24 +249,20 @@ export function OnDeviceAiScreen() {
       const result = await pickOnDeviceModelsDirectory();
       if (!mountedRef.current) return;
       setSelectedUri('');
-      setSelectedProjectorUri('');
-      setVisionReady(false);
-      setAttachedImage(null);
       selectedUriRef.current = '';
-      selectedProjectorUriRef.current = '';
       commitMessages([], '');
-      await AsyncStorage.multiRemove([SELECTED_MODEL_KEY, SELECTED_PROJECTOR_KEY, HISTORY_KEY]);
+      await AsyncStorage.multiRemove([SELECTED_MODEL_KEY, LEGACY_SELECTED_PROJECTOR_KEY, HISTORY_KEY]);
       await applyDirectory(result);
     } catch (error) {
       if (!mountedRef.current) return;
       if (isFolderPickerCancellation(error) && selectedModel) {
-        await loadSelectedModel(selectedModel, selectedProjector);
+        await loadSelectedModel(selectedModel);
         return;
       }
       setPhase('idle');
       setStatusMessage(isFolderPickerCancellation(error) ? '기존 설정을 유지했어요.' : normalizeOnDeviceAiError(error));
     }
-  }, [applyDirectory, commitMessages, loadSelectedModel, selectedModel, selectedProjector]);
+  }, [applyDirectory, commitMessages, loadSelectedModel, selectedModel]);
 
   const refreshModels = useCallback(async () => {
     setPhase('scanning');
@@ -348,7 +270,7 @@ export function OnDeviceAiScreen() {
     try {
       const result = await getOnDeviceModels();
       if (!mountedRef.current) return;
-      await applyDirectory(result, selectedUriRef.current, selectedProjectorUriRef.current);
+      await applyDirectory(result, selectedUriRef.current);
     } catch (error) {
       if (!mountedRef.current) return;
       setPhase(onDeviceAiEngine.isLoaded() ? 'ready' : 'idle');
@@ -360,41 +282,17 @@ export function OnDeviceAiScreen() {
     setSelectorOpen(false);
     if (model.uri === selectedUri && onDeviceAiEngine.isLoaded(model.uri)) return;
     await onDeviceAiEngine.unload();
-    setVisionReady(false);
-    setAttachedImage(null);
     selectedUriRef.current = model.uri;
     setSelectedUri(model.uri);
     commitMessages([], model.uri);
     await AsyncStorage.setItem(SELECTED_MODEL_KEY, model.uri);
-    await loadSelectedModel(model, selectedProjector);
-  }, [commitMessages, loadSelectedModel, selectedProjector, selectedUri]);
-
-  const selectProjector = useCallback(async (projector: NativeAiModelFile | null) => {
-    setSelectorOpen(false);
-    setAttachedImage(null);
-    if (!projector) {
-      selectedProjectorUriRef.current = '';
-      setSelectedProjectorUri('');
-      setVisionReady(false);
-      await AsyncStorage.removeItem(SELECTED_PROJECTOR_KEY);
-      await onDeviceAiEngine.disableVision();
-      setStatusMessage('텍스트로만 이야기할 수 있어요.');
-      return;
-    }
-
-    selectedProjectorUriRef.current = projector.uri;
-    setSelectedProjectorUri(projector.uri);
-    await AsyncStorage.setItem(SELECTED_PROJECTOR_KEY, projector.uri);
-    if (selectedModel && onDeviceAiEngine.isLoaded(selectedModel.uri)) {
-      await prepareVision(projector);
-    }
-  }, [prepareVision, selectedModel]);
+    await loadSelectedModel(model);
+  }, [commitMessages, loadSelectedModel, selectedUri]);
 
   const clearConversation = useCallback(async () => {
     if (phase !== 'ready') return;
     await onDeviceAiEngine.clearConversation().catch(() => undefined);
     commitMessages([]);
-    setAttachedImage(null);
     setStatusMessage('지킴이가 새 이야기로 기억을 비웠어요.');
   }, [commitMessages, phase]);
 
@@ -405,62 +303,16 @@ export function OnDeviceAiScreen() {
     await onDeviceAiEngine.stop().catch(() => undefined);
   }, [phase]);
 
-  const pickImage = useCallback(async () => {
-    if (!selectedProjector) {
-      setStatusMessage('사진 대화를 위해 이 VLM과 맞는 mmproj 파일을 먼저 골라 주세요.');
-      setSelectorOpen(true);
-      return;
-    }
-    if (!visionReady) {
-      const prepared = await prepareVision(selectedProjector);
-      if (!prepared) return;
-    }
-
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('사진 접근 권한이 필요합니다', '기기 안에서 사진을 살펴보려면 사진 보관함 접근을 허용해 주세요.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: false,
-      quality: 0.9,
-      selectionLimit: 1,
-    });
-    if (result.canceled || !result.assets?.[0]) return;
-
-    try {
-      const asset = result.assets[0];
-      const width = asset.width || MAX_IMAGE_SIDE;
-      const height = asset.height || MAX_IMAGE_SIDE;
-      const maxSide = Math.max(width, height);
-      const actions: ImageManipulator.Action[] = maxSide > MAX_IMAGE_SIDE
-        ? [{ resize: width >= height ? { width: MAX_IMAGE_SIDE } : { height: MAX_IMAGE_SIDE } }]
-        : [];
-      const prepared = await ImageManipulator.manipulateAsync(asset.uri, actions, {
-        compress: 0.82,
-        format: ImageManipulator.SaveFormat.JPEG,
-      });
-      setAttachedImage({ uri: prepared.uri, width: prepared.width, height: prepared.height });
-      setStatusMessage('이 사진은 서버로 보내지 않고 기기 안에서만 살펴봐요.');
-      scheduleScrollToLatest(false);
-    } catch (error) {
-      setStatusMessage(`사진을 준비하지 못했어요. ${normalizeOnDeviceAiError(error)}`);
-    }
-  }, [prepareVision, scheduleScrollToLatest, selectedProjector, visionReady]);
-
   const sendMessage = useCallback(async () => {
     if (!canSend) return;
-    const image = attachedImage;
-    const content = draft.trim() || '이 사진에 무엇이 보이는지 자세히 알려줘.';
-    const userMessage = createMessage('user', content, image?.uri);
+    const content = draft.trim();
+    const userMessage = createMessage('user', content);
     const assistantMessage = createMessage('assistant', '');
     const baseMessages = [...messagesRef.current, userMessage];
     setDraft('');
-    setAttachedImage(null);
     commitMessages([...baseMessages, assistantMessage]);
     setPhase('generating');
-    setStatusMessage(image ? '지킴이가 기기 안에서 사진을 살펴보고 있어요.' : '지킴이가 기기 안에서 생각하고 있어요.');
+    setStatusMessage('지킴이가 기기 안에서 생각하고 있어요.');
     scheduleScrollToLatest(false);
     try {
       const finalText = await onDeviceAiEngine.complete(baseMessages, (partial) => {
@@ -468,7 +320,7 @@ export function OnDeviceAiScreen() {
         const next = [...baseMessages, { ...assistantMessage, content: partial }];
         messagesRef.current = next;
         setMessages(next);
-      }, image?.uri);
+      });
       const next = [
         ...baseMessages,
         { ...assistantMessage, content: finalText || '생각을 잠시 멈췄어요.' },
@@ -487,16 +339,12 @@ export function OnDeviceAiScreen() {
       setPhase('ready');
       setStatusMessage(normalizeOnDeviceAiError(error));
     }
-  }, [attachedImage, canSend, commitMessages, draft, scheduleScrollToLatest]);
+  }, [canSend, commitMessages, draft, scheduleScrollToLatest]);
 
-  const chooseStarter = useCallback((prompt: string, index: number) => {
-    if (index === 2) {
-      void pickImage();
-      return;
-    }
+  const chooseStarter = useCallback((prompt: string) => {
     setDraft(prompt);
     requestAnimationFrame(() => inputRef.current?.focus());
-  }, [pickImage]);
+  }, []);
 
   const modelStateTitle = selectedModel
     ? phase === 'ready' || phase === 'generating'
@@ -504,7 +352,7 @@ export function OnDeviceAiScreen() {
       : '지킴이를 준비하고 있어요'
     : '지킴이의 기억을 연결해 주세요';
   const modelStateDetail = selectedModel
-    ? `${selectedModel.name} · ${visionReady ? '사진 대화 가능' : '텍스트 대화'}`
+    ? `${selectedModel.name} · 기기 내 대화`
     : directoryName || 'AiModels 폴더가 필요해요';
 
   return (
@@ -596,11 +444,6 @@ export function OnDeviceAiScreen() {
                 <Text style={[styles.bubbleLabel, user && styles.userBubbleText]}>
                   {user ? '나' : '숲 지킴이'}
                 </Text>
-                {item.imageUri ? (
-                  <Pressable accessibilityRole="button" accessibilityLabel="첨부한 사진 크게 보기" onPress={() => setViewImageUri(item.imageUri || '')}>
-                    <Image source={{ uri: item.imageUri }} resizeMode="cover" style={styles.messageImage} />
-                  </Pressable>
-                ) : null}
                 <Text style={[styles.bubbleText, user && styles.userBubbleText]}>{item.content || '…'}</Text>
               </View>
             </View>
@@ -614,7 +457,7 @@ export function OnDeviceAiScreen() {
               <View style={styles.guardianWelcome}>
                 <Text style={styles.emptyEyebrow}>작은 숲 지킴이</Text>
                 <Text style={styles.emptyTitle}>오늘은 어떤 이야기를 지켜볼까요?</Text>
-                <Text style={styles.emptyText}>마음속 이야기부터 사진 속 장면까지, 이곳에서 나눈 내용은 기기 밖으로 나가지 않아요.</Text>
+                <Text style={styles.emptyText}>마음속 이야기와 일상의 고민을 편하게 들려주세요. 이곳에서 나눈 내용은 기기 밖으로 나가지 않아요.</Text>
               </View>
             </View>
 
@@ -635,10 +478,10 @@ export function OnDeviceAiScreen() {
                     key={prompt}
                     accessibilityRole="button"
                     accessibilityLabel={prompt}
-                    onPress={() => chooseStarter(prompt, index)}
+                    onPress={() => chooseStarter(prompt)}
                     style={styles.starterRow}
                   >
-                    <Ionicons name={index === 2 ? 'image-outline' : index === 1 ? 'home-outline' : 'chatbubble-ellipses-outline'} size={18} color={colors.tealDark} />
+                    <Ionicons name={index === 2 ? 'leaf-outline' : index === 1 ? 'home-outline' : 'chatbubble-ellipses-outline'} size={18} color={colors.tealDark} />
                     <Text style={styles.starterText}>{prompt}</Text>
                     <Ionicons name="arrow-forward" size={16} color={colors.inkMuted} />
                   </Pressable>
@@ -649,31 +492,7 @@ export function OnDeviceAiScreen() {
         }
       />
 
-      {attachedImage ? (
-        <View style={styles.imageDraft}>
-          <Pressable accessibilityRole="button" accessibilityLabel="선택한 사진 크게 보기" onPress={() => setViewImageUri(attachedImage.uri)}>
-            <Image source={{ uri: attachedImage.uri }} resizeMode="cover" style={styles.imageDraftPreview} />
-          </Pressable>
-          <View style={styles.imageDraftCopy}>
-            <Text style={styles.imageDraftTitle}>지킴이와 함께 볼 사진</Text>
-            <Text style={styles.imageDraftDetail}>최대 {MAX_IMAGE_SIDE}px · 기기 안에서만 처리</Text>
-          </View>
-          <Pressable accessibilityRole="button" accessibilityLabel="첨부 사진 삭제" onPress={() => setAttachedImage(null)} style={styles.imageDraftRemove}>
-            <Ionicons name="close" size={18} color={colors.inkMuted} />
-          </Pressable>
-        </View>
-      ) : null}
-
       <View style={styles.composer}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="지킴이에게 사진 보여주기"
-          disabled={phase !== 'ready'}
-          onPress={() => void pickImage()}
-          style={[styles.attachButton, phase !== 'ready' && styles.disabled]}
-        >
-          <Ionicons name="image-outline" size={21} color={visionReady ? colors.tealDark : colors.inkMuted} />
-        </Pressable>
         <TextInput
           ref={inputRef}
           value={draft}
@@ -743,51 +562,9 @@ export function OnDeviceAiScreen() {
               );
             }) : <Text style={styles.emptyModelText}>대화용 GGUF 모델이 없어요.</Text>}
 
-            <View style={[styles.sectionHeading, styles.visionHeading]}>
-              <Text style={styles.sectionTitle}>사진을 보는 눈</Text>
-              <Text style={styles.sectionDetail}>VLM과 정확히 짝이 맞는 mmproj GGUF가 필요해요</Text>
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="사진 기능 사용 안 함"
-              disabled={busy}
-              onPress={() => void selectProjector(null)}
-              style={[styles.modelRow, !selectedProjectorUri && styles.modelRowActive, busy && styles.disabled]}
-            >
-              <Ionicons name="eye-off-outline" size={21} color={!selectedProjectorUri ? colors.tealDark : colors.inkMuted} />
-              <View style={styles.modelRowCopy}>
-                <Text style={styles.modelRowName}>사진 기능 사용 안 함</Text>
-                <Text style={styles.modelRowMeta}>메모리를 아끼고 텍스트로만 대화해요</Text>
-              </View>
-              {!selectedProjectorUri ? <Ionicons name="checkmark-circle" size={22} color={colors.tealDark} /> : null}
-            </Pressable>
-            {projectorModels.map((item) => {
-              const active = item.uri === selectedProjectorUri;
-              return (
-                <Pressable
-                  key={item.uri}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${item.name} 비전 프로젝터 선택`}
-                  disabled={busy}
-                  onPress={() => void selectProjector(item)}
-                  style={[styles.modelRow, active && styles.modelRowActive, busy && styles.disabled]}
-                >
-                  <Ionicons name="eye-outline" size={21} color={active ? colors.tealDark : colors.inkMuted} />
-                  <View style={styles.modelRowCopy}>
-                    <Text style={styles.modelRowName} numberOfLines={2}>{item.name}</Text>
-                    <Text style={styles.modelRowMeta}>{formatBytes(item.sizeBytes)} · {item.prepared ? '기기 준비됨' : '선택 후 준비'}</Text>
-                  </View>
-                  {active ? <Ionicons name="checkmark-circle" size={22} color={colors.tealDark} /> : null}
-                </Pressable>
-              );
-            })}
-            {!projectorModels.length ? (
-              <Text style={styles.emptyModelText}>폴더에서 mmproj 또는 projector 이름의 GGUF를 찾지 못했어요.</Text>
-            ) : null}
-
             <View style={styles.localNote}>
               <Ionicons name="phone-portrait-outline" size={18} color={colors.tealDark} />
-              <Text style={styles.localNoteText}>모델과 사진은 APK에 포함되거나 서버로 업로드되지 않고, 선택한 기기 안에서만 사용돼요.</Text>
+              <Text style={styles.localNoteText}>모델과 대화 내용은 APK에 포함되거나 서버로 업로드되지 않고, 선택한 기기 안에서만 사용돼요.</Text>
             </View>
           </ScrollView>
 
@@ -804,14 +581,6 @@ export function OnDeviceAiScreen() {
         </SafeAreaView>
       </Modal>
 
-      <Modal visible={!!viewImageUri} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setViewImageUri('')}>
-        <View style={styles.viewer}>
-          <Pressable accessibilityRole="button" accessibilityLabel="사진 크게 보기 닫기" onPress={() => setViewImageUri('')} style={styles.viewerClose}>
-            <Ionicons name="close" size={24} color="#FFFFFF" />
-          </Pressable>
-          {viewImageUri ? <Image source={{ uri: viewImageUri }} resizeMode="contain" style={styles.viewerImage} /> : null}
-        </View>
-      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -857,15 +626,7 @@ const styles = StyleSheet.create({
   bubbleLabel: { color: colors.tealDark, fontSize: type.tiny, fontWeight: '900', marginBottom: 4 },
   bubbleText: { color: colors.ink, fontSize: type.body, lineHeight: 21 },
   userBubbleText: { color: '#FFFFFF' },
-  messageImage: { width: 196, height: 144, maxWidth: '100%', borderRadius: radius.md, marginBottom: spacing.sm, backgroundColor: colors.canvasDeep },
-  imageDraft: { minHeight: 64, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderTopWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  imageDraftPreview: { width: 48, height: 48, borderRadius: radius.md, backgroundColor: colors.canvasDeep },
-  imageDraftCopy: { flex: 1 },
-  imageDraftTitle: { color: colors.ink, fontSize: type.body, fontWeight: '800' },
-  imageDraftDetail: { color: colors.inkMuted, fontSize: type.small, marginTop: 4 },
-  imageDraftRemove: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  composer: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, borderTopWidth: 1, borderColor: colors.line, backgroundColor: colors.surface },
-  attachButton: { width: 43, height: 43, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceSoft },
+  composer: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.lg, flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, borderTopWidth: 1, borderColor: colors.line, backgroundColor: colors.surface },
   input: { flex: 1, minHeight: 43, maxHeight: 112, borderRadius: radius.lg, backgroundColor: colors.surfaceSoft, color: colors.ink, fontSize: type.body, paddingHorizontal: spacing.md, paddingVertical: 10 },
   sendButton: { width: 43, height: 43, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.tealDark },
   stopButton: { backgroundColor: colors.coral },
@@ -877,7 +638,6 @@ const styles = StyleSheet.create({
   modalClose: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   modelList: { padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.sm },
   sectionHeading: { marginBottom: spacing.xs },
-  visionHeading: { marginTop: spacing.lg },
   sectionTitle: { color: colors.ink, fontSize: type.section, fontWeight: '900' },
   sectionDetail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 17, marginTop: 4 },
   modelRow: { minHeight: 64, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
@@ -893,7 +653,4 @@ const styles = StyleSheet.create({
   secondaryButtonText: { color: colors.tealDark, fontSize: type.body, fontWeight: '900' },
   folderButton: { flex: 1, minHeight: 48, borderRadius: radius.lg, backgroundColor: colors.tealDark, flexDirection: 'row', gap: spacing.sm, alignItems: 'center', justifyContent: 'center' },
   folderButtonText: { color: '#FFFFFF', fontSize: type.body, fontWeight: '900' },
-  viewer: { flex: 1, backgroundColor: 'rgba(12, 18, 14, 0.94)', alignItems: 'center', justifyContent: 'center' },
-  viewerClose: { position: 'absolute', top: 48, right: spacing.lg, zIndex: 1, width: 44, height: 44, borderRadius: radius.pill, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
-  viewerImage: { width: '100%', height: '82%' },
 });
