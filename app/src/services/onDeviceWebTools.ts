@@ -37,15 +37,15 @@ export function parseGuardianWebToolCall(value: string): GuardianWebToolCall | n
 
 function formatPage(page: NativeBrowserPage) {
   const links = (page.links || [])
-    .slice(0, 10)
+    .slice(0, 5)
     .map((link, index) => `${index + 1}. ${link.title}\n${link.url}`)
     .join('\n');
-  const text = String(page.text || '').replace(/\s+/g, ' ').trim().slice(0, 2200);
+  const text = String(page.text || '').replace(/\s+/g, ' ').trim().slice(0, 1800);
   return [
     `제목: ${page.title || '제목 없음'}`,
     `주소: ${page.url}`,
-    links ? `링크:\n${links}` : '',
     text ? `본문:\n${text}` : '본문을 읽지 못했습니다.',
+    links ? `참고 링크:\n${links}` : '',
   ].filter(Boolean).join('\n\n').slice(0, 4200);
 }
 

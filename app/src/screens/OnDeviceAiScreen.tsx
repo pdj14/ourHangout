@@ -13,6 +13,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ChatKeyboardLayout } from '../components/ChatKeyboardLayout';
 import { GuardianSettingsModal } from '../components/GuardianSettingsModal';
@@ -69,6 +70,7 @@ function isProjectorFile(model: NativeAiModelFile) {
 }
 
 export function OnDeviceAiScreen() {
+  const insets = useSafeAreaInsets();
   const [models, setModels] = useState<NativeAiModelFile[]>([]);
   const [directoryName, setDirectoryName] = useState('');
   const [selectedUri, setSelectedUri] = useState('');
@@ -360,7 +362,10 @@ export function OnDeviceAiScreen() {
     : directoryName || 'AiModels 폴더가 필요해요';
 
   return (
-    <ChatKeyboardLayout style={styles.screen}>
+    <ChatKeyboardLayout
+      keyboardVerticalOffset={Platform.OS === 'android' ? insets.top : 0}
+      style={styles.screen}
+    >
       <ScreenHeader
         eyebrow="우리들의 아지트"
         title={guardianProfile.name}

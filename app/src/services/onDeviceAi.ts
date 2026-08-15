@@ -21,6 +21,7 @@ export type OnDeviceModelLoadProgress = {
 };
 
 export type OnDeviceCompletionOptions = {
+  maxTokens?: number;
   systemPrompt?: string;
 };
 
@@ -192,7 +193,13 @@ class OnDeviceAiEngine {
           jinja: true,
           enable_thinking: false,
           reasoning_format: 'none',
-          n_predict: this.contextSize <= 1024 ? 256 : 384,
+          n_predict: Math.max(
+            64,
+            Math.min(
+              this.contextSize <= 1024 ? 256 : 384,
+              Math.floor(options.maxTokens || Number.POSITIVE_INFINITY)
+            )
+          ),
           temperature: 0.3,
           min_p: 0.15,
           penalty_repeat: 1.05,

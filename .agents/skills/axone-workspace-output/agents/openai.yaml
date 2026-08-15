@@ -1,0 +1,4 @@
+interface:
+  display_name: "AxOne Workspace Output"
+  short_description: "Control explicitly requested file outputs"
+  default_prompt: "Use $axone-workspace-output only when the request explicitly creates or delivers a file; otherwise answer in chat."

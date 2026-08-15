@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "managedBy": "AxOneMux",
+  "conflictPolicy": [
+    "User and workspace instructions define the requested outcome.",
+    "Safety, result-correlation, and data-integrity rules override style or minimality guidance.",
+    "A domain Skill owns its domain; general workflow Skills must not duplicate or override it.",
+    "Minimal implementation guidance applies only after correctness and verification requirements are satisfied."
+  ],
+  "skills": [
+    {
+      "id": "axone-delegated-result",
+      "precedence": 10,
+      "mode": "required",
+      "userEditable": false,
+      "influences": [
+        {
+          "name": "AxOneMux",
+          "contribution": "Task-correlated delegated result protocol."
+        }
+      ]
+    },
+    {
+      "id": "axone-workspace-output",
+      "precedence": 20,
+      "mode": "required",
+      "userEditable": true,
+      "influences": [
+        {
+          "name": "AxOneMux",
+          "contribution": "Workspace-scoped artifact delivery."
+        }
+      ]
+    }
+  ]
+}
