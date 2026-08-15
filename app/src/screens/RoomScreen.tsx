@@ -3,8 +3,6 @@ import {
   ActivityIndicator,
   FlatList,
   Image,
-  Keyboard,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -16,7 +14,9 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 
 import { Avatar } from '../components/Avatar';
+import { ChatKeyboardLayout } from '../components/ChatKeyboardLayout';
 import { MessageBubble } from '../components/MessageBubble';
+import { useChatKeyboard } from '../hooks/useChatKeyboard';
 import { colors, radius, spacing, type } from '../theme';
 import type { AttachmentDraft, Message, Room, User } from '../types';
 
@@ -82,8 +82,6 @@ export function RoomScreen({
   const initialScrollKeyRef = useRef('');
   const previousRoomIdRef = useRef(room.id);
   const isNearBottomRef = useRef(true);
-  const keyboardScrollTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const pendingScrollFrameRef = useRef<number | null>(null);
   const lastContentHeightRef = useRef(0);
   const [selectedImageUri, setSelectedImageUri] = useState('');
   const [showRoomMenu, setShowRoomMenu] = useState(false);
@@ -114,32 +112,12 @@ export function RoomScreen({
     initialScrollTimersRef.current = [];
   }, []);
 
-  const clearKeyboardScrollTimers = useCallback(() => {
-    keyboardScrollTimersRef.current.forEach((timer) => clearTimeout(timer));
-    keyboardScrollTimersRef.current = [];
-  }, []);
-
-  const clearPendingScrollFrame = useCallback(() => {
-    if (pendingScrollFrameRef.current === null) return;
-    cancelAnimationFrame(pendingScrollFrameRef.current);
-    pendingScrollFrameRef.current = null;
-  }, []);
-
-  const scrollToLatest = useCallback((animated = false) => {
-    clearPendingScrollFrame();
-    pendingScrollFrameRef.current = requestAnimationFrame(() => {
-      pendingScrollFrameRef.current = null;
-      listRef.current?.scrollToEnd({ animated });
-    });
-  }, [clearPendingScrollFrame]);
-
-  const scheduleScrollToLatest = useCallback((animated = false) => {
-    clearKeyboardScrollTimers();
-    [0, 80, 220].forEach((delayMs) => {
-      const timer = setTimeout(() => scrollToLatest(animated && delayMs === 220), delayMs);
-      keyboardScrollTimersRef.current.push(timer);
-    });
-  }, [clearKeyboardScrollTimers, scrollToLatest]);
+  const {
+    cancelScheduledScroll,
+    handleComposerFocus,
+    handleScroll: handleKeyboardAwareScroll,
+    scrollToLatest,
+  } = useChatKeyboard(listRef, { nearBottomRef: isNearBottomRef });
 
   const scrollToInitialPosition = useCallback((animated = false) => {
     if (firstUnreadIndex >= 0) {
@@ -188,12 +166,12 @@ export function RoomScreen({
       previousRoomIdRef.current = room.id;
       isNearBottomRef.current = firstUnreadIndex < 0;
       lastContentHeightRef.current = 0;
-      clearPendingScrollFrame();
+      cancelScheduledScroll();
       setShowRoomMenu(false);
       setSelectedImageUri('');
     }
     scheduleInitialScroll();
-  }, [clearInitialScrollTimers, clearPendingScrollFrame, firstUnreadIndex, messages.length, room.id, scheduleInitialScroll]);
+  }, [cancelScheduledScroll, clearInitialScrollTimers, firstUnreadIndex, messages.length, room.id, scheduleInitialScroll]);
 
   const handleListContentSizeChange = useCallback((_width: number, height: number) => {
     if (!initialScrollDoneRef.current) {
@@ -209,10 +187,9 @@ export function RoomScreen({
   const handleScrollBeginDrag = useCallback(() => {
     initialScrollGenerationRef.current += 1;
     clearInitialScrollTimers();
-    clearKeyboardScrollTimers();
-    clearPendingScrollFrame();
+    cancelScheduledScroll();
     initialScrollDoneRef.current = true;
-  }, [clearInitialScrollTimers, clearKeyboardScrollTimers, clearPendingScrollFrame]);
+  }, [cancelScheduledScroll, clearInitialScrollTimers]);
 
   const handleListLayout = useCallback(() => {
     if (!initialScrollDoneRef.current) {
@@ -222,37 +199,20 @@ export function RoomScreen({
     if (isNearBottomRef.current) scrollToLatest(false);
   }, [scheduleInitialScroll, scrollToLatest]);
 
-  const handleComposerFocus = useCallback(() => {
-    isNearBottomRef.current = true;
-    scheduleScrollToLatest(false);
-  }, [scheduleScrollToLatest]);
-
   const handleOpenMedia = useCallback((message: Message) => {
     if (message.kind === 'image' && message.uri) setSelectedImageUri(message.uri);
   }, []);
 
-  useEffect(() => {
-    const eventName = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const subscription = Keyboard.addListener(eventName, () => {
-      if (isNearBottomRef.current) scheduleScrollToLatest(false);
-    });
-    return () => subscription.remove();
-  }, [scheduleScrollToLatest]);
-
   useEffect(
     () => () => {
       clearInitialScrollTimers();
-      clearKeyboardScrollTimers();
-      clearPendingScrollFrame();
+      cancelScheduledScroll();
     },
-    [clearInitialScrollTimers, clearKeyboardScrollTimers, clearPendingScrollFrame]
+    [cancelScheduledScroll, clearInitialScrollTimers]
   );
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      style={styles.screen}
-    >
+    <ChatKeyboardLayout style={styles.screen}>
       <View style={styles.header}>
         <Pressable accessibilityRole="button" accessibilityLabel="대화방 나가기" onPress={onBack} style={styles.iconBtn}>
           <Ionicons name="chevron-back" size={22} color={colors.ink} />
@@ -308,13 +268,7 @@ export function RoomScreen({
         contentContainerStyle={styles.messages}
         onContentSizeChange={handleListContentSizeChange}
         onLayout={handleListLayout}
-        onScroll={({ nativeEvent }) => {
-          const distanceFromEnd =
-            nativeEvent.contentSize.height -
-            nativeEvent.layoutMeasurement.height -
-            nativeEvent.contentOffset.y;
-          isNearBottomRef.current = distanceFromEnd < 96;
-        }}
+        onScroll={handleKeyboardAwareScroll}
         onScrollBeginDrag={handleScrollBeginDrag}
         scrollEventThrottle={32}
         onScrollToIndexFailed={(info) => {
@@ -507,7 +461,7 @@ export function RoomScreen({
           </View>
         </Pressable>
       </Modal>
-    </KeyboardAvoidingView>
+    </ChatKeyboardLayout>
   );
 }
 

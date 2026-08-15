@@ -27,6 +27,7 @@ import { ProfilePhotoCropModal } from './components/ProfilePhotoCropModal';
 import { UserProfileModal } from './components/UserProfileModal';
 import { getDeviceId, getRuntimeConfig } from './config';
 import { useAppVisibility } from './hooks/useAppVisibility';
+import { useKeyboardVisible } from './hooks/useChatKeyboard';
 import { useRealtimeConnection, type RealtimeEvent } from './hooks/useRealtimeConnection';
 import { NativeLocationCapture, NativePushToken } from './native';
 import { ChatsScreen } from './screens/ChatsScreen';
@@ -144,6 +145,7 @@ const initialProfile: Profile = {
 
 function RenewalApp() {
   const insets = useSafeAreaInsets();
+  const keyboardVisible = useKeyboardVisible();
   const appState = useAppVisibility();
   const config = useMemo(getRuntimeConfig, []);
   const defaultServerEnvironment = useMemo(
@@ -2255,9 +2257,11 @@ function RenewalApp() {
           />
         ) : null}
       </View>
-      <View style={{ paddingBottom: Math.max(insets.bottom, 8), backgroundColor: colors.surface }}>
-        <BottomNav active={tab} onChange={navigateTab} />
-      </View>
+      {!keyboardVisible ? (
+        <View style={{ paddingBottom: Math.max(insets.bottom, 8), backgroundColor: colors.surface }}>
+          <BottomNav active={tab} onChange={navigateTab} />
+        </View>
+      ) : null}
       <FriendSearchModal
         visible={friendSearchOpen}
         query={friendSearchQuery}

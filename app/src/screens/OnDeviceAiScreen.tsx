@@ -5,22 +5,27 @@ import {
   ActivityIndicator,
   FlatList,
   Image,
-  Keyboard,
-  KeyboardAvoidingView,
-  Modal,
   NativeEventEmitter,
   Platform,
   Pressable,
-  SafeAreaView,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
 
+import { ChatKeyboardLayout } from '../components/ChatKeyboardLayout';
+import { GuardianSettingsModal } from '../components/GuardianSettingsModal';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { useChatKeyboard } from '../hooks/useChatKeyboard';
 import { NativeAiModelStorage, type NativeAiModelFile } from '../native';
+import { completeGuardianConversation } from '../services/guardianConversation';
+import {
+  DEFAULT_GUARDIAN_PROFILE,
+  readGuardianProfile,
+  writeGuardianProfile,
+  type GuardianProfile,
+} from '../services/guardianProfile';
 import {
   getOnDeviceModels,
   isFolderPickerCancellation,
@@ -30,6 +35,7 @@ import {
   type OnDeviceChatMessage,
   type OnDeviceModelLoadProgress,
 } from '../services/onDeviceAi';
+import { cancelGuardianWebTool } from '../services/onDeviceWebTools';
 import { colors, radius, spacing, type } from '../theme';
 
 const guardianMascot = require('../../assets/forest-guardian.png');
@@ -58,13 +64,6 @@ function createMessage(
   };
 }
 
-function formatBytes(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return '크기 정보 없음';
-  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GB`;
-  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(0)} MB`;
-  return `${(value / 1024).toFixed(0)} KB`;
-}
-
 function isProjectorFile(model: NativeAiModelFile) {
   return /(^|[-_.\s])(mmproj|projector)([-_.\s]|$)/i.test(model.name);
 }
@@ -78,14 +77,22 @@ export function OnDeviceAiScreen() {
   const [phase, setPhase] = useState<Phase>('scanning');
   const [progress, setProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState('지킴이가 기억을 살펴보고 있어요.');
-  const [selectorOpen, setSelectorOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [guardianProfile, setGuardianProfile] = useState<GuardianProfile>(DEFAULT_GUARDIAN_PROFILE);
   const mountedRef = useRef(true);
   const messagesRef = useRef<OnDeviceChatMessage[]>([]);
   const selectedUriRef = useRef('');
   const listRef = useRef<FlatList<OnDeviceChatMessage> | null>(null);
   const inputRef = useRef<TextInput | null>(null);
-  const isNearBottomRef = useRef(true);
-  const keyboardTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const stopRequestedRef = useRef(false);
+
+  const {
+    nearBottomRef,
+    handleComposerFocus,
+    handleScroll: handleKeyboardAwareScroll,
+    scheduleScrollToLatest,
+    scrollToLatest,
+  } = useChatKeyboard(listRef);
 
   const chatModels = useMemo(() => models.filter((model) => !isProjectorFile(model)), [models]);
   const selectedModel = useMemo(
@@ -96,23 +103,6 @@ export function OnDeviceAiScreen() {
   const canSend = phase === 'ready'
     && !!selectedModel
     && !!draft.trim();
-
-  const clearKeyboardTimers = useCallback(() => {
-    keyboardTimersRef.current.forEach((timer) => clearTimeout(timer));
-    keyboardTimersRef.current = [];
-  }, []);
-
-  const scrollToLatest = useCallback((animated = false) => {
-    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated }));
-  }, []);
-
-  const scheduleScrollToLatest = useCallback((animated = false) => {
-    clearKeyboardTimers();
-    [0, 80, 220].forEach((delayMs) => {
-      const timer = setTimeout(() => scrollToLatest(animated && delayMs === 220), delayMs);
-      keyboardTimersRef.current.push(timer);
-    });
-  }, [clearKeyboardTimers, scrollToLatest]);
 
   const commitMessages = useCallback((next: OnDeviceChatMessage[], modelUri?: string) => {
     messagesRef.current = next;
@@ -180,7 +170,7 @@ export function OnDeviceAiScreen() {
     } else {
       setPhase('idle');
       setStatusMessage('지킴이가 사용할 GGUF 모델을 선택해 주세요.');
-      setSelectorOpen(true);
+      setSettingsOpen(true);
     }
   }, [loadSelectedModel]);
 
@@ -200,13 +190,15 @@ export function OnDeviceAiScreen() {
 
     void (async () => {
       try {
-        const [storedUri, storedHistory, result] = await Promise.all([
+        const [storedUri, storedHistory, result, storedGuardianProfile] = await Promise.all([
           AsyncStorage.getItem(SELECTED_MODEL_KEY),
           AsyncStorage.getItem(HISTORY_KEY),
           getOnDeviceModels(),
+          readGuardianProfile(),
         ]);
         await AsyncStorage.removeItem(LEGACY_SELECTED_PROJECTOR_KEY);
         if (!mountedRef.current) return;
+        setGuardianProfile(storedGuardianProfile);
         if (storedHistory) {
           try {
             const parsed = JSON.parse(storedHistory) as StoredHistory;
@@ -228,18 +220,11 @@ export function OnDeviceAiScreen() {
     return () => {
       mountedRef.current = false;
       subscription?.remove();
-      clearKeyboardTimers();
+      stopRequestedRef.current = true;
+      void cancelGuardianWebTool();
       void onDeviceAiEngine.unload();
     };
-  }, [applyDirectory, clearKeyboardTimers, commitMessages]);
-
-  useEffect(() => {
-    const eventName = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const subscription = Keyboard.addListener(eventName, () => {
-      if (isNearBottomRef.current) scheduleScrollToLatest(false);
-    });
-    return () => subscription.remove();
-  }, [scheduleScrollToLatest]);
+  }, [applyDirectory, commitMessages]);
 
   const pickDirectory = useCallback(async () => {
     setPhase('scanning');
@@ -279,7 +264,7 @@ export function OnDeviceAiScreen() {
   }, [applyDirectory]);
 
   const selectModel = useCallback(async (model: NativeAiModelFile) => {
-    setSelectorOpen(false);
+    setSettingsOpen(false);
     if (model.uri === selectedUri && onDeviceAiEngine.isLoaded(model.uri)) return;
     await onDeviceAiEngine.unload();
     selectedUriRef.current = model.uri;
@@ -298,10 +283,20 @@ export function OnDeviceAiScreen() {
 
   const stopGeneration = useCallback(async () => {
     if (phase !== 'generating') return;
+    stopRequestedRef.current = true;
     setPhase('stopping');
-    setStatusMessage('지킴이가 잠시 생각을 멈추고 있어요.');
-    await onDeviceAiEngine.stop().catch(() => undefined);
-  }, [phase]);
+    setStatusMessage(`${guardianProfile.name}가 잠시 생각을 멈추고 있어요.`);
+    await Promise.all([
+      onDeviceAiEngine.stop().catch(() => undefined),
+      cancelGuardianWebTool(),
+    ]);
+  }, [guardianProfile.name, phase]);
+
+  const saveGuardianProfile = useCallback(async (nextProfile: GuardianProfile) => {
+    const saved = await writeGuardianProfile(nextProfile);
+    setGuardianProfile(saved);
+    setStatusMessage(`${saved.name}의 설정을 저장했어요.`);
+  }, []);
 
   const sendMessage = useCallback(async () => {
     if (!canSend) return;
@@ -309,17 +304,24 @@ export function OnDeviceAiScreen() {
     const userMessage = createMessage('user', content);
     const assistantMessage = createMessage('assistant', '');
     const baseMessages = [...messagesRef.current, userMessage];
+    stopRequestedRef.current = false;
     setDraft('');
     commitMessages([...baseMessages, assistantMessage]);
     setPhase('generating');
-    setStatusMessage('지킴이가 기기 안에서 생각하고 있어요.');
+    setStatusMessage(`${guardianProfile.name}가 기기 안에서 생각하고 있어요.`);
     scheduleScrollToLatest(false);
     try {
-      const finalText = await onDeviceAiEngine.complete(baseMessages, (partial) => {
-        if (!mountedRef.current) return;
-        const next = [...baseMessages, { ...assistantMessage, content: partial }];
-        messagesRef.current = next;
-        setMessages(next);
+      const finalText = await completeGuardianConversation(baseMessages, guardianProfile, {
+        onPartial: (partial) => {
+          if (!mountedRef.current || stopRequestedRef.current) return;
+          const next = [...baseMessages, { ...assistantMessage, content: partial }];
+          messagesRef.current = next;
+          setMessages(next);
+        },
+        onStatus: (message) => {
+          if (mountedRef.current && !stopRequestedRef.current) setStatusMessage(message);
+        },
+        shouldStop: () => stopRequestedRef.current,
       });
       const next = [
         ...baseMessages,
@@ -327,19 +329,21 @@ export function OnDeviceAiScreen() {
       ];
       commitMessages(next);
       setPhase('ready');
-      setStatusMessage(finalText ? '지킴이가 다음 이야기를 기다리고 있어요.' : '답변 생성을 멈췄어요.');
+      setStatusMessage(finalText ? `${guardianProfile.name}가 다음 이야기를 기다리고 있어요.` : '답변 생성을 멈췄어요.');
       scheduleScrollToLatest(false);
     } catch (error) {
       if (!mountedRef.current) return;
       const partial = messagesRef.current.find((message) => message.id === assistantMessage.id)?.content.trim();
-      const next = partial
-        ? messagesRef.current
+      const stopped = stopRequestedRef.current;
+      const next = partial || stopped
+        ? messagesRef.current.filter((message) => message.id !== assistantMessage.id || !!message.content.trim())
         : [...baseMessages, { ...assistantMessage, content: `잠시 길을 잃었어요. ${normalizeOnDeviceAiError(error)}` }];
       commitMessages(next);
       setPhase('ready');
-      setStatusMessage(normalizeOnDeviceAiError(error));
+      setStatusMessage(stopped ? '답변 생성을 멈췄어요.' : normalizeOnDeviceAiError(error));
+      stopRequestedRef.current = false;
     }
-  }, [canSend, commitMessages, draft, scheduleScrollToLatest]);
+  }, [canSend, commitMessages, draft, guardianProfile, scheduleScrollToLatest]);
 
   const chooseStarter = useCallback((prompt: string) => {
     setDraft(prompt);
@@ -348,28 +352,25 @@ export function OnDeviceAiScreen() {
 
   const modelStateTitle = selectedModel
     ? phase === 'ready' || phase === 'generating'
-      ? '지킴이가 깨어 있어요'
-      : '지킴이를 준비하고 있어요'
-    : '지킴이의 기억을 연결해 주세요';
+      ? `${guardianProfile.name}가 깨어 있어요`
+      : `${guardianProfile.name}를 준비하고 있어요`
+    : `${guardianProfile.name}의 기억을 연결해 주세요`;
   const modelStateDetail = selectedModel
     ? `${selectedModel.name} · 기기 내 대화`
     : directoryName || 'AiModels 폴더가 필요해요';
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
+    <ChatKeyboardLayout style={styles.screen}>
       <ScreenHeader
         eyebrow="우리들의 아지트"
-        title="숲 지킴이"
-        detail="조용히 곁을 지키며, 기기 안에서만 이야기를 나눠요."
+        title={guardianProfile.name}
+        detail={guardianProfile.synopsis}
         action={
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="지킴이 기억 설정"
+            accessibilityLabel="지킴이 설정"
             disabled={busy}
-            onPress={() => setSelectorOpen(true)}
+            onPress={() => setSettingsOpen(true)}
             style={[styles.headerButton, busy && styles.disabled]}
           >
             <Ionicons name="options-outline" size={20} color={colors.tealDark} />
@@ -379,9 +380,9 @@ export function OnDeviceAiScreen() {
 
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="지킴이 모델 설정 열기"
+        accessibilityLabel="지킴이 설정 열기"
         disabled={busy}
-        onPress={() => setSelectorOpen(true)}
+        onPress={() => setSettingsOpen(true)}
         style={[styles.memoryStrip, busy && styles.disabled]}
       >
         <View style={[styles.stateDot, phase === 'ready' && styles.stateDotReady]} />
@@ -422,14 +423,9 @@ export function OnDeviceAiScreen() {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
         onContentSizeChange={() => {
-          if (isNearBottomRef.current) scrollToLatest(false);
+          if (nearBottomRef.current) scrollToLatest(false);
         }}
-        onScroll={({ nativeEvent }) => {
-          const distanceFromEnd = nativeEvent.contentSize.height
-            - nativeEvent.layoutMeasurement.height
-            - nativeEvent.contentOffset.y;
-          isNearBottomRef.current = distanceFromEnd < 96;
-        }}
+        onScroll={handleKeyboardAwareScroll}
         scrollEventThrottle={32}
         renderItem={({ item }) => {
           const user = item.role === 'user';
@@ -442,7 +438,7 @@ export function OnDeviceAiScreen() {
               ) : null}
               <View style={[styles.bubble, user ? styles.userBubble : styles.assistantBubble]}>
                 <Text style={[styles.bubbleLabel, user && styles.userBubbleText]}>
-                  {user ? '나' : '숲 지킴이'}
+                  {user ? '나' : guardianProfile.name}
                 </Text>
                 <Text style={[styles.bubbleText, user && styles.userBubbleText]}>{item.content || '…'}</Text>
               </View>
@@ -455,7 +451,7 @@ export function OnDeviceAiScreen() {
               <View style={styles.lanternGlow} />
               <Image source={guardianMascot} resizeMode="contain" style={styles.guardianImage} />
               <View style={styles.guardianWelcome}>
-                <Text style={styles.emptyEyebrow}>작은 숲 지킴이</Text>
+                <Text style={styles.emptyEyebrow}>{guardianProfile.name}</Text>
                 <Text style={styles.emptyTitle}>오늘은 어떤 이야기를 지켜볼까요?</Text>
                 <Text style={styles.emptyText}>마음속 이야기와 일상의 고민을 편하게 들려주세요. 이곳에서 나눈 내용은 기기 밖으로 나가지 않아요.</Text>
               </View>
@@ -465,7 +461,7 @@ export function OnDeviceAiScreen() {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={directoryName ? '지킴이 모델 선택' : 'AiModels 폴더 연결'}
-                onPress={() => directoryName ? setSelectorOpen(true) : void pickDirectory()}
+                onPress={() => directoryName ? setSettingsOpen(true) : void pickDirectory()}
                 style={styles.wakeButton}
               >
                 <Ionicons name="leaf-outline" size={18} color="#FFFFFF" />
@@ -502,16 +498,13 @@ export function OnDeviceAiScreen() {
           editable={phase === 'ready'}
           multiline
           maxLength={2000}
-          onFocus={() => {
-            isNearBottomRef.current = true;
-            scheduleScrollToLatest(false);
-          }}
-          accessibilityLabel="숲 지킴이에게 보낼 메시지"
+          onFocus={handleComposerFocus}
+          accessibilityLabel={`${guardianProfile.name}에게 보낼 메시지`}
           style={styles.input}
         />
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={phase === 'generating' ? '지킴이 답변 중지' : '지킴이에게 보내기'}
+          accessibilityLabel={phase === 'generating' ? `${guardianProfile.name} 답변 중지` : `${guardianProfile.name}에게 보내기`}
           disabled={phase === 'stopping' || (phase !== 'generating' && !canSend)}
           onPress={() => phase === 'generating' ? void stopGeneration() : void sendMessage()}
           style={[
@@ -524,64 +517,23 @@ export function OnDeviceAiScreen() {
         </Pressable>
       </View>
 
-      <Modal visible={selectorOpen} animationType="slide" onRequestClose={() => setSelectorOpen(false)}>
-        <SafeAreaView style={styles.modalScreen}>
-          <View style={styles.modalHeader}>
-            <View style={styles.modalHeaderCopy}>
-              <Text style={styles.modalTitle}>지킴이의 기억</Text>
-              <Text style={styles.modalDetail}>{directoryName || 'AiModels 폴더를 연결해 주세요'}</Text>
-            </View>
-            <Pressable accessibilityRole="button" accessibilityLabel="지킴이 기억 설정 닫기" onPress={() => setSelectorOpen(false)} style={styles.modalClose}>
-              <Ionicons name="close" size={25} color={colors.ink} />
-            </Pressable>
-          </View>
-
-          <ScrollView contentContainerStyle={styles.modelList}>
-            <View style={styles.sectionHeading}>
-              <Text style={styles.sectionTitle}>대화 모델</Text>
-              <Text style={styles.sectionDetail}>지킴이가 생각하고 답할 GGUF 모델</Text>
-            </View>
-            {chatModels.length ? chatModels.map((item) => {
-              const active = item.uri === selectedUri;
-              return (
-                <Pressable
-                  key={item.uri}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${item.name} 대화 모델 선택`}
-                  disabled={busy}
-                  onPress={() => void selectModel(item)}
-                  style={[styles.modelRow, active && styles.modelRowActive, busy && styles.disabled]}
-                >
-                  <Ionicons name="hardware-chip-outline" size={21} color={active ? colors.tealDark : colors.inkMuted} />
-                  <View style={styles.modelRowCopy}>
-                    <Text style={styles.modelRowName} numberOfLines={2}>{item.name}</Text>
-                    <Text style={styles.modelRowMeta}>{formatBytes(item.sizeBytes)} · {item.prepared ? '기기 준비됨' : '선택 후 준비'}</Text>
-                  </View>
-                  {active ? <Ionicons name="checkmark-circle" size={22} color={colors.tealDark} /> : null}
-                </Pressable>
-              );
-            }) : <Text style={styles.emptyModelText}>대화용 GGUF 모델이 없어요.</Text>}
-
-            <View style={styles.localNote}>
-              <Ionicons name="phone-portrait-outline" size={18} color={colors.tealDark} />
-              <Text style={styles.localNoteText}>모델과 대화 내용은 APK에 포함되거나 서버로 업로드되지 않고, 선택한 기기 안에서만 사용돼요.</Text>
-            </View>
-          </ScrollView>
-
-          <View style={styles.modalActions}>
-            <Pressable accessibilityRole="button" accessibilityLabel="모델 목록 새로고침" disabled={busy} onPress={() => void refreshModels()} style={[styles.secondaryButton, busy && styles.disabled]}>
-              <Ionicons name="refresh" size={18} color={colors.tealDark} />
-              <Text style={styles.secondaryButtonText}>새로고침</Text>
-            </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="다른 AiModels 폴더 선택" disabled={busy} onPress={() => { setSelectorOpen(false); void pickDirectory(); }} style={[styles.folderButton, busy && styles.disabled]}>
-              <Ionicons name="folder-open-outline" size={18} color="#FFFFFF" />
-              <Text style={styles.folderButtonText}>폴더 바꾸기</Text>
-            </Pressable>
-          </View>
-        </SafeAreaView>
-      </Modal>
-
-    </KeyboardAvoidingView>
+      <GuardianSettingsModal
+        visible={settingsOpen}
+        profile={guardianProfile}
+        models={chatModels}
+        selectedUri={selectedUri}
+        directoryName={directoryName}
+        busy={busy}
+        onClose={() => setSettingsOpen(false)}
+        onSaveProfile={saveGuardianProfile}
+        onSelectModel={(model) => void selectModel(model)}
+        onRefreshModels={() => void refreshModels()}
+        onPickDirectory={() => {
+          setSettingsOpen(false);
+          void pickDirectory();
+        }}
+      />
+    </ChatKeyboardLayout>
   );
 }
 
@@ -630,27 +582,4 @@ const styles = StyleSheet.create({
   input: { flex: 1, minHeight: 43, maxHeight: 112, borderRadius: radius.lg, backgroundColor: colors.surfaceSoft, color: colors.ink, fontSize: type.body, paddingHorizontal: spacing.md, paddingVertical: 10 },
   sendButton: { width: 43, height: 43, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.tealDark },
   stopButton: { backgroundColor: colors.coral },
-  modalScreen: { flex: 1, backgroundColor: colors.canvas },
-  modalHeader: { padding: spacing.lg, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderColor: colors.line, backgroundColor: colors.surface },
-  modalHeaderCopy: { flex: 1 },
-  modalTitle: { color: colors.ink, fontSize: type.title, fontWeight: '900' },
-  modalDetail: { color: colors.inkMuted, fontSize: type.small, marginTop: 4 },
-  modalClose: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  modelList: { padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.sm },
-  sectionHeading: { marginBottom: spacing.xs },
-  sectionTitle: { color: colors.ink, fontSize: type.section, fontWeight: '900' },
-  sectionDetail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 17, marginTop: 4 },
-  modelRow: { minHeight: 64, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  modelRowActive: { borderColor: colors.teal, backgroundColor: colors.surfaceSoft },
-  modelRowCopy: { flex: 1, minWidth: 0 },
-  modelRowName: { color: colors.ink, fontSize: type.body, fontWeight: '800' },
-  modelRowMeta: { color: colors.inkMuted, fontSize: type.small, marginTop: 5 },
-  emptyModelText: { color: colors.inkMuted, fontSize: type.body, lineHeight: 20, paddingVertical: spacing.md },
-  localNote: { marginTop: spacing.lg, padding: spacing.md, borderRadius: radius.lg, backgroundColor: colors.surfaceWarm, flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
-  localNoteText: { flex: 1, color: colors.inkSoft, fontSize: type.small, lineHeight: 18 },
-  modalActions: { padding: spacing.lg, borderTopWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, flexDirection: 'row', gap: spacing.sm },
-  secondaryButton: { flex: 1, minHeight: 48, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.teal, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
-  secondaryButtonText: { color: colors.tealDark, fontSize: type.body, fontWeight: '900' },
-  folderButton: { flex: 1, minHeight: 48, borderRadius: radius.lg, backgroundColor: colors.tealDark, flexDirection: 'row', gap: spacing.sm, alignItems: 'center', justifyContent: 'center' },
-  folderButtonText: { color: '#FFFFFF', fontSize: type.body, fontWeight: '900' },
 });

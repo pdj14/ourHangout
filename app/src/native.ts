@@ -54,6 +54,24 @@ export type NativeAiModelStorageModule = {
   removeListeners: (count: number) => void;
 };
 
+export type NativeBrowserLink = {
+  title: string;
+  url: string;
+};
+
+export type NativeBrowserPage = {
+  title: string;
+  url: string;
+  text: string;
+  links: NativeBrowserLink[];
+};
+
+export type NativeBrowserToolModule = {
+  search: (query: string) => Promise<NativeBrowserPage>;
+  openUrl: (url: string) => Promise<NativeBrowserPage>;
+  cancel: () => Promise<boolean>;
+};
+
 export const NativeLocationCapture = NativeModules.LocationCaptureModule as
   | NativeLocationCaptureModule
   | undefined;
@@ -62,4 +80,8 @@ export const NativePushToken = NativeModules.PushTokenModule as NativePushTokenM
 
 export const NativeAiModelStorage = NativeModules.AiModelStorageModule as
   | NativeAiModelStorageModule
+  | undefined;
+
+export const NativeBrowserTool = NativeModules.BrowserToolModule as
+  | NativeBrowserToolModule
   | undefined;

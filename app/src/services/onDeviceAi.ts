@@ -20,6 +20,10 @@ export type OnDeviceModelLoadProgress = {
   progress: number;
 };
 
+export type OnDeviceCompletionOptions = {
+  systemPrompt?: string;
+};
+
 const GIB = 1024 * 1024 * 1024;
 const STOP_WORDS = [
   '</s>',
@@ -63,11 +67,14 @@ function trimConversation(messages: OnDeviceChatMessage[], characterBudget: numb
   for (let index = messages.length - 1; index >= 0 && selected.length < 10; index -= 1) {
     const message = messages[index];
     if (!message) continue;
-    const content = message.content.trim();
+    let content = message.content.trim();
     if (!content) continue;
+    if (selected.length === 0 && content.length > characterBudget) {
+      content = content.slice(0, characterBudget);
+    }
     const cost = content.length + 24;
     if (selected.length > 0 && used + cost > characterBudget) break;
-    selected.unshift(message);
+    selected.unshift({ ...message, content });
     used += cost;
   }
   return selected;
@@ -152,18 +159,23 @@ class OnDeviceAiEngine {
 
   async complete(
     messages: OnDeviceChatMessage[],
-    onPartial: (content: string) => void
+    onPartial: (content: string) => void,
+    options: OnDeviceCompletionOptions = {}
   ): Promise<string> {
     const context = this.context;
     if (!context) throw new Error('먼저 사용할 GGUF 모델을 선택해 주세요.');
     if (this.generating) throw new Error('이미 답변을 생성하고 있습니다.');
 
-    const characterBudget = this.contextSize <= 1024 ? 1200 : 2800;
+    const characterBudget = this.contextSize <= 1024 ? 900 : 2400;
     const recentMessages = trimConversation(messages, characterBudget);
+    const defaultSystemPrompt = '당신은 우리들의 아지트를 지키는 작은 숲 지킴이입니다. 다정하고 차분하며 실용적으로 답하세요. 확실하지 않은 내용은 꾸며내지 말고, 내부 사고 과정은 보여주지 마세요.';
+    const systemPrompt = String(options.systemPrompt || defaultSystemPrompt)
+      .trim()
+      .slice(0, this.contextSize <= 1024 ? 1200 : 2600);
     const promptMessages: RNLlamaOAICompatibleMessage[] = [
       {
         role: 'system',
-        content: '당신은 우리들의 아지트를 지키는 작은 숲 지킴이입니다. 다정하고 차분하며 실용적으로 답하세요. 사용자가 다른 언어를 요청하지 않으면 자연스러운 한국어를 사용하고, 모르는 내용은 솔직히 말하세요. 내부 사고 과정, 질문 번역, 분석, 영어 메모는 사용자에게 표시하지 말고 최종 답변만 출력하세요.',
+        content: systemPrompt,
       },
       ...recentMessages.map((message) => (
         { role: message.role, content: message.content } satisfies RNLlamaOAICompatibleMessage
