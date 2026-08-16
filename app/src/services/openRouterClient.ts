@@ -161,6 +161,35 @@ function parseStreamEvent(data: string, onChunk: (payload: Record<string, unknow
   }
 }
 
+const EXPLICIT_REASONING_PREFIX = /^\s*(?:here(?:'s| is)\s+(?:a\s+|the\s+)?(?:thinking|reasoning|analysis)\s+process|(?:analysis|reasoning)\s*:|we need to (?:answer|respond)|let me (?:think|reason))/i;
+const FINAL_ANSWER_MARKER = /(?:^|\n)\s*(?:final\s*(?:answer|response)|answer|output|최종\s*답변|답변)\s*:\s*/gim;
+
+function trimAnswerWrapper(value: string) {
+  return value
+    .trim()
+    .replace(/^["'“”‘’`]+/, '')
+    .replace(/["'“”‘’`]+$/, '')
+    .trim();
+}
+
+function sanitizeOpenRouterContent(value: string) {
+  let safe = value
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<analysis>[\s\S]*?<\/analysis>/gi, '');
+
+  // Never reveal an unfinished provider reasoning block while streaming.
+  if (/<(?:think|analysis)>/i.test(safe)) return '';
+
+  if (EXPLICIT_REASONING_PREFIX.test(safe)) {
+    const markers = [...safe.matchAll(FINAL_ANSWER_MARKER)];
+    const last = markers.at(-1);
+    if (!last || last.index === undefined) return '';
+    safe = safe.slice(last.index + last[0].length);
+  }
+
+  return trimAnswerWrapper(safe);
+}
+
 export async function streamOpenRouterConversation(
   messages: OnDeviceChatMessage[],
   systemPrompt: string,
@@ -184,6 +213,10 @@ export async function streamOpenRouterConversation(
         stream: true,
         temperature: 0.35,
         max_tokens: 800,
+        reasoning: {
+          effort: 'none',
+          exclude: true,
+        },
         messages: [
           { role: 'system', content: systemPrompt.slice(0, 5000) },
           ...messages.slice(-30).map((message) => ({ role: message.role, content: message.content.slice(0, 6000) })),
@@ -211,7 +244,8 @@ export async function streamOpenRouterConversation(
         : typeof first?.message?.content === 'string' ? first.message.content : '';
       if (!next) return;
       content += next;
-      callbacks.onPartial(content);
+      const safeContent = sanitizeOpenRouterContent(content);
+      if (safeContent) callbacks.onPartial(safeContent);
     };
 
     while (true) {
@@ -228,7 +262,11 @@ export async function streamOpenRouterConversation(
     buffer += decoder.decode();
     if (buffer.trim()) parseStreamEvent(buffer, consume);
     if (!content.trim()) throw new OpenRouterClientError('OpenRouter가 빈 답변을 반환했어요. 다시 시도해 주세요.', 'request');
-    return { content: content.trim(), modelId: resolvedModel || modelId };
+    const safeContent = sanitizeOpenRouterContent(content);
+    if (!safeContent) {
+      throw new OpenRouterClientError('OpenRouter가 사용자에게 보여줄 답변을 반환하지 못했어요. 다시 시도해 주세요.', 'request');
+    }
+    return { content: safeContent, modelId: resolvedModel || modelId };
   } catch (error) {
     if (controller.signal.aborted) {
       throw new OpenRouterClientError('답변 생성을 중지했어요.', 'cancelled');
