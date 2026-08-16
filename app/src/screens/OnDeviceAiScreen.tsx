@@ -16,6 +16,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ChatKeyboardLayout } from '../components/ChatKeyboardLayout';
+import { GuardianConversationsModal } from '../components/GuardianConversationsModal';
 import { GuardianSettingsModal } from '../components/GuardianSettingsModal';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { useChatKeyboard } from '../hooks/useChatKeyboard';
@@ -38,6 +39,13 @@ import {
 } from '../services/onDeviceAi';
 import { cancelGuardianWebTool } from '../services/guardianWebTools';
 import {
+  createGuardianConversationRoom,
+  readGuardianConversationStore,
+  updateGuardianConversationRoom,
+  writeGuardianConversationStore,
+  type GuardianConversationRoom,
+} from '../services/guardianConversationStore';
+import {
   connectOpenRouter,
 } from '../services/openRouterAuth';
 import {
@@ -58,7 +66,6 @@ import { colors, radius, spacing, type } from '../theme';
 const guardianMascot = require('../../assets/forest-guardian.png');
 const SELECTED_MODEL_KEY = 'on_device_ai:selected_model_v1';
 const LEGACY_SELECTED_PROJECTOR_KEY = 'on_device_ai:selected_projector_v1';
-const HISTORY_KEY = 'on_device_ai:history_v1';
 
 const STARTER_PROMPTS = [
   '오늘 있었던 일을 차분히 정리해 줘',
@@ -67,7 +74,6 @@ const STARTER_PROMPTS = [
 ];
 
 type Phase = 'idle' | 'scanning' | 'preparing' | 'loading' | 'ready' | 'generating' | 'stopping';
-type StoredHistory = { modelUri: string; messages: OnDeviceChatMessage[] };
 type RetryState = { baseMessages: OnDeviceChatMessage[]; content: string };
 
 function createMessage(
@@ -97,11 +103,14 @@ export function OnDeviceAiScreen() {
   const [directoryName, setDirectoryName] = useState('');
   const [selectedUri, setSelectedUri] = useState('');
   const [messages, setMessages] = useState<OnDeviceChatMessage[]>([]);
+  const [conversations, setConversations] = useState<GuardianConversationRoom[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState('');
   const [draft, setDraft] = useState('');
   const [phase, setPhase] = useState<Phase>('scanning');
   const [progress, setProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState('지킴이가 기억을 살펴보고 있어요.');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [conversationsOpen, setConversationsOpen] = useState(false);
   const [guardianProfile, setGuardianProfile] = useState<GuardianProfile>(DEFAULT_GUARDIAN_PROFILE);
   const [openRouterConnected, setOpenRouterConnected] = useState(false);
   const [openRouterBusy, setOpenRouterBusy] = useState(false);
@@ -111,6 +120,8 @@ export function OnDeviceAiScreen() {
   const [retryState, setRetryState] = useState<RetryState | null>(null);
   const mountedRef = useRef(true);
   const messagesRef = useRef<OnDeviceChatMessage[]>([]);
+  const conversationsRef = useRef<GuardianConversationRoom[]>([]);
+  const activeConversationIdRef = useRef('');
   const selectedUriRef = useRef('');
   const listRef = useRef<FlatList<OnDeviceChatMessage> | null>(null);
   const inputRef = useRef<TextInput | null>(null);
@@ -137,15 +148,33 @@ export function OnDeviceAiScreen() {
     && engineReady
     && !!draft.trim();
 
-  const commitMessages = useCallback((next: OnDeviceChatMessage[], modelUri?: string) => {
+  const commitConversationStore = useCallback((
+    nextConversations: GuardianConversationRoom[],
+    nextActiveConversationId: string
+  ) => {
+    conversationsRef.current = nextConversations;
+    activeConversationIdRef.current = nextActiveConversationId;
+    setConversations(nextConversations);
+    setActiveConversationId(nextActiveConversationId);
+    void writeGuardianConversationStore({
+      activeConversationId: nextActiveConversationId,
+      conversations: nextConversations,
+    }).catch(() => undefined);
+  }, []);
+
+  const commitMessages = useCallback((next: OnDeviceChatMessage[]) => {
     messagesRef.current = next;
     setMessages(next);
-    const historyModelUri = modelUri ?? selectedUriRef.current;
-    if (historyModelUri) {
-      const stored: StoredHistory = { modelUri: historyModelUri, messages: next.slice(-40) };
-      void AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(stored));
-    }
-  }, []);
+    const currentId = activeConversationIdRef.current;
+    const currentRoom = conversationsRef.current.find((room) => room.id === currentId)
+      ?? createGuardianConversationRoom();
+    const updatedRoom = updateGuardianConversationRoom(currentRoom, next);
+    const nextConversations = [
+      updatedRoom,
+      ...conversationsRef.current.filter((room) => room.id !== currentRoom.id),
+    ].slice(0, 30);
+    commitConversationStore(nextConversations, currentRoom.id);
+  }, [commitConversationStore]);
 
   const loadSelectedModel = useCallback(async (model: NativeAiModelFile) => {
     setStatusMessage(model.prepared ? '지킴이를 깨우고 있어요.' : '지킴이의 기억을 앱 저장소에 준비하고 있어요.');
@@ -227,9 +256,9 @@ export function OnDeviceAiScreen() {
 
     void (async () => {
       try {
-        const [storedUri, storedHistory, result, storedGuardianProfile] = await Promise.all([
+        const [storedUri, conversationStore, result, storedGuardianProfile] = await Promise.all([
           AsyncStorage.getItem(SELECTED_MODEL_KEY),
-          AsyncStorage.getItem(HISTORY_KEY),
+          readGuardianConversationStore(),
           getOnDeviceModels(),
           readGuardianProfile(),
         ]);
@@ -239,16 +268,16 @@ export function OnDeviceAiScreen() {
         setGuardianProfile(storedGuardianProfile);
         setActiveOpenRouterModelId(storedGuardianProfile.cloudModelId);
         setOpenRouterConnected(connected);
-        if (storedHistory) {
-          try {
-            const parsed = JSON.parse(storedHistory) as StoredHistory;
-            if (parsed.modelUri === storedUri && Array.isArray(parsed.messages)) {
-              commitMessages(parsed.messages.slice(-40), parsed.modelUri);
-            }
-          } catch {
-            await AsyncStorage.removeItem(HISTORY_KEY);
-          }
-        }
+        conversationsRef.current = conversationStore.conversations;
+        activeConversationIdRef.current = conversationStore.activeConversationId;
+        setConversations(conversationStore.conversations);
+        setActiveConversationId(conversationStore.activeConversationId);
+        const activeRoom = conversationStore.conversations.find(
+          (room) => room.id === conversationStore.activeConversationId
+        ) ?? conversationStore.conversations[0];
+        const storedMessages = activeRoom?.messages ?? [];
+        messagesRef.current = storedMessages;
+        setMessages(storedMessages);
         if (storedGuardianProfile.aiEngineType === 'openRouter') {
           await applyDirectory(result, storedUri || '', false);
           await onDeviceAiEngine.unload().catch(() => undefined);
@@ -295,7 +324,7 @@ export function OnDeviceAiScreen() {
       void cancelGuardianWebTool();
       void onDeviceAiEngine.unload();
     };
-  }, [applyDirectory, commitMessages]);
+  }, [applyDirectory]);
 
   const pickDirectory = useCallback(async () => {
     setPhase('scanning');
@@ -306,8 +335,7 @@ export function OnDeviceAiScreen() {
       if (!mountedRef.current) return;
       setSelectedUri('');
       selectedUriRef.current = '';
-      commitMessages([], '');
-      await AsyncStorage.multiRemove([SELECTED_MODEL_KEY, LEGACY_SELECTED_PROJECTOR_KEY, HISTORY_KEY]);
+      await AsyncStorage.multiRemove([SELECTED_MODEL_KEY, LEGACY_SELECTED_PROJECTOR_KEY]);
       await applyDirectory(result);
     } catch (error) {
       if (!mountedRef.current) return;
@@ -318,7 +346,7 @@ export function OnDeviceAiScreen() {
       setPhase('idle');
       setStatusMessage(isFolderPickerCancellation(error) ? '기존 설정을 유지했어요.' : normalizeOnDeviceAiError(error));
     }
-  }, [applyDirectory, commitMessages, loadSelectedModel, selectedModel]);
+  }, [applyDirectory, loadSelectedModel, selectedModel]);
 
   const refreshModels = useCallback(async () => {
     setPhase('scanning');
@@ -340,10 +368,9 @@ export function OnDeviceAiScreen() {
     await onDeviceAiEngine.unload();
     selectedUriRef.current = model.uri;
     setSelectedUri(model.uri);
-    commitMessages([], model.uri);
     await AsyncStorage.setItem(SELECTED_MODEL_KEY, model.uri);
     await loadSelectedModel(model);
-  }, [commitMessages, loadSelectedModel, selectedUri]);
+  }, [loadSelectedModel, selectedUri]);
 
   const refreshOpenRouterModels = useCallback(async () => {
     const provider = getGuardianCloudProvider(guardianProfile);
@@ -460,15 +487,70 @@ export function OnDeviceAiScreen() {
     }
   }, [guardianProfile]);
 
-  const clearConversation = useCallback(async () => {
-    if (phase !== 'ready') return;
+  const createNewConversation = useCallback(async () => {
+    if (phase === 'generating' || phase === 'stopping') return;
+    const currentRoom = conversationsRef.current.find(
+      (room) => room.id === activeConversationIdRef.current
+    );
+    if (currentRoom && currentRoom.messages.length === 0) {
+      setConversationsOpen(false);
+      setStatusMessage('이미 비어 있는 새 이야기에 있어요.');
+      return;
+    }
     if (guardianProfile.aiEngineType === 'onDevice') {
       await onDeviceAiEngine.clearConversation().catch(() => undefined);
     }
-    commitMessages([]);
+    const room = createGuardianConversationRoom();
+    commitConversationStore([room, ...conversationsRef.current].slice(0, 30), room.id);
+    messagesRef.current = [];
+    setMessages([]);
     setRetryState(null);
-    setStatusMessage('지킴이가 새 이야기로 기억을 비웠어요.');
-  }, [commitMessages, guardianProfile.aiEngineType, phase]);
+    setDraft('');
+    setConversationsOpen(false);
+    setStatusMessage('새 대화방을 만들었어요. 이전 이야기는 대화 목록에 남아 있어요.');
+  }, [commitConversationStore, guardianProfile.aiEngineType, phase]);
+
+  const selectConversation = useCallback(async (conversationId: string) => {
+    if (phase === 'generating' || phase === 'stopping') return;
+    const room = conversationsRef.current.find((item) => item.id === conversationId);
+    if (!room) return;
+    if (guardianProfile.aiEngineType === 'onDevice') {
+      await onDeviceAiEngine.clearConversation().catch(() => undefined);
+    }
+    activeConversationIdRef.current = room.id;
+    setActiveConversationId(room.id);
+    messagesRef.current = room.messages;
+    setMessages(room.messages);
+    setRetryState(null);
+    setDraft('');
+    setConversationsOpen(false);
+    void writeGuardianConversationStore({
+      activeConversationId: room.id,
+      conversations: conversationsRef.current,
+    }).catch(() => undefined);
+    setStatusMessage(`“${room.title}” 이야기를 이어서 나눌 수 있어요.`);
+    scheduleScrollToLatest(false);
+  }, [guardianProfile.aiEngineType, phase, scheduleScrollToLatest]);
+
+  const deleteConversation = useCallback((conversationId: string) => {
+    if (phase === 'generating' || phase === 'stopping') return;
+    let remaining = conversationsRef.current.filter((room) => room.id !== conversationId);
+    if (!remaining.length) remaining = [createGuardianConversationRoom()];
+    const deletingActive = activeConversationIdRef.current === conversationId;
+    const nextActiveId = deletingActive ? remaining[0].id : activeConversationIdRef.current;
+    commitConversationStore(remaining, nextActiveId);
+    if (deletingActive) {
+      const nextRoom = remaining.find((room) => room.id === nextActiveId) ?? remaining[0];
+      messagesRef.current = nextRoom.messages;
+      setMessages(nextRoom.messages);
+      setRetryState(null);
+      setDraft('');
+      if (guardianProfile.aiEngineType === 'onDevice') {
+        void onDeviceAiEngine.clearConversation().catch(() => undefined);
+      }
+    }
+    setStatusMessage('선택한 대화를 이 기기에서 삭제했어요.');
+  }, [commitConversationStore, guardianProfile.aiEngineType, phase]);
 
   const stopGeneration = useCallback(async () => {
     if (phase !== 'generating') return;
@@ -490,7 +572,6 @@ export function OnDeviceAiScreen() {
     setGuardianProfile(saved);
     setActiveOpenRouterModelId(saved.cloudModelId);
     if (previousEngine !== saved.aiEngineType) {
-      commitMessages([]);
       setRetryState(null);
       if (saved.aiEngineType === 'openRouter') {
         await onDeviceAiEngine.unload().catch(() => undefined);
@@ -520,7 +601,7 @@ export function OnDeviceAiScreen() {
       return;
     }
     setStatusMessage(`${saved.name}의 설정을 저장했어요.`);
-  }, [commitMessages, guardianProfile, loadSelectedModel, openRouterConnected, selectedModel]);
+  }, [guardianProfile, loadSelectedModel, openRouterConnected, selectedModel]);
 
   const runCompletion = useCallback(async (
     baseMessages: OnDeviceChatMessage[],
@@ -604,6 +685,9 @@ export function OnDeviceAiScreen() {
     requestAnimationFrame(() => inputRef.current?.focus());
   }, []);
 
+  const activeConversation = conversations.find((room) => room.id === activeConversationId)
+    ?? conversations[0]
+    ?? null;
   const displayedOpenRouterModelId = phase === 'generating'
     ? activeOpenRouterModelId
     : guardianProfile.cloudModelId;
@@ -619,9 +703,9 @@ export function OnDeviceAiScreen() {
         : `${guardianProfile.name}를 준비하고 있어요`
       : `${guardianProfile.name}의 기억을 연결해 주세요`;
   const modelStateDetail = guardianProfile.aiEngineType === 'openRouter'
-    ? `${displayedOpenRouterModelName} · ${cloudProviderName}`
+    ? `${activeConversation?.title || '새 이야기'} · ${displayedOpenRouterModelName} · ${cloudProviderName}`
     : selectedModel
-      ? `${selectedModel.name} · 기기 내 대화`
+      ? `${activeConversation?.title || '새 이야기'} · ${selectedModel.name} · 기기 내 대화`
       : directoryName || 'AiModels 폴더가 필요해요';
 
   return (
@@ -634,15 +718,31 @@ export function OnDeviceAiScreen() {
         title={guardianProfile.name}
         detail={guardianProfile.synopsis}
         action={
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="지킴이 설정"
-            disabled={busy}
-            onPress={() => setSettingsOpen(true)}
-            style={[styles.headerButton, busy && styles.disabled]}
-          >
-            <Ionicons name="options-outline" size={20} color={colors.tealDark} />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`지킴이 대화 목록, ${conversations.length}개`}
+              disabled={busy}
+              onPress={() => setConversationsOpen(true)}
+              style={[styles.headerButton, busy && styles.disabled]}
+            >
+              <Ionicons name="chatbubbles-outline" size={20} color={colors.tealDark} />
+              {conversations.length > 1 ? (
+                <View style={styles.conversationCount}>
+                  <Text style={styles.conversationCountText}>{Math.min(conversations.length, 99)}</Text>
+                </View>
+              ) : null}
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="지킴이 설정"
+              disabled={busy}
+              onPress={() => setSettingsOpen(true)}
+              style={[styles.headerButton, busy && styles.disabled]}
+            >
+              <Ionicons name="options-outline" size={20} color={colors.tealDark} />
+            </Pressable>
+          </View>
         }
       />
 
@@ -671,7 +771,7 @@ export function OnDeviceAiScreen() {
         )}
         <Text style={styles.statusText} numberOfLines={2}>{statusMessage}</Text>
         {phase === 'ready' && messages.length && !retryState ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="지킴이 대화 초기화" onPress={() => void clearConversation()}>
+          <Pressable accessibilityRole="button" accessibilityLabel="새 지킴이 대화 만들기" onPress={() => void createNewConversation()}>
             <Text style={styles.clearText}>새 이야기</Text>
           </Pressable>
         ) : null}
@@ -825,13 +925,27 @@ export function OnDeviceAiScreen() {
           void pickDirectory();
         }}
       />
+      <GuardianConversationsModal
+        visible={conversationsOpen}
+        guardianName={guardianProfile.name}
+        conversations={conversations}
+        activeConversationId={activeConversationId}
+        busy={busy}
+        onClose={() => setConversationsOpen(false)}
+        onCreate={() => void createNewConversation()}
+        onSelect={(conversationId) => void selectConversation(conversationId)}
+        onDelete={deleteConversation}
+      />
     </ChatKeyboardLayout>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.canvas },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   headerButton: { width: 40, height: 40, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceSoft },
+  conversationCount: { position: 'absolute', right: -3, top: -3, minWidth: 18, height: 18, paddingHorizontal: 4, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.coral, borderWidth: 2, borderColor: colors.canvas },
+  conversationCountText: { color: '#FFFFFF', fontSize: 9, fontWeight: '900' },
   disabled: { opacity: 0.4 },
   memoryStrip: { marginHorizontal: spacing.lg, minHeight: 54, paddingHorizontal: spacing.md, paddingVertical: 9, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   stateDot: { width: 9, height: 9, borderRadius: radius.pill, backgroundColor: colors.inkMuted },
