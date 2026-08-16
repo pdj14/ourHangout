@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -39,6 +40,7 @@ type GuardianSettingsModalProps = {
   openRouterModels: OpenRouterModel[];
   onClose: () => void;
   onConnectOpenRouter: () => void;
+  onImportOpenRouterApiKey: (apiKey: string) => Promise<boolean>;
   onDisconnectOpenRouter: () => void;
   onRefreshOpenRouterModels: () => void;
   onSaveProfile: (profile: GuardianProfile) => Promise<void>;
@@ -67,6 +69,7 @@ export function GuardianSettingsModal({
   openRouterModels,
   onClose,
   onConnectOpenRouter,
+  onImportOpenRouterApiKey,
   onDisconnectOpenRouter,
   onRefreshOpenRouterModels,
   onSaveProfile,
@@ -79,12 +82,18 @@ export function GuardianSettingsModal({
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [manualKeyOpen, setManualKeyOpen] = useState(false);
+  const [manualApiKey, setManualApiKey] = useState('');
+  const [manualKeyVisible, setManualKeyVisible] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
     setDraft(profile);
     setEditingRule(null);
     setModelPickerOpen(false);
+    setManualKeyOpen(false);
+    setManualApiKey('');
+    setManualKeyVisible(false);
   }, [profile, visible]);
 
   useEffect(() => {
@@ -178,6 +187,15 @@ export function GuardianSettingsModal({
     );
   };
 
+  const submitManualApiKey = async () => {
+    if (controlsDisabled || !manualApiKey.trim()) return;
+    const connected = await onImportOpenRouterApiKey(manualApiKey);
+    if (!connected) return;
+    setManualApiKey('');
+    setManualKeyVisible(false);
+    setManualKeyOpen(false);
+  };
+
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <SafeAreaView style={styles.screen}>
@@ -259,6 +277,80 @@ export function GuardianSettingsModal({
                     {openRouterConnected ? '연결 해제' : 'OpenRouter 계정 연결'}
                   </Text>
                 </Pressable>
+
+                {!openRouterConnected ? (
+                  <View style={styles.manualKeyBlock}>
+                    <View style={styles.orRow}>
+                      <View style={styles.orLine} />
+                      <Text style={styles.orText}>또는</Text>
+                      <View style={styles.orLine} />
+                    </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="OpenRouter API 키 직접 입력"
+                      accessibilityState={{ expanded: manualKeyOpen }}
+                      disabled={controlsDisabled}
+                      onPress={() => setManualKeyOpen((current) => !current)}
+                      style={[styles.manualKeyToggle, controlsDisabled && styles.disabled]}
+                    >
+                      <Ionicons name="key-outline" size={18} color={colors.tealDark} />
+                      <Text style={styles.manualKeyToggleText}>API 키 직접 입력</Text>
+                      <Ionicons name={manualKeyOpen ? 'chevron-up' : 'chevron-down'} size={17} color={colors.inkMuted} />
+                    </Pressable>
+                    {manualKeyOpen ? (
+                      <View style={styles.manualKeyEditor}>
+                        <Text style={styles.manualKeyHelp}>새 키의 전체 문자열은 생성 직후 한 번만 표시됩니다. 기존 마스킹 키는 복구할 수 없어 새로 만들어야 합니다.</Text>
+                        <Pressable
+                          accessibilityRole="link"
+                          accessibilityLabel="OpenRouter API 키 만들기 페이지 열기"
+                          onPress={() => void Linking.openURL('https://openrouter.ai/keys').catch(() => undefined)}
+                          style={styles.keyPageLink}
+                        >
+                          <Ionicons name="open-outline" size={16} color={colors.tealDark} />
+                          <Text style={styles.keyPageLinkText}>OpenRouter에서 새 키 만들기</Text>
+                        </Pressable>
+                        <Text style={styles.fieldLabel}>전체 API 키</Text>
+                        <View style={styles.apiKeyInputRow}>
+                          <TextInput
+                            value={manualApiKey}
+                            onChangeText={setManualApiKey}
+                            placeholder="sk-or-v1-…"
+                            placeholderTextColor={colors.inkMuted}
+                            accessibilityLabel="OpenRouter 전체 API 키"
+                            autoCapitalize="none"
+                            autoComplete="off"
+                            autoCorrect={false}
+                            editable={!controlsDisabled}
+                            onSubmitEditing={() => void submitManualApiKey()}
+                            returnKeyType="done"
+                            secureTextEntry={!manualKeyVisible}
+                            style={styles.apiKeyInput}
+                          />
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={manualKeyVisible ? 'API 키 숨기기' : 'API 키 표시'}
+                            disabled={controlsDisabled}
+                            onPress={() => setManualKeyVisible((current) => !current)}
+                            style={styles.apiKeyVisibilityButton}
+                          >
+                            <Ionicons name={manualKeyVisible ? 'eye-off-outline' : 'eye-outline'} size={19} color={colors.inkMuted} />
+                          </Pressable>
+                        </View>
+                        <Text style={styles.apiKeySecurityText}>키는 유효성 확인 후 이 기기의 보안 저장소에만 저장되며 다시 표시되지 않습니다.</Text>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="OpenRouter API 키 확인 후 저장"
+                          disabled={controlsDisabled || manualApiKey.trim().length < 24}
+                          onPress={() => void submitManualApiKey()}
+                          style={[styles.manualKeySaveButton, (controlsDisabled || manualApiKey.trim().length < 24) && styles.disabled]}
+                        >
+                          {openRouterBusy ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="shield-checkmark-outline" size={18} color="#FFFFFF" />}
+                          <Text style={styles.manualKeySaveText}>키 확인 후 안전하게 저장</Text>
+                        </Pressable>
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
 
                 {openRouterConnected ? (
                   <View style={styles.cloudModelBlock}>
@@ -543,6 +635,22 @@ const styles = StyleSheet.create({
   connectButtonText: { color: '#FFFFFF', fontSize: type.body, fontWeight: '900' },
   disconnectButton: { minHeight: 46, paddingHorizontal: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: '#E7C2BB', backgroundColor: '#FFF8F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
   disconnectButtonText: { color: colors.coral, fontSize: type.body, fontWeight: '900' },
+  manualKeyBlock: { gap: spacing.sm },
+  orRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  orLine: { flex: 1, height: 1, backgroundColor: colors.line },
+  orText: { color: colors.inkMuted, fontSize: type.tiny, fontWeight: '800' },
+  manualKeyToggle: { minHeight: 44, paddingHorizontal: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: colors.teal, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  manualKeyToggleText: { flex: 1, color: colors.tealDark, fontSize: type.small, fontWeight: '900' },
+  manualKeyEditor: { padding: spacing.md, borderRadius: radius.md, backgroundColor: colors.canvas, gap: spacing.sm },
+  manualKeyHelp: { color: colors.inkSoft, fontSize: type.small, lineHeight: 18 },
+  keyPageLink: { alignSelf: 'flex-start', minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  keyPageLinkText: { color: colors.tealDark, fontSize: type.small, fontWeight: '900', textDecorationLine: 'underline' },
+  apiKeyInputRow: { minHeight: 48, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center' },
+  apiKeyInput: { flex: 1, minHeight: 46, paddingLeft: spacing.md, color: colors.ink, fontSize: type.body },
+  apiKeyVisibilityButton: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
+  apiKeySecurityText: { color: colors.inkMuted, fontSize: type.tiny, lineHeight: 16 },
+  manualKeySaveButton: { minHeight: 46, paddingHorizontal: spacing.md, borderRadius: radius.md, backgroundColor: colors.tealDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  manualKeySaveText: { color: '#FFFFFF', fontSize: type.small, fontWeight: '900' },
   cloudModelBlock: { gap: spacing.sm },
   modelLabelRow: { minHeight: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   inlineRefreshButton: { minHeight: 36, paddingHorizontal: spacing.sm, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },

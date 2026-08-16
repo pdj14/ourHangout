@@ -1,9 +1,13 @@
 import { fetch } from 'expo/fetch';
 
 import type { OnDeviceChatMessage } from './onDeviceAi';
-import { getOpenRouterApiKey } from './openRouterAuth';
+import {
+  getOpenRouterApiKey,
+  OpenRouterAuthError,
+  validateOpenRouterConnection,
+} from './openRouterAuth';
+import { buildOpenRouterHeaders, OPENROUTER_API_URL } from './openRouterConfig';
 
-const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1';
 const MODEL_LIST_TIMEOUT_MS = 20_000;
 export const DEFAULT_OPENROUTER_MODEL_ID = 'openrouter/free';
 
@@ -107,13 +111,24 @@ async function responseError(response: Response) {
 
 export async function fetchOpenRouterModels(): Promise<OpenRouterModel[]> {
   const key = await requireApiKey();
+  try {
+    await validateOpenRouterConnection();
+  } catch (error) {
+    if (error instanceof OpenRouterAuthError && error.code === 'invalid_key') {
+      throw new OpenRouterClientError(error.message, 'unauthorized');
+    }
+    throw new OpenRouterClientError(
+      error instanceof Error ? error.message : 'OpenRouter 키를 확인하지 못했어요.',
+      'network'
+    );
+  }
   let response: Response;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MODEL_LIST_TIMEOUT_MS);
   try {
     response = await fetch(`${OPENROUTER_API_URL}/models?output_modalities=text&sort=most-popular`, {
       signal: controller.signal,
-      headers: { Authorization: `Bearer ${key}` },
+      headers: buildOpenRouterHeaders(key),
     });
   } catch {
     throw new OpenRouterClientError('모델 목록을 불러오지 못했어요. 네트워크를 확인해 주세요.', 'network');
@@ -133,7 +148,7 @@ export async function fetchOpenRouterModels(): Promise<OpenRouterModel[]> {
 
 function parseStreamEvent(data: string, onChunk: (payload: Record<string, unknown>) => void) {
   const body = data
-    .split('\n')
+    .split(/\r?\n/)
     .filter((line) => line.startsWith('data:'))
     .map((line) => line.slice(5).trimStart())
     .join('\n')
@@ -162,9 +177,7 @@ export async function streamOpenRouterConversation(
       method: 'POST',
       signal: controller.signal,
       headers: {
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json',
-        'X-OpenRouter-Title': 'OurHangout Guardian',
+        ...buildOpenRouterHeaders(key, true),
       },
       body: JSON.stringify({
         model: modelId || DEFAULT_OPENROUTER_MODEL_ID,
@@ -204,12 +217,12 @@ export async function streamOpenRouterConversation(
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
-      let boundary = buffer.indexOf('\n\n');
-      while (boundary >= 0) {
-        parseStreamEvent(buffer.slice(0, boundary), consume);
-        buffer = buffer.slice(boundary + 2);
-        boundary = buffer.indexOf('\n\n');
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.match(/\r?\n\r?\n/);
+      while (boundary?.index !== undefined) {
+        parseStreamEvent(buffer.slice(0, boundary.index), consume);
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        boundary = buffer.match(/\r?\n\r?\n/);
       }
     }
     buffer += decoder.decode();

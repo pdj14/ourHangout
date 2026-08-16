@@ -41,6 +41,7 @@ import {
   connectOpenRouter,
   disconnectOpenRouter,
   hasOpenRouterConnection,
+  importOpenRouterApiKey,
 } from '../services/openRouterAuth';
 import {
   cancelOpenRouterCompletion,
@@ -260,7 +261,17 @@ export function OnDeviceAiScreen() {
                 setOpenRouterMessage(`${cloudModels.length}개 모델을 불러왔어요.`);
               }
             } catch (error) {
-              if (mountedRef.current) setOpenRouterMessage(normalizeGuardianError(error));
+              if (mountedRef.current) {
+                const disconnected = error instanceof OpenRouterClientError
+                  && (error.code === 'unauthorized' || error.code === 'not_connected');
+                if (disconnected) {
+                  void disconnectOpenRouter().catch(() => undefined);
+                  setOpenRouterConnected(false);
+                  setPhase('idle');
+                  setStatusMessage('OpenRouter 연결을 다시 확인해 주세요.');
+                }
+                setOpenRouterMessage(normalizeGuardianError(error));
+              }
             }
           }
         } else {
@@ -342,6 +353,7 @@ export function OnDeviceAiScreen() {
     } catch (error) {
       if (!mountedRef.current) return;
       if (error instanceof OpenRouterClientError && (error.code === 'unauthorized' || error.code === 'not_connected')) {
+        void disconnectOpenRouter().catch(() => undefined);
         setOpenRouterConnected(false);
         if (guardianProfile.aiEngineType === 'openRouter') setPhase('idle');
       }
@@ -352,6 +364,7 @@ export function OnDeviceAiScreen() {
   }, [guardianProfile.aiEngineType]);
 
   const connectOpenRouterAccount = useCallback(async () => {
+    let keyStored = false;
     setOpenRouterBusy(true);
     setOpenRouterMessage('OpenRouter 승인 페이지를 열고 있어요.');
     try {
@@ -361,6 +374,7 @@ export function OnDeviceAiScreen() {
         setOpenRouterMessage('계정 연결을 취소했어요. 기존 설정은 그대로 유지됩니다.');
         return;
       }
+      keyStored = true;
       setOpenRouterConnected(true);
       setOpenRouterMessage('계정 연결이 완료됐어요. 모델 목록을 확인하고 있어요.');
       if (guardianProfile.aiEngineType === 'openRouter') {
@@ -373,9 +387,47 @@ export function OnDeviceAiScreen() {
       setOpenRouterMessage(`연결 완료 · ${cloudModels.length}개 모델을 불러왔어요.`);
     } catch (error) {
       if (!mountedRef.current) return;
-      setOpenRouterConnected(false);
-      if (guardianProfile.aiEngineType === 'openRouter') setPhase('idle');
-      setOpenRouterMessage(normalizeGuardianError(error));
+      const unauthorized = error instanceof OpenRouterClientError
+        && (error.code === 'unauthorized' || error.code === 'not_connected');
+      const connected = keyStored && !unauthorized;
+      setOpenRouterConnected(connected);
+      if (guardianProfile.aiEngineType === 'openRouter') setPhase(connected ? 'ready' : 'idle');
+      const message = normalizeGuardianError(error);
+      setOpenRouterMessage(connected ? `계정 연결은 완료됐지만 모델 목록을 불러오지 못했어요. ${message}` : message);
+    } finally {
+      if (mountedRef.current) setOpenRouterBusy(false);
+    }
+  }, [guardianProfile.aiEngineType, guardianProfile.name]);
+
+  const importOpenRouterKey = useCallback(async (apiKey: string) => {
+    let keyStored = false;
+    setOpenRouterBusy(true);
+    setOpenRouterMessage('API 키 유효성을 안전하게 확인하고 있어요.');
+    try {
+      const metadata = await importOpenRouterApiKey(apiKey);
+      if (!mountedRef.current) return false;
+      keyStored = true;
+      setOpenRouterConnected(true);
+      setOpenRouterMessage(metadata.label ? `${metadata.label} 키로 연결했어요. 모델 목록을 확인하고 있어요.` : 'API 키로 연결했어요. 모델 목록을 확인하고 있어요.');
+      const cloudModels = await fetchOpenRouterModels();
+      if (!mountedRef.current) return false;
+      setOpenRouterModels(cloudModels);
+      setOpenRouterMessage(`연결 완료 · ${cloudModels.length}개 모델을 불러왔어요.`);
+      if (guardianProfile.aiEngineType === 'openRouter') {
+        setPhase('ready');
+        setStatusMessage(`${guardianProfile.name}가 OpenRouter에서 기다리고 있어요.`);
+      }
+      return true;
+    } catch (error) {
+      if (!mountedRef.current) return false;
+      const unauthorized = error instanceof OpenRouterClientError
+        && (error.code === 'unauthorized' || error.code === 'not_connected');
+      const connected = keyStored && !unauthorized;
+      setOpenRouterConnected(connected);
+      if (guardianProfile.aiEngineType === 'openRouter') setPhase(connected ? 'ready' : 'idle');
+      const message = normalizeGuardianError(error);
+      setOpenRouterMessage(connected ? `API 키는 안전하게 저장했지만 모델 목록을 불러오지 못했어요. ${message}` : message);
+      return connected;
     } finally {
       if (mountedRef.current) setOpenRouterBusy(false);
     }
@@ -498,7 +550,10 @@ export function OnDeviceAiScreen() {
       commitMessages(next);
       const disconnected = error instanceof OpenRouterClientError
         && (error.code === 'unauthorized' || error.code === 'not_connected');
-      if (disconnected) setOpenRouterConnected(false);
+      if (disconnected) {
+        void disconnectOpenRouter().catch(() => undefined);
+        setOpenRouterConnected(false);
+      }
       setPhase(disconnected ? 'idle' : 'ready');
       setStatusMessage(stopped ? '답변 생성을 멈췄어요.' : message);
       setRetryState(stopped || disconnected ? null : { baseMessages, content: failedContent });
@@ -734,6 +789,7 @@ export function OnDeviceAiScreen() {
         openRouterModels={openRouterModels}
         onClose={() => setSettingsOpen(false)}
         onConnectOpenRouter={() => void connectOpenRouterAccount()}
+        onImportOpenRouterApiKey={importOpenRouterKey}
         onDisconnectOpenRouter={() => void disconnectOpenRouterAccount()}
         onRefreshOpenRouterModels={() => void refreshOpenRouterModels()}
         onSaveProfile={saveGuardianProfile}
