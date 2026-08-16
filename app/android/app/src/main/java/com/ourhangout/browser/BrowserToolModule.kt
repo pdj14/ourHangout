@@ -188,9 +188,24 @@ class BrowserToolModule(
     val script = """
       (function() {
         const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const host = location.hostname.toLowerCase();
+        const isBingSearch = (host === 'bing.com' || host.endsWith('.bing.com'))
+          && location.pathname.toLowerCase() === '/search';
+        const searchResults = isBingSearch
+          ? Array.from(document.querySelectorAll('#b_results > li.b_algo, #b_results > li.b_ans'))
+          : [];
         const root = document.querySelector('main, article, [role="main"]') || document.body;
-        const text = clean(root && root.innerText).slice(0, $MAX_TEXT_CHARS);
-        const links = Array.from(document.querySelectorAll('a[href]'))
+        const text = (searchResults.length
+          ? searchResults.map((result) => clean(result.innerText)).filter(Boolean).join('\\n\\n')
+          : clean(root && root.innerText)).slice(0, $MAX_TEXT_CHARS);
+        const primaryLinks = isBingSearch
+          ? Array.from(document.querySelectorAll('#b_results li.b_algo h2 a[href]'))
+          : [];
+        const linkRoot = searchResults.length ? document.querySelector('#b_results') : document;
+        const linkElements = primaryLinks.length
+          ? primaryLinks
+          : Array.from((linkRoot || document).querySelectorAll('a[href]'));
+        const links = linkElements
           .map((link) => ({ title: clean(link.innerText || link.getAttribute('aria-label')), url: link.href }))
           .filter((link) => link.title && /^https?:\\/\\//i.test(link.url))
           .filter((link, index, all) => all.findIndex((item) => item.url === link.url) === index)
