@@ -1,5 +1,6 @@
 import { fetch } from 'expo/fetch';
 
+import { isZeroPricedModel, normalizeModelModalities } from '../modelCapabilities';
 import { getOpenAiProviderWireAdapter } from './adapters';
 import { getProviderApiKey } from './credentials';
 import { getOpenAiProviderDescriptor, normalizeProviderSettings } from './registry';
@@ -20,8 +21,9 @@ type ModelPayload = {
   id?: unknown;
   name?: unknown;
   context_length?: unknown;
-  pricing?: { prompt?: unknown; completion?: unknown };
-  architecture?: { output_modalities?: unknown };
+  pricing?: { prompt?: unknown; completion?: unknown; request?: unknown; image?: unknown };
+  architecture?: { input_modalities?: unknown; output_modalities?: unknown };
+  supported_parameters?: unknown;
 };
 
 type StreamedToolCall = {
@@ -51,15 +53,25 @@ function modelFromPayload(
 ): OpenAiCompatibleModel | null {
   const id = String(value.id || '').trim();
   if (!id) return null;
-  const modalities = value.architecture?.output_modalities;
-  if (Array.isArray(modalities) && !modalities.includes('text')) return null;
+  const inputModalities = normalizeModelModalities(value.architecture?.input_modalities);
+  const outputModalities = normalizeModelModalities(value.architecture?.output_modalities);
+  if (outputModalities.length && !outputModalities.includes('text')) return null;
+  const supportedParameters = Array.isArray(value.supported_parameters)
+    ? value.supported_parameters.map((entry) => String(entry || '').trim().toLowerCase())
+    : [];
   return {
     id,
     name: String(value.name || id).trim(),
     contextLength: safeNumber(value.context_length),
     promptPrice: safeNumber(value.pricing?.prompt),
     completionPrice: safeNumber(value.pricing?.completion),
-    free: isFreeModel(settings, id),
+    requestPrice: safeNumber(value.pricing?.request),
+    imagePrice: safeNumber(value.pricing?.image),
+    free: isFreeModel(settings, id)
+      || (settings.providerId === 'openRouter' && isZeroPricedModel(value.pricing)),
+    inputModalities: inputModalities.length ? inputModalities : ['text'],
+    outputModalities: outputModalities.length ? outputModalities : ['text'],
+    supportsTools: supportedParameters.includes('tools'),
   };
 }
 
@@ -164,7 +176,12 @@ export async function fetchOpenAiCompatibleModels(
     contextLength: 200_000,
     promptPrice: 0,
     completionPrice: 0,
+    requestPrice: 0,
+    imagePrice: 0,
     free: true,
+    inputModalities: ['text'],
+    outputModalities: ['text'],
+    supportsTools: true,
   };
   const withoutRouter = models.filter((model) => model.id !== freeRouter.id);
   return [
@@ -250,6 +267,32 @@ function requestBodyExtensions(
   });
 }
 
+function requestMessage(message: OpenAiConversationMessage) {
+  if (message.role === 'tool') {
+    return {
+      role: 'tool' as const,
+      tool_call_id: message.tool_call_id,
+      content: message.content.slice(0, 5000),
+    };
+  }
+  if (message.role === 'assistant') {
+    return {
+      role: 'assistant' as const,
+      content: message.content?.slice(0, 6000) || null,
+      ...(message.tool_calls?.length ? { tool_calls: message.tool_calls } : {}),
+    };
+  }
+  if (typeof message.content === 'string') {
+    return { role: 'user' as const, content: message.content.slice(0, 6000) };
+  }
+  return {
+    role: 'user' as const,
+    content: message.content.slice(0, 12).map((part) => (
+      part.type === 'text' ? { ...part, text: part.text.slice(0, 6000) } : part
+    )),
+  };
+}
+
 export async function streamOpenAiCompatibleConversation(
   rawSettings: OpenAiCompatibleProviderSettings,
   messages: OpenAiConversationMessage[],
@@ -281,19 +324,7 @@ export async function streamOpenAiCompatibleConversation(
         max_tokens: 800,
         messages: [
           { role: 'system', content: systemPrompt.slice(0, 5000) },
-          ...messages.slice(-40).map((message) => {
-            if (message.role === 'tool') {
-              return { role: 'tool', tool_call_id: message.tool_call_id, content: message.content.slice(0, 5000) };
-            }
-            if (message.role === 'assistant' && message.tool_calls?.length) {
-              return {
-                role: 'assistant',
-                content: message.content?.slice(0, 6000) || null,
-                tool_calls: message.tool_calls,
-              };
-            }
-            return { role: message.role, content: message.content?.slice(0, 6000) || '' };
-          }),
+          ...messages.slice(-40).map(requestMessage),
         ],
         ...(hasTools ? { tools: options.tools } : {}),
         ...requestBodyExtensions(settings, hasTools, requestedModelId),

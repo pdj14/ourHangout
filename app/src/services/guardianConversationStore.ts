@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type { OnDeviceChatMessage } from './onDeviceAi';
+import type { ChatAttachment, ChatMediaKind } from '../types';
 
 const STORAGE_KEY = 'guardian:conversation_rooms_v1';
 export const LEGACY_GUARDIAN_HISTORY_KEY = 'on_device_ai:history_v1';
@@ -33,11 +34,27 @@ function normalizeMessage(value: unknown): OnDeviceChatMessage | null {
   const record = value as Partial<OnDeviceChatMessage>;
   if (record.role !== 'user' && record.role !== 'assistant') return null;
   if (typeof record.content !== 'string') return null;
+  let attachment: ChatAttachment | undefined;
+  if (record.attachment && typeof record.attachment === 'object') {
+    const rawAttachment = record.attachment as Partial<ChatAttachment>;
+    const kind = rawAttachment.kind as ChatMediaKind;
+    if ((kind === 'image' || kind === 'video' || kind === 'audio') && typeof rawAttachment.uri === 'string' && rawAttachment.uri) {
+      attachment = {
+        id: typeof rawAttachment.id === 'string' && rawAttachment.id ? rawAttachment.id : createId(),
+        kind,
+        uri: rawAttachment.uri,
+        mimeType: typeof rawAttachment.mimeType === 'string' ? rawAttachment.mimeType : null,
+        fileName: typeof rawAttachment.fileName === 'string' ? rawAttachment.fileName : null,
+        fileSize: Number.isFinite(rawAttachment.fileSize) ? Number(rawAttachment.fileSize) : null,
+      };
+    }
+  }
   return {
     id: typeof record.id === 'string' && record.id ? record.id : createId(),
     role: record.role,
     content: record.content,
     createdAt: Number.isFinite(record.createdAt) ? Number(record.createdAt) : Date.now(),
+    ...(attachment ? { attachment } : {}),
   };
 }
 

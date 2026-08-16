@@ -29,6 +29,7 @@ import {
   OPEN_AI_COMPATIBLE_PROVIDERS,
   type OpenAiCompatibleModel,
 } from '../services/aiProviders';
+import { modalityLabel } from '../services/modelCapabilities';
 import { colors, radius, spacing, type } from '../theme';
 
 type GuardianSettingsModalProps = {
@@ -472,6 +473,11 @@ export function GuardianSettingsModal({
                       <View style={styles.modelCopy}>
                         <Text style={styles.modelName} numberOfLines={2}>{selectedOpenRouterModel?.name || draft.cloudModelId || '모델을 선택해 주세요'}</Text>
                         <Text style={styles.modelMeta}>{selectedOpenRouterModel?.free ? '무료 또는 로컬 모델' : `${cloudProvider.name} 정책에 따라 과금될 수 있음`}</Text>
+                        {selectedOpenRouterModel ? (
+                          <Text style={styles.modalitySummary} numberOfLines={2}>
+                            입력 {selectedOpenRouterModel.inputModalities.map(modalityLabel).join(' · ')} / 출력 {selectedOpenRouterModel.outputModalities.map(modalityLabel).join(' · ')}
+                          </Text>
+                        ) : null}
                       </View>
                       {selectedOpenRouterModel?.free ? <Text style={styles.freeBadge}>무료</Text> : null}
                       <Ionicons name={modelPickerOpen ? 'chevron-up' : 'chevron-down'} size={18} color={colors.inkMuted} />
@@ -493,6 +499,12 @@ export function GuardianSettingsModal({
                               <View style={styles.modelCopy}>
                                 <Text style={styles.modelName} numberOfLines={2}>{model.name}</Text>
                                 <Text style={styles.modelMeta} numberOfLines={1}>{model.id}</Text>
+                                <View style={styles.modalityRow}>
+                                  {model.inputModalities.map((modality) => (
+                                    <Text key={`input-${modality}`} style={styles.inputBadge}>{modalityLabel(modality)}</Text>
+                                  ))}
+                                  <Text style={styles.outputBadge}>출력 {model.outputModalities.map(modalityLabel).join('·')}</Text>
+                                </View>
                               </View>
                               {model.free ? <Text style={styles.freeBadge}>무료</Text> : null}
                               {active ? <Ionicons name="checkmark-circle" size={20} color={colors.tealDark} /> : null}
@@ -805,6 +817,10 @@ const styles = StyleSheet.create({
   modelCopy: { flex: 1, minWidth: 0 },
   modelName: { color: colors.ink, fontSize: type.body, fontWeight: '800' },
   modelMeta: { color: colors.inkMuted, fontSize: type.small, marginTop: 5 },
+  modalitySummary: { color: colors.blue, fontSize: type.tiny, fontWeight: '700', marginTop: 5 },
+  modalityRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: spacing.xs },
+  inputBadge: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: radius.pill, overflow: 'hidden', backgroundColor: colors.surfaceSoft, color: colors.tealDark, fontSize: type.tiny, fontWeight: '800' },
+  outputBadge: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: radius.pill, overflow: 'hidden', backgroundColor: '#EAF0FA', color: colors.blue, fontSize: type.tiny, fontWeight: '800' },
   emptyModelText: { color: colors.inkMuted, fontSize: type.body, lineHeight: 20, paddingVertical: spacing.md },
   localNote: { marginTop: spacing.xl, padding: spacing.md, borderRadius: radius.lg, backgroundColor: colors.surfaceWarm, flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
   localNoteText: { flex: 1, color: colors.inkSoft, fontSize: type.small, lineHeight: 18 },

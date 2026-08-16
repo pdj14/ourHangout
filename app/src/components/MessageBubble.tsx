@@ -1,9 +1,9 @@
 import { memo } from 'react';
-import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useVideoPlayer, VideoView } from 'expo-video';
 
 import { Avatar } from './Avatar';
+import { ChatMediaContent } from './ChatMediaContent';
 import { colors, radius, spacing, type } from '../theme';
 import type { Message, User } from '../types';
 
@@ -18,24 +18,6 @@ type MessageBubbleProps = {
   onOpenMedia?: (message: Message) => void;
   onOpenProfile?: (userId: string) => void;
 };
-
-const VideoAttachment = memo(function VideoAttachment({ uri }: { uri: string }) {
-  const player = useVideoPlayer(uri, (instance) => {
-    instance.loop = false;
-  });
-
-  return (
-    <View style={styles.videoWrap}>
-      <VideoView
-        player={player}
-        style={styles.video}
-        fullscreenOptions={{ enable: true }}
-        allowsPictureInPicture
-        nativeControls
-      />
-    </View>
-  );
-});
 
 export const MessageBubble = memo(function MessageBubble({
   message,
@@ -57,6 +39,7 @@ export const MessageBubble = memo(function MessageBubble({
     : !explicitlyUnread && message.delivery === 'read';
   const waitingForDirectRead =
     !roomIsGroup && !read && (message.delivery === 'sent' || message.delivery === 'delivered');
+  const isMedia = message.kind === 'image' || message.kind === 'video' || message.kind === 'audio';
 
   return (
     <View style={[styles.row, mine && styles.rowMine]}>
@@ -75,27 +58,29 @@ export const MessageBubble = memo(function MessageBubble({
             </Text>
           </Pressable>
         ) : null}
-        <View style={[styles.bubble, mine ? styles.mine : styles.other, message.kind !== 'text' && styles.mediaBubble]}>
+        <View style={[styles.bubble, mine ? styles.mine : styles.other, isMedia && styles.mediaBubble]}>
           {message.kind === 'text' || message.kind === 'system' ? (
             <Text style={[styles.body, mine && styles.mineText]}>{message.text}</Text>
           ) : null}
 
-          {message.kind === 'image' && message.uri ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="이미지 크게 보기"
-              onPress={() => onOpenMedia?.(message)}
-            >
-              <Image source={{ uri: message.uri }} resizeMode="cover" style={styles.image} />
-            </Pressable>
+          {isMedia && message.uri ? (
+            <ChatMediaContent
+              attachment={{
+                id: message.id,
+                kind: message.kind as 'image' | 'video' | 'audio',
+                uri: message.uri,
+                mimeType: message.mimeType,
+                fileName: message.fileName,
+                fileSize: message.fileSize,
+              }}
+              onOpenImage={() => onOpenMedia?.(message)}
+            />
           ) : null}
 
-          {message.kind === 'video' && message.uri ? <VideoAttachment uri={message.uri} /> : null}
-
-          {message.kind !== 'text' && !message.uri ? (
+          {isMedia && !message.uri ? (
             <View style={styles.mediaFallback}>
-              <Ionicons name={message.kind === 'video' ? 'videocam-outline' : 'image-outline'} size={20} color={colors.inkMuted} />
-              <Text style={styles.mediaFallbackText}>{message.kind === 'video' ? '영상 파일' : '이미지 파일'}</Text>
+              <Ionicons name={message.kind === 'video' ? 'videocam-outline' : message.kind === 'audio' ? 'musical-notes-outline' : 'image-outline'} size={20} color={colors.inkMuted} />
+              <Text style={styles.mediaFallbackText}>{message.kind === 'video' ? '영상 파일' : message.kind === 'audio' ? '오디오 파일' : '이미지 파일'}</Text>
             </View>
           ) : null}
         </View>

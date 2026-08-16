@@ -8,17 +8,17 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Avatar } from '../components/Avatar';
+import { ChatComposer } from '../components/ChatComposer';
 import { ChatKeyboardLayout } from '../components/ChatKeyboardLayout';
 import { MessageBubble } from '../components/MessageBubble';
 import { useChatKeyboard } from '../hooks/useChatKeyboard';
 import { colors, radius, spacing, type } from '../theme';
-import type { AttachmentDraft, Message, Room, User } from '../types';
+import type { AttachmentDraft, ChatMediaKind, Message, Room, User } from '../types';
 
 type RoomScreenProps = {
   room: Room;
@@ -38,8 +38,7 @@ type RoomScreenProps = {
   onBack: () => void;
   onRetryLoad: () => void;
   onSend: () => void;
-  onPickImage: () => void;
-  onPickVideo: () => void;
+  onPickAttachment: (kind: ChatMediaKind) => void;
   onRemoveAttachment: () => void;
   onRetryAttachment?: () => void;
   onRetryMessage?: (messageId: string) => void;
@@ -66,8 +65,7 @@ export function RoomScreen({
   onBack,
   onRetryLoad,
   onSend,
-  onPickImage,
-  onPickVideo,
+  onPickAttachment,
   onRemoveAttachment,
   onRetryAttachment,
   onRetryMessage,
@@ -340,59 +338,21 @@ export function RoomScreen({
         }
       />
 
-      {attachment ? (
-        <View style={[styles.attachment, attachment.status === 'failed' && styles.attachmentFailed]}>
-          {attachment.kind === 'image' ? (
-            <Image source={{ uri: attachment.uri }} resizeMode="cover" style={styles.attachmentPreview} />
-          ) : (
-            <View style={styles.attachmentPreviewFallback}>
-              <Ionicons name="videocam-outline" size={18} color={colors.tealDark} />
-            </View>
-          )}
-          <View style={styles.attachmentCopy}>
-            <Text style={styles.attachmentTitle}>{attachment.kind === 'image' ? '사진 첨부' : '영상 첨부'}</Text>
-            <Text style={[styles.attachmentStatus, attachment.status === 'failed' && styles.attachmentStatusFailed]}>
-              {attachment.status === 'uploading' ? '업로드 중' : attachment.status === 'failed' ? attachment.error || '업로드 실패' : '전송 대기'}
-            </Text>
-          </View>
-          {attachment.status === 'failed' && onRetryAttachment ? (
-            <Pressable accessibilityRole="button" accessibilityLabel="첨부 다시 보내기" onPress={onRetryAttachment} style={styles.attachmentAction}>
-              <Ionicons name="refresh" size={18} color={colors.coral} />
-            </Pressable>
-          ) : null}
-          <Pressable accessibilityRole="button" accessibilityLabel="첨부 삭제" onPress={onRemoveAttachment} style={styles.attachmentAction}>
-            <Ionicons name="close" size={18} color={colors.inkMuted} />
-          </Pressable>
-        </View>
-      ) : null}
-
-      <View style={styles.composer}>
-        <Pressable accessibilityRole="button" accessibilityLabel="사진 첨부" style={styles.attachBtn} onPress={onPickImage} disabled={sending}>
-          <Ionicons name="image-outline" size={20} color={colors.inkSoft} />
-        </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="영상 첨부" style={styles.attachBtn} onPress={onPickVideo} disabled={sending}>
-          <Ionicons name="videocam-outline" size={20} color={colors.inkSoft} />
-        </Pressable>
-        <TextInput
-          value={draft}
-          onChangeText={onDraftChange}
-          placeholder="메시지 입력"
-          placeholderTextColor={colors.inkMuted}
-          multiline
-          onFocus={handleComposerFocus}
-          accessibilityLabel="메시지 입력"
-          style={styles.input}
-        />
-        <Pressable
-          onPress={onSend}
-          disabled={!canSend}
-          accessibilityRole="button"
-          accessibilityLabel="메시지 보내기"
-          style={[styles.sendBtn, !canSend && styles.sendBtnOff]}
-        >
-          {sending ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="send" size={18} color="#FFFFFF" />}
-        </Pressable>
-      </View>
+      <ChatComposer
+        value={draft}
+        onChangeText={onDraftChange}
+        attachment={attachment}
+        supportedMedia={['image', 'video', 'audio']}
+        onPickAttachment={onPickAttachment}
+        onRemoveAttachment={onRemoveAttachment}
+        onRetryAttachment={onRetryAttachment}
+        onSend={onSend}
+        onFocus={handleComposerFocus}
+        placeholder="메시지 입력"
+        accessibilityLabel="메시지 입력"
+        editable={!sending}
+        sending={sending}
+      />
 
       <Modal
         visible={!!selectedImageUri}

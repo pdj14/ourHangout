@@ -3,6 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   NativeEventEmitter,
@@ -16,6 +17,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ChatKeyboardLayout } from '../components/ChatKeyboardLayout';
+import { ChatComposer } from '../components/ChatComposer';
+import { ChatMediaContent } from '../components/ChatMediaContent';
 import { GuardianConversationsModal } from '../components/GuardianConversationsModal';
 import { GuardianSettingsModal } from '../components/GuardianSettingsModal';
 import { ScreenHeader } from '../components/ScreenHeader';
@@ -65,6 +68,9 @@ import {
   type GuardianCloudModel,
 } from '../services/guardianCloudProvider';
 import { colors, radius, spacing, type } from '../theme';
+import { pickChatAttachment } from '../services/chatAttachments';
+import { modalityLabel } from '../services/modelCapabilities';
+import type { AttachmentDraft, ChatAttachment, ChatMediaKind } from '../types';
 
 const guardianMascot = require('../../assets/forest-guardian.png');
 const SELECTED_MODEL_KEY = 'on_device_ai:selected_model_v1';
@@ -81,13 +87,15 @@ type RetryState = { baseMessages: OnDeviceChatMessage[]; content: string };
 
 function createMessage(
   role: OnDeviceChatMessage['role'],
-  content: string
+  content: string,
+  attachment?: ChatAttachment
 ): OnDeviceChatMessage {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     role,
     content,
     createdAt: Date.now(),
+    ...(attachment ? { attachment } : {}),
   };
 }
 
@@ -109,6 +117,7 @@ export function OnDeviceAiScreen() {
   const [conversations, setConversations] = useState<GuardianConversationRoom[]>([]);
   const [activeConversationId, setActiveConversationId] = useState('');
   const [draft, setDraft] = useState('');
+  const [attachment, setAttachment] = useState<AttachmentDraft | null>(null);
   const [phase, setPhase] = useState<Phase>('scanning');
   const [progress, setProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState('지킴이가 기억을 살펴보고 있어요.');
@@ -147,10 +156,21 @@ export function OnDeviceAiScreen() {
   const engineReady = guardianProfile.aiEngineType === 'openRouter'
     ? openRouterConnected && !!guardianProfile.cloudModelId
     : !!selectedModel;
-  const canSend = phase === 'ready'
-    && engineReady
-    && !!draft.trim();
-
+  const selectedCloudModel = useMemo(
+    () => openRouterModels.find((model) => model.id === guardianProfile.cloudModelId) ?? null,
+    [guardianProfile.cloudModelId, openRouterModels]
+  );
+  const supportedMedia = useMemo<ChatMediaKind[]>(() => {
+    if (guardianProfile.aiEngineType !== 'openRouter' || !selectedCloudModel) return [];
+    return selectedCloudModel.inputModalities.filter(
+      (modality): modality is ChatMediaKind => modality === 'image' || modality === 'video' || modality === 'audio'
+    );
+  }, [guardianProfile.aiEngineType, selectedCloudModel]);
+  const capabilityHint = guardianProfile.aiEngineType !== 'openRouter'
+    ? '\uC628\uB514\uBC14\uC774\uC2A4 \uBAA8\uB378\uC740 \uD604\uC7AC \uD14D\uC2A4\uD2B8 \uC785\uB825\uB9CC \uC9C0\uC6D0\uD574\uC694.'
+    : selectedCloudModel
+      ? `\uC785\uB825: ${selectedCloudModel.inputModalities.map(modalityLabel).join(', ')} \u00B7 \uCD9C\uB825: \uD14D\uC2A4\uD2B8`
+      : '\uBAA8\uB378 \uC815\uBCF4\uB97C \uBD88\uB7EC\uC628 \uD6C4 \uCCA8\uBD80 \uAE30\uB2A5\uC744 \uC0AC\uC6A9\uD560 \uC218 \uC788\uC5B4\uC694.';
   const commitConversationStore = useCallback((
     nextConversations: GuardianConversationRoom[],
     nextActiveConversationId: string
@@ -671,12 +691,39 @@ export function OnDeviceAiScreen() {
 
   const sendMessage = useCallback(async () => {
     const content = draft.trim();
-    if (phase !== 'ready' || !engineReady || !content) return;
-    const userMessage = createMessage('user', content);
+    const media = attachment;
+    if (phase !== 'ready' || !engineReady || (!content && !media)) return;
+    if (media && !supportedMedia.includes(media.kind)) {
+      Alert.alert('\uC774 \uBAA8\uB378\uC5D0\uC11C\uB294 \uCCA8\uBD80\uD560 \uC218 \uC5C6\uC5B4\uC694', '\uBAA8\uB378 \uC785\uB825 \uC9C0\uC6D0 \uD615\uC2DD\uC744 \uD655\uC778\uD558\uAC70\uB098 \uB2E4\uB978 \uBAA8\uB378\uC744 \uC120\uD0DD\uD574 \uC8FC\uC138\uC694.');
+      return;
+    }
+    const userMessage = createMessage(
+      'user',
+      content || '\uCCA8\uBD80 \uC790\uB8CC\uB97C \uD655\uC778\uD574 \uC918.',
+      media || undefined
+    );
     const baseMessages = [...messagesRef.current, userMessage];
     setDraft('');
-    await runCompletion(baseMessages, content);
-  }, [draft, engineReady, phase, runCompletion]);
+    setAttachment(null);
+    await runCompletion(baseMessages, userMessage.content);
+  }, [attachment, draft, engineReady, phase, runCompletion, supportedMedia]);
+
+  const pickAttachment = useCallback(async (kind: ChatMediaKind) => {
+    if (!supportedMedia.includes(kind)) {
+      Alert.alert('\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC785\uB825', '\uD604\uC7AC \uC120\uD0DD\uD55C \uBAA8\uB378\uC740 \uC774 \uC785\uB825 \uD615\uC2DD\uC744 \uC9C0\uC6D0\uD558\uC9C0 \uC54A\uC544\uC694.');
+      return;
+    }
+    try {
+      const picked = await pickChatAttachment(kind);
+      if (picked) setAttachment(picked);
+    } catch (error) {
+      Alert.alert(normalizeGuardianError(error));
+    }
+  }, [supportedMedia]);
+
+  useEffect(() => {
+    if (attachment && !supportedMedia.includes(attachment.kind)) setAttachment(null);
+  }, [attachment, supportedMedia]);
 
   const retryLastResponse = useCallback(async () => {
     if (!retryState || phase !== 'ready' || !engineReady) return;
@@ -822,6 +869,7 @@ export function OnDeviceAiScreen() {
                     ? `${guardianProfile.name} · ${displayedOpenRouterModelName}`
                     : guardianProfile.name}
                 </Text>
+                {item.attachment ? <ChatMediaContent attachment={item.attachment} /> : null}
                 <Text style={[styles.bubbleText, user && styles.userBubbleText]}>{visibleContent || '…'}</Text>
               </View>
             </View>
@@ -878,34 +926,25 @@ export function OnDeviceAiScreen() {
         }
       />
 
-      <View style={styles.composer}>
-        <TextInput
-          ref={inputRef}
-          value={draft}
-          onChangeText={setDraft}
-          placeholder={phase === 'ready' ? '지킴이에게 이야기해 보세요' : '지킴이가 깨어나면 이야기할 수 있어요'}
-          placeholderTextColor={colors.inkMuted}
-          editable={phase === 'ready'}
-          multiline
-          maxLength={2000}
-          onFocus={handleComposerFocus}
-          accessibilityLabel={`${guardianProfile.name}에게 보낼 메시지`}
-          style={styles.input}
-        />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={phase === 'generating' ? `${guardianProfile.name} 답변 중지` : `${guardianProfile.name}에게 보내기`}
-          disabled={phase === 'stopping' || (phase !== 'generating' && !canSend)}
-          onPress={() => phase === 'generating' ? void stopGeneration() : void sendMessage()}
-          style={[
-            styles.sendButton,
-            phase === 'generating' && styles.stopButton,
-            phase !== 'generating' && !canSend && styles.disabled,
-          ]}
-        >
-          <Ionicons name={phase === 'generating' ? 'stop' : 'arrow-up'} size={20} color="#FFFFFF" />
-        </Pressable>
-      </View>
+      <ChatComposer
+        ref={inputRef}
+        value={draft}
+        onChangeText={setDraft}
+        attachment={attachment}
+        supportedMedia={supportedMedia}
+        onPickAttachment={(kind) => void pickAttachment(kind)}
+        onRemoveAttachment={() => setAttachment(null)}
+        onSend={() => void sendMessage()}
+        onStop={() => void stopGeneration()}
+        onFocus={handleComposerFocus}
+        placeholder={phase === 'ready' ? '지킴이에게 이야기해 보세요' : '지킴이가 깨어나면 이야기할 수 있어요'}
+        accessibilityLabel={`${guardianProfile.name}에게 보낼 메시지`}
+        editable={phase === 'ready'}
+        sending={phase === 'generating'}
+        stopping={phase === 'stopping'}
+        maxLength={2000}
+        capabilityHint={capabilityHint}
+      />
 
       <GuardianSettingsModal
         visible={settingsOpen}

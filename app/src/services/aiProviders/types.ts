@@ -1,3 +1,5 @@
+import type { ModelModality } from '../modelCapabilities';
+
 export type OpenAiCompatibleProviderId = 'openRouter' | 'xai' | 'ollama' | 'vllm' | 'custom';
 
 export type OpenAiCompatibleProviderDescriptor = {
@@ -28,8 +30,26 @@ export type OpenAiCompatibleModel = {
   contextLength: number;
   promptPrice: number;
   completionPrice: number;
+  requestPrice: number;
+  imagePrice: number;
   free: boolean;
+  inputModalities: ModelModality[];
+  outputModalities: ModelModality[];
+  supportsTools: boolean;
 };
+
+export type OpenAiTextContentPart = { type: 'text'; text: string };
+export type OpenAiImageContentPart = { type: 'image_url'; image_url: { url: string } };
+export type OpenAiVideoContentPart = { type: 'video_url'; video_url: { url: string } };
+export type OpenAiAudioContentPart = {
+  type: 'input_audio';
+  input_audio: { data: string; format: string };
+};
+export type OpenAiUserContentPart =
+  | OpenAiTextContentPart
+  | OpenAiImageContentPart
+  | OpenAiVideoContentPart
+  | OpenAiAudioContentPart;
 
 export type OpenAiFunctionTool = {
   type: 'function';
@@ -50,7 +70,7 @@ export type OpenAiToolCall = {
 };
 
 export type OpenAiConversationMessage =
-  | { role: 'user'; content: string }
+  | { role: 'user'; content: string | OpenAiUserContentPart[] }
   | { role: 'assistant'; content: string | null; tool_calls?: OpenAiToolCall[] }
   | { role: 'tool'; content: string; tool_call_id: string };
 

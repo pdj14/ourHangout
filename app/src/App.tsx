@@ -58,6 +58,7 @@ import {
   writeServerEnvironment,
 } from './services/serverEnvironment';
 import { uploadAttachment, uploadAvatar } from './services/media';
+import { pickChatAttachment } from './services/chatAttachments';
 import {
   compareVersionStrings,
   downloadAndInstallAppUpdate,
@@ -116,6 +117,7 @@ import type {
   ServerState,
   TabKey,
   User,
+  ChatMediaKind,
 } from './types';
 
 const REALTIME_UNSTABLE_MESSAGE = '실시간 연결이 불안정합니다. 자동으로 다시 연결합니다.';
@@ -1472,31 +1474,13 @@ function RenewalApp() {
     [ensureDirectRoom, navigateTab, openRoom]
   );
 
-  const pickAttachment = useCallback(async (kind: 'image' | 'video') => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('사진과 영상 접근 권한이 필요합니다.');
-      return;
+  const pickAttachment = useCallback(async (kind: ChatMediaKind) => {
+    try {
+      const picked = await pickChatAttachment(kind);
+      if (picked) setAttachment(picked);
+    } catch (error) {
+      Alert.alert(normalizeErrorMessage(error));
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: [kind === 'image' ? 'images' : 'videos'],
-      allowsEditing: false,
-      quality: kind === 'image' ? 0.86 : 1,
-      videoMaxDuration: 180,
-      selectionLimit: 1,
-    });
-    if (result.canceled || !result.assets?.[0]) return;
-    const asset = result.assets[0];
-    const resolvedKind = asset.type === 'video' ? 'video' : 'image';
-    setAttachment({
-      id: createLocalId('media'),
-      kind: resolvedKind,
-      uri: asset.uri,
-      mimeType: asset.mimeType,
-      fileName: asset.fileName,
-      fileSize: asset.fileSize,
-      status: 'picked',
-    });
   }, []);
 
   const sendMessage = useCallback(async () => {
@@ -1563,6 +1547,9 @@ function RenewalApp() {
             clientMessageId: mediaClientMessageId,
             kind: media.kind,
             uri: uploadedUri,
+            mimeType: media.mimeType,
+            fileName: media.fileName,
+            fileSize: media.fileSize,
           }),
         }, { queue: false, rateLimitRetries: 1 });
         const mapped = mapMessageForApp(created, activeRoom.id);
@@ -2167,8 +2154,7 @@ function RenewalApp() {
           onBack={closeRoom}
           onRetryLoad={() => void openRoom(activeRoom.id)}
           onSend={sendMessage}
-          onPickImage={() => void pickAttachment('image')}
-          onPickVideo={() => void pickAttachment('video')}
+          onPickAttachment={(kind) => void pickAttachment(kind)}
           onRemoveAttachment={() => setAttachment(null)}
           onRetryAttachment={sendMessage}
           onRetryMessage={retryMessage}

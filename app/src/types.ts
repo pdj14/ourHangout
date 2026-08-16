@@ -2,7 +2,9 @@ export type TabKey = 'chats' | 'people' | 'family' | 'ai' | 'me';
 
 export type RoomType = 'direct' | 'group' | 'family';
 
-export type MessageKind = 'text' | 'image' | 'video' | 'system';
+export type ChatMediaKind = 'image' | 'video' | 'audio';
+
+export type MessageKind = 'text' | ChatMediaKind | 'system';
 
 export type DeliveryState = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 
@@ -58,6 +60,9 @@ export type Message = {
   kind: MessageKind;
   text?: string;
   uri?: string;
+  mimeType?: string;
+  fileName?: string;
+  fileSize?: number;
   time: string;
   at: number;
   delivery?: DeliveryState;
@@ -65,13 +70,16 @@ export type Message = {
   readByNames?: string[];
 };
 
-export type AttachmentDraft = {
+export type ChatAttachment = {
   id: string;
-  kind: 'image' | 'video';
+  kind: ChatMediaKind;
   uri: string;
   mimeType?: string | null;
   fileName?: string | null;
   fileSize?: number | null;
+};
+
+export type AttachmentDraft = ChatAttachment & {
   status: 'picked' | 'uploading' | 'failed';
   error?: string;
 };
@@ -262,6 +270,9 @@ export type BackendRoomMessage = {
   uri?: string;
   url?: string;
   mediaUrl?: string;
+  mimeType?: string;
+  fileName?: string;
+  fileSize?: number;
   at?: string | number;
   createdAt?: string | number;
   updatedAt?: string | number;
@@ -317,7 +328,7 @@ export type BackendMediaUploadTicket = {
 
 export type BackendCompletedMedia = {
   fileUrl?: string;
-  kind?: 'image' | 'video' | 'avatar';
+  kind?: ChatMediaKind | 'avatar';
   status?: 'completed';
 };
 

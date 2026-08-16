@@ -21,6 +21,7 @@ import {
   buildGuardianWebSearchQuery,
   shouldSearchGuardianWeb,
 } from './guardianWebSearchPolicy';
+import { buildGuardianUserContent } from './guardianMultimodal';
 
 type GuardianCompletionCallbacks = {
   onPartial: (content: string) => void;
@@ -32,6 +33,7 @@ type GuardianCompletionCallbacks = {
 const MAX_TOOL_CALLS = 3;
 const MAX_CLOUD_COMPLETION_ROUNDS = 5;
 const MAX_COMPLETION_ATTEMPTS = 7;
+const TEXT_OUTPUT_POLICY = '\uC774 \uC571\uC740 \uD604\uC7AC \uD14D\uC2A4\uD2B8 \uC751\uB2F5\uB9CC \uD45C\uC2DC\uD560 \uC218 \uC788\uB2E4. \uC0AC\uC6A9\uC790\uAC00 \uC774\uBBF8\uC9C0\u00B7\uC624\uB514\uC624\u00B7\uB3D9\uC601\uC0C1 \uC0DD\uC131\uC744 \uC694\uCCAD\uD558\uBA74 \uC9C1\uC811 \uC0DD\uC131\uD588\uB2E4\uACE0 \uD558\uC9C0 \uB9D0\uACE0, \uD604\uC7AC\uB294 \uD14D\uC2A4\uD2B8 \uCD9C\uB825\uB9CC \uC9C0\uC6D0\uD55C\uB2E4\uACE0 \uC9E7\uAC8C \uC548\uB0B4\uD558\uB77C.';
 const UNCERTAIN_PATTERN = /모르|알\s*수\s*없|확실하지|정보가\s*없|(?:확인|조회|검색)할\s*수\s*없|기능이\s*없|추측|잘\s*알지\s*못|don't\s+know|do\s+not\s+know|not\s+sure|cannot\s+(?:confirm|verify|tell|search|browse)|unable\s+to\s+(?:confirm|verify|search|browse)/i;
 
 function internalMessage(role: OnDeviceChatMessage['role'], content: string): OnDeviceChatMessage {
@@ -71,7 +73,9 @@ export async function completeGuardianConversation(
   callbacks: GuardianCompletionCallbacks
 ) {
   const allowWeb = profile.webBrowsingEnabled && webToolsAvailable();
-  const originalQuestion = [...messages].reverse().find((message) => message.role === 'user')?.content.trim() || '';
+  const latestUserMessage = [...messages].reverse().find((message) => message.role === 'user');
+  const originalQuestion = latestUserMessage?.content.trim()
+    || (latestUserMessage?.attachment ? `${latestUserMessage.attachment.kind} \uCCA8\uBD80 \uD30C\uC77C\uC744 \uD655\uC778\uD574 \uC918` : '');
   let workingMessages = messages;
   let toolCallsUsed = 0;
   let automaticSearchUsed = false;
@@ -136,10 +140,13 @@ export async function completeGuardianConversation(
 
   if (profile.aiEngineType === 'openRouter') {
     const cloudProvider = getGuardianCloudProvider(profile);
-    let cloudMessages: GuardianCloudConversationMessage[] = workingMessages.map((message) => ({
-      role: message.role,
-      content: message.content,
-    }));
+    let cloudMessages: GuardianCloudConversationMessage[] = await Promise.all(
+      workingMessages.map(async (message): Promise<GuardianCloudConversationMessage> => (
+        message.role === 'user'
+          ? { role: 'user', content: await buildGuardianUserContent(message) }
+          : { role: 'assistant', content: message.content }
+      ))
+    );
 
     for (let round = 0; round < MAX_CLOUD_COMPLETION_ROUNDS; round += 1) {
       if (callbacks.shouldStop?.()) throw new Error('답변 생성을 중지했어요.');
@@ -152,11 +159,11 @@ export async function completeGuardianConversation(
       const result = await streamGuardianCloudConversation(
         profile,
         cloudMessages,
-        buildGuardianSystemPrompt(
+        `${buildGuardianSystemPrompt(
           profile,
           canUseAnotherTool ? 'function' : 'none',
           toolCallsUsed > 0
-        ),
+        )}\n\n${TEXT_OUTPUT_POLICY}`,
         {
           onPartial: (partial) => {
             const normalized = partial.trimStart();

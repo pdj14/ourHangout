@@ -25,7 +25,13 @@ export const ChatListItem = memo(function ChatListItem({ room, users, currentUse
   const avatarName = room.type === 'direct' ? peer?.alias || peer?.name || room.title : room.title;
   const avatarColor = room.type === 'family' ? colors.teal : peer?.color || colors.indigo;
   const title = room.type === 'direct' && peer ? peer.alias || peer.name : room.title;
-  const preview = latest?.kind === 'image' ? '사진을 보냈어요' : latest?.kind === 'video' ? '영상을 보냈어요' : latest?.text || room.preview || '아직 나눈 이야기가 없어요.';
+  const preview = latest?.kind === 'image'
+    ? '사진을 보냈어요'
+    : latest?.kind === 'video'
+      ? '영상을 보냈어요'
+      : latest?.kind === 'audio'
+        ? '오디오를 보냈어요'
+        : latest?.text || room.preview || '아직 나눈 이야기가 없어요.';
 
   return (
     <Pressable

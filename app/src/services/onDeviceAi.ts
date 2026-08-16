@@ -7,12 +7,14 @@ import {
   type NativeAiModelsDirectory,
   type NativeAiRuntimeCapacity,
 } from '../native';
+import type { ChatAttachment } from '../types';
 
 export type OnDeviceChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   createdAt: number;
+  attachment?: ChatAttachment;
 };
 
 export type OnDeviceModelLoadProgress = {

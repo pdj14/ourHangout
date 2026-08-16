@@ -2,7 +2,7 @@
   "mcpServers": {
     "axone_worker": {
       "type": "http",
-      "url": "http://127.0.0.1:62865/mcp/0665aa6750d8e4882b05ae476f080465ba88"
+      "url": "http://127.0.0.1:52391/mcp/6d9ac7b2583870acde895f9e6573f957e9fd"
     }
   }
 }

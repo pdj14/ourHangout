@@ -4,10 +4,11 @@ import type {
   AttachmentDraft,
   BackendCompletedMedia,
   BackendMediaUploadTicket,
+  ChatMediaKind,
 } from '../types';
 import type { BackendClient } from './backend';
 
-export function inferMediaMimeType(uri: string, kind: 'image' | 'video', fallback?: string | null): string {
+export function inferMediaMimeType(uri: string, kind: ChatMediaKind, fallback?: string | null): string {
   const normalizedFallback = String(fallback || '').trim().toLowerCase();
   if (normalizedFallback) return normalizedFallback;
   const lower = uri.toLowerCase();
@@ -15,6 +16,13 @@ export function inferMediaMimeType(uri: string, kind: 'image' | 'video', fallbac
     if (lower.endsWith('.png')) return 'image/png';
     if (lower.endsWith('.webp')) return 'image/webp';
     return 'image/jpeg';
+  }
+  if (kind === 'audio') {
+    if (lower.endsWith('.wav')) return 'audio/wav';
+    if (lower.endsWith('.m4a') || lower.endsWith('.mp4')) return 'audio/mp4';
+    if (lower.endsWith('.ogg') || lower.endsWith('.oga')) return 'audio/ogg';
+    if (lower.endsWith('.webm')) return 'audio/webm';
+    return 'audio/mpeg';
   }
   if (lower.endsWith('.webm')) return 'video/webm';
   if (lower.endsWith('.mov')) return 'video/quicktime';
@@ -26,8 +34,10 @@ export function isLocalUri(uri?: string | null): boolean {
   return /^(file|content):\/\//i.test(value) || value.startsWith('/');
 }
 
-export function mediaPreviewLabel(kind: 'image' | 'video'): string {
-  return kind === 'image' ? '사진' : '영상';
+export function mediaPreviewLabel(kind: ChatMediaKind): string {
+  if (kind === 'image') return '사진';
+  if (kind === 'audio') return '오디오';
+  return '영상';
 }
 
 function resolveBackendUrl(client: BackendClient, value: string): string {

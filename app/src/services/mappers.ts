@@ -156,9 +156,9 @@ export function mapMessage(raw: BackendRoomMessage, currentUserId: string, fallb
   const senderId = String(raw.senderId || raw.sender?.id || '').trim();
   const at = parseTimestamp(raw.at ?? raw.createdAt ?? raw.timestamp ?? raw.updatedAt);
   const kind: MessageKind =
-    raw.kind === 'image' || raw.kind === 'video' || raw.kind === 'system'
+    raw.kind === 'image' || raw.kind === 'video' || raw.kind === 'audio' || raw.kind === 'system'
       ? raw.kind
-      : raw.type === 'image' || raw.type === 'video' || raw.type === 'system'
+      : raw.type === 'image' || raw.type === 'video' || raw.type === 'audio' || raw.type === 'system'
         ? raw.type
         : 'text';
   const text = raw.text ?? raw.body ?? raw.content;
@@ -172,6 +172,9 @@ export function mapMessage(raw: BackendRoomMessage, currentUserId: string, fallb
     kind,
     text: String(text || '').trim() || undefined,
     uri: String(uri || '').trim() || undefined,
+    mimeType: String(raw.mimeType || '').trim() || undefined,
+    fileName: String(raw.fileName || '').trim() || undefined,
+    fileSize: Number.isFinite(raw.fileSize) ? Number(raw.fileSize) : undefined,
     at,
     time: formatTime(at),
     delivery: raw.delivery || 'sent',
@@ -204,6 +207,7 @@ export function mergeMessages(existing: Message[], incoming: Message[]): Message
 export function previewForMessage(message: Pick<Message, 'kind' | 'text'>): string {
   if (message.kind === 'image') return '사진';
   if (message.kind === 'video') return '영상';
+  if (message.kind === 'audio') return '오디오';
   return message.text || '';
 }
 
