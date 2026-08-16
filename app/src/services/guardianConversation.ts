@@ -1,12 +1,17 @@
 import type { GuardianProfile } from './guardianProfile';
 import { buildGuardianSystemPrompt } from './guardianProfile';
 import { onDeviceAiEngine, type OnDeviceChatMessage } from './onDeviceAi';
-import { streamOpenRouterConversation } from './openRouterClient';
+import {
+  streamOpenRouterConversation,
+  type OpenRouterConversationMessage,
+} from './openRouterClient';
 import {
   executeGuardianWebTool,
+  GUARDIAN_WEB_TOOL_DEFINITIONS,
+  normalizeGuardianWebToolCall,
   parseGuardianWebToolCall,
   webToolsAvailable,
-} from './onDeviceWebTools';
+} from './guardianWebTools';
 
 type GuardianCompletionCallbacks = {
   onPartial: (content: string) => void;
@@ -95,7 +100,12 @@ export async function completeGuardianConversation(
     }
   };
 
-  if (allowWeb && originalQuestion && shouldSearchBeforeAnswer(originalQuestion)) {
+  if (
+    profile.aiEngineType !== 'openRouter'
+    && allowWeb
+    && originalQuestion
+    && shouldSearchBeforeAnswer(originalQuestion)
+  ) {
     const result = await runWebTool({ name: 'web_search', arguments: { query: originalQuestion } });
     automaticSearchUsed = true;
     appendWebResult(result);
@@ -103,25 +113,85 @@ export async function completeGuardianConversation(
   }
 
   if (profile.aiEngineType === 'openRouter') {
-    if (callbacks.shouldStop?.()) throw new Error('답변 생성을 중지했어요.');
-    callbacks.onStatus(`${profile.name}가 OpenRouter 클라우드 모델로 답변하고 있어요.`);
-    const result = await streamOpenRouterConversation(
-      workingMessages,
-      buildGuardianSystemPrompt(profile, false, toolCallsUsed > 0),
-      profile.openRouterModelId,
-      {
-        onPartial: callbacks.onPartial,
-        onModel: callbacks.onModel,
+    let cloudMessages: OpenRouterConversationMessage[] = workingMessages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+
+    for (let round = 0; round <= MAX_TOOL_CALLS; round += 1) {
+      if (callbacks.shouldStop?.()) throw new Error('답변 생성을 중지했어요.');
+      const canUseAnotherTool = allowWeb && toolCallsUsed < MAX_TOOL_CALLS;
+      callbacks.onStatus(
+        canUseAnotherTool
+          ? `${profile.name}가 필요한 정보를 판단하고 있어요.`
+          : `${profile.name}가 OpenRouter 클라우드 모델로 답변하고 있어요.`
+      );
+      const result = await streamOpenRouterConversation(
+        cloudMessages,
+        buildGuardianSystemPrompt(
+          profile,
+          canUseAnotherTool ? 'function' : 'none',
+          toolCallsUsed > 0
+        ),
+        profile.openRouterModelId,
+        {
+          onPartial: callbacks.onPartial,
+          onModel: callbacks.onModel,
+        },
+        {
+          tools: canUseAnotherTool ? GUARDIAN_WEB_TOOL_DEFINITIONS : undefined,
+        }
+      );
+      callbacks.onModel?.(result.modelId);
+      if (!result.toolCalls.length) return result.content;
+
+      // 일부 제공자가 도구 호출 직전에 짧은 문장을 보낼 수 있으므로 임시 문구를 지웁니다.
+      callbacks.onPartial('');
+      cloudMessages = [
+        ...cloudMessages,
+        {
+          role: 'assistant',
+          content: result.content || null,
+          tool_calls: result.toolCalls,
+        },
+      ];
+
+      for (const requestedCall of result.toolCalls) {
+        const call = normalizeGuardianWebToolCall(
+          requestedCall.function.name,
+          requestedCall.function.arguments
+        );
+        let toolResult: string;
+        if (!call) {
+          toolCallsUsed += 1;
+          toolResult = '웹 도구 요청을 실행하지 못했습니다. 도구 이름과 필수 인자를 확인하고 최종 답변을 작성하세요.';
+        } else if (toolCallsUsed >= MAX_TOOL_CALLS) {
+          toolResult = '이번 답변에서 사용할 수 있는 웹 도구 호출 횟수를 모두 사용했습니다. 지금까지 확인한 내용으로 최종 답변을 작성하세요.';
+        } else {
+          toolResult = await runWebTool(call);
+        }
+        cloudMessages.push({
+          role: 'tool',
+          tool_call_id: requestedCall.id,
+          content: toolResult,
+        });
       }
-    );
-    callbacks.onModel?.(result.modelId);
-    return result.content;
+      callbacks.onStatus(`${profile.name}가 웹에서 확인한 내용을 정리하고 있어요.`);
+    }
+
+    const fallback = '웹에서 확인한 내용을 답변으로 정리하지 못했어요. 잠시 후 다시 시도해 주세요.';
+    callbacks.onPartial(fallback);
+    return fallback;
   }
 
   for (let attempt = 0; attempt < MAX_COMPLETION_ATTEMPTS; attempt += 1) {
     if (callbacks.shouldStop?.()) throw new Error('답변 생성을 중지했어요.');
     const canUseAnotherTool = allowWeb && !automaticSearchUsed && toolCallsUsed < MAX_TOOL_CALLS;
-    const systemPrompt = buildGuardianSystemPrompt(profile, canUseAnotherTool, toolCallsUsed > 0);
+    const systemPrompt = buildGuardianSystemPrompt(
+      profile,
+      canUseAnotherTool ? 'prompt' : 'none',
+      toolCallsUsed > 0
+    );
     let revealed = false;
     const finalText = await onDeviceAiEngine.complete(
       workingMessages,

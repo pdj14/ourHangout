@@ -36,7 +36,7 @@ import {
   type OnDeviceChatMessage,
   type OnDeviceModelLoadProgress,
 } from '../services/onDeviceAi';
-import { cancelGuardianWebTool } from '../services/onDeviceWebTools';
+import { cancelGuardianWebTool } from '../services/guardianWebTools';
 import {
   connectOpenRouter,
   disconnectOpenRouter,
