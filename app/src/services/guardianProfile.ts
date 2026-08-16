@@ -1,5 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import {
+  normalizeOpenAiProviderId,
+  normalizeProviderBaseUrl,
+} from './aiProviders/registry';
+import type { OpenAiCompatibleProviderId } from './aiProviders/types';
 import { DEFAULT_OPENROUTER_MODEL_ID } from './openRouterClient';
 
 export type GuardianRule = {
@@ -16,6 +21,10 @@ export type GuardianProfile = {
   rules: GuardianRule[];
   webBrowsingEnabled: boolean;
   aiEngineType: 'onDevice' | 'openRouter';
+  cloudProviderId: OpenAiCompatibleProviderId;
+  cloudBaseUrl: string;
+  cloudModelId: string;
+  /** 이전 저장 데이터와의 호환을 위해 유지합니다. */
   openRouterModelId: string;
 };
 
@@ -51,6 +60,9 @@ export const DEFAULT_GUARDIAN_PROFILE: GuardianProfile = {
   rules: DEFAULT_RULES,
   webBrowsingEnabled: true,
   aiEngineType: 'onDevice',
+  cloudProviderId: 'openRouter',
+  cloudBaseUrl: 'https://openrouter.ai/api/v1',
+  cloudModelId: DEFAULT_OPENROUTER_MODEL_ID,
   openRouterModelId: DEFAULT_OPENROUTER_MODEL_ID,
 };
 
@@ -75,13 +87,20 @@ export function normalizeGuardianProfile(value: Partial<GuardianProfile> | null 
   const rules = Array.isArray(value?.rules)
     ? value.rules.slice(0, 30).map(normalizeRule).filter((rule): rule is GuardianRule => !!rule)
     : DEFAULT_RULES;
+  const cloudProviderId = normalizeOpenAiProviderId(value?.cloudProviderId);
+  const legacyOpenRouterModelId = cleanText(value?.openRouterModelId, 240) || DEFAULT_OPENROUTER_MODEL_ID;
+  const cloudModelId = cleanText(value?.cloudModelId, 240)
+    || (cloudProviderId === 'openRouter' ? legacyOpenRouterModelId : '');
   return {
     name: cleanText(value?.name, 30) || DEFAULT_GUARDIAN_PROFILE.name,
     synopsis: cleanText(value?.synopsis, 1000) || DEFAULT_GUARDIAN_PROFILE.synopsis,
     rules,
     webBrowsingEnabled: value?.webBrowsingEnabled !== false,
     aiEngineType: value?.aiEngineType === 'openRouter' ? 'openRouter' : 'onDevice',
-    openRouterModelId: cleanText(value?.openRouterModelId, 200) || DEFAULT_OPENROUTER_MODEL_ID,
+    cloudProviderId,
+    cloudBaseUrl: normalizeProviderBaseUrl(cloudProviderId, value?.cloudBaseUrl),
+    cloudModelId,
+    openRouterModelId: cloudProviderId === 'openRouter' ? cloudModelId || legacyOpenRouterModelId : legacyOpenRouterModelId,
   };
 }
 

@@ -24,7 +24,11 @@ import {
   type GuardianProfile,
   type GuardianRule,
 } from '../services/guardianProfile';
-import type { OpenRouterModel } from '../services/openRouterClient';
+import {
+  getOpenAiProviderDescriptor,
+  OPEN_AI_COMPATIBLE_PROVIDERS,
+  type OpenAiCompatibleModel,
+} from '../services/aiProviders';
 import { colors, radius, spacing, type } from '../theme';
 
 type GuardianSettingsModalProps = {
@@ -37,7 +41,7 @@ type GuardianSettingsModalProps = {
   openRouterConnected: boolean;
   openRouterBusy: boolean;
   openRouterMessage: string;
-  openRouterModels: OpenRouterModel[];
+  openRouterModels: OpenAiCompatibleModel[];
   onClose: () => void;
   onConnectOpenRouter: () => void;
   onImportOpenRouterApiKey: (apiKey: string) => Promise<boolean>;
@@ -105,7 +109,9 @@ export function GuardianSettingsModal({
       || draft.synopsis !== profile.synopsis
       || draft.webBrowsingEnabled !== profile.webBrowsingEnabled
       || draft.aiEngineType !== profile.aiEngineType
-      || draft.openRouterModelId !== profile.openRouterModelId,
+      || draft.cloudProviderId !== profile.cloudProviderId
+      || draft.cloudBaseUrl !== profile.cloudBaseUrl
+      || draft.cloudModelId !== profile.cloudModelId,
     [draft, profile]
   );
 
@@ -159,7 +165,9 @@ export function GuardianSettingsModal({
   };
 
   const controlsDisabled = busy || saving || openRouterBusy;
-  const selectedOpenRouterModel = openRouterModels.find((model) => model.id === draft.openRouterModelId);
+  const cloudProvider = getOpenAiProviderDescriptor(draft.cloudProviderId);
+  const showDisconnectAction = openRouterConnected && cloudProvider.id !== 'ollama';
+  const selectedOpenRouterModel = openRouterModels.find((model) => model.id === draft.cloudModelId);
 
   const selectEngine = (aiEngineType: GuardianProfile['aiEngineType']) => {
     if (draft.aiEngineType === aiEngineType || controlsDisabled) return;
@@ -169,17 +177,39 @@ export function GuardianSettingsModal({
     void save(next);
   };
 
-  const selectOpenRouterModel = (openRouterModelId: string) => {
-    const next = { ...draft, openRouterModelId };
+  const selectOpenRouterModel = (cloudModelId: string) => {
+    const next = {
+      ...draft,
+      cloudModelId,
+      ...(draft.cloudProviderId === 'openRouter' ? { openRouterModelId: cloudModelId } : {}),
+    };
     setDraft(next);
     setModelPickerOpen(false);
     void save(next);
   };
 
+  const selectCloudProvider = (providerId: GuardianProfile['cloudProviderId']) => {
+    if (draft.cloudProviderId === providerId || controlsDisabled) return;
+    const provider = getOpenAiProviderDescriptor(providerId);
+    const next = {
+      ...draft,
+      cloudProviderId: providerId,
+      cloudBaseUrl: provider.defaultBaseUrl,
+      cloudModelId: provider.defaultModelId,
+      ...(providerId === 'openRouter' ? { openRouterModelId: provider.defaultModelId } : {}),
+    };
+    setDraft(next);
+    setModelPickerOpen(false);
+    setManualKeyOpen(false);
+    void save(next);
+  };
+
   const confirmDisconnectOpenRouter = () => {
     Alert.alert(
-      'OpenRouter 연결을 해제할까요?',
-      '이 기기에 저장된 OpenRouter API 키가 삭제됩니다.',
+      `${cloudProvider.name} 연결을 해제할까요?`,
+      cloudProvider.requiresApiKey || cloudProvider.supportsOptionalApiKey
+        ? '이 기기에 저장된 API 키가 삭제됩니다.'
+        : '현재 서버 연결 상태를 초기화합니다.',
       [
         { text: '취소', style: 'cancel' },
         { text: '연결 해제', style: 'destructive', onPress: onDisconnectOpenRouter },
@@ -226,15 +256,15 @@ export function GuardianSettingsModal({
             <View style={styles.engineGrid}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="OpenRouter 클라우드 AI 선택"
+                accessibilityLabel="OpenAI 호환 API AI 선택"
                 accessibilityState={{ selected: draft.aiEngineType === 'openRouter' }}
                 disabled={controlsDisabled}
                 onPress={() => selectEngine('openRouter')}
                 style={[styles.engineOption, draft.aiEngineType === 'openRouter' && styles.engineOptionActive, controlsDisabled && styles.disabled]}
               >
                 <Ionicons name="cloud-outline" size={22} color={draft.aiEngineType === 'openRouter' ? colors.tealDark : colors.inkMuted} />
-                <Text style={styles.engineTitle}>OpenRouter</Text>
-                <Text style={styles.engineDetail}>빠른 클라우드 AI</Text>
+                <Text style={styles.engineTitle}>API / 클라우드</Text>
+                <Text style={styles.engineDetail}>OpenRouter·Grok·로컬 서버</Text>
                 {draft.aiEngineType === 'openRouter' ? <Ionicons name="checkmark-circle" size={20} color={colors.tealDark} /> : null}
               </Pressable>
               <Pressable
@@ -254,31 +284,93 @@ export function GuardianSettingsModal({
 
             {draft.aiEngineType === 'openRouter' ? (
               <View style={styles.cloudPanel}>
+                <Text style={styles.fieldLabel}>API 제공자</Text>
+                <View style={styles.providerGrid}>
+                  {OPEN_AI_COMPATIBLE_PROVIDERS.map((provider) => {
+                    const active = provider.id === draft.cloudProviderId;
+                    return (
+                      <Pressable
+                        key={provider.id}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${provider.name} 선택`}
+                        accessibilityState={{ selected: active }}
+                        disabled={controlsDisabled}
+                        onPress={() => selectCloudProvider(provider.id)}
+                        style={[styles.providerOption, active && styles.providerOptionActive, controlsDisabled && styles.disabled]}
+                      >
+                        <Text style={[styles.providerOptionText, active && styles.providerOptionTextActive]}>{provider.name}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                {draft.cloudProviderId !== 'openRouter' ? (
+                  <View style={styles.providerFields}>
+                    <Text style={styles.fieldLabel}>API 기본 주소</Text>
+                    <TextInput
+                      value={draft.cloudBaseUrl}
+                      onChangeText={(cloudBaseUrl) => setDraft((current) => ({ ...current, cloudBaseUrl }))}
+                      placeholder={cloudProvider.defaultBaseUrl || 'https://example.com/v1'}
+                      placeholderTextColor={colors.inkMuted}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      accessibilityLabel={`${cloudProvider.name} API 기본 주소`}
+                      style={styles.textInput}
+                    />
+                    {draft.cloudProviderId === 'ollama' || draft.cloudProviderId === 'vllm' ? (
+                      <Text style={styles.fieldHelp}>실기기에서 127.0.0.1은 휴대폰 자신입니다. PC 서버를 사용하면 같은 네트워크의 PC IP를 입력하세요.</Text>
+                    ) : null}
+                    <Text style={styles.fieldLabel}>모델 ID</Text>
+                    <TextInput
+                      value={draft.cloudModelId}
+                      onChangeText={(cloudModelId) => setDraft((current) => ({ ...current, cloudModelId }))}
+                      placeholder="모델 목록에서 선택하거나 ID 입력"
+                      placeholderTextColor={colors.inkMuted}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      accessibilityLabel={`${cloudProvider.name} 모델 ID`}
+                      style={styles.textInput}
+                    />
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="API 제공자 주소와 모델 저장"
+                      disabled={controlsDisabled || !profileDirty || !draft.cloudBaseUrl.trim()}
+                      onPress={saveBasics}
+                      style={[styles.secondarySaveButton, (controlsDisabled || !profileDirty || !draft.cloudBaseUrl.trim()) && styles.disabled]}
+                    >
+                      <Ionicons name="save-outline" size={17} color={colors.tealDark} />
+                      <Text style={styles.secondarySaveText}>API 설정 저장</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
                 <View style={styles.connectionRow}>
                   <View style={[styles.connectionDot, openRouterConnected && styles.connectionDotActive]} />
                   <View style={styles.connectionCopy}>
-                    <Text style={styles.connectionTitle}>{openRouterConnected ? 'OpenRouter 연결됨' : 'OpenRouter 미연결'}</Text>
+                    <Text style={styles.connectionTitle}>{openRouterConnected ? `${cloudProvider.name} 연결됨` : `${cloudProvider.name} 미연결`}</Text>
                     <Text accessibilityLiveRegion="polite" style={styles.connectionDetail}>
-                      {openRouterMessage || (openRouterConnected ? '사용할 클라우드 모델을 선택하세요.' : '계정 승인 후 자동으로 앱에 돌아옵니다.')}
+                      {openRouterMessage || (openRouterConnected
+                        ? '사용할 모델을 선택하세요.'
+                        : cloudProvider.supportsOAuth ? '계정 승인 후 자동으로 앱에 돌아옵니다.' : 'API 키와 서버 주소를 확인해 주세요.')}
                     </Text>
                   </View>
                 </View>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={openRouterConnected ? 'OpenRouter 연결 해제' : 'OpenRouter 계정 연결'}
+                  accessibilityLabel={showDisconnectAction ? `${cloudProvider.name} 연결 해제` : `${cloudProvider.name} 연결 확인`}
                   disabled={controlsDisabled}
-                  onPress={openRouterConnected ? confirmDisconnectOpenRouter : onConnectOpenRouter}
-                  style={[openRouterConnected ? styles.disconnectButton : styles.connectButton, controlsDisabled && styles.disabled]}
+                  onPress={showDisconnectAction
+                    ? confirmDisconnectOpenRouter
+                    : cloudProvider.supportsOAuth ? onConnectOpenRouter : onRefreshOpenRouterModels}
+                  style={[showDisconnectAction ? styles.disconnectButton : styles.connectButton, controlsDisabled && styles.disabled]}
                 >
-                  {openRouterBusy ? <ActivityIndicator size="small" color={openRouterConnected ? colors.coral : '#FFFFFF'} /> : (
-                    <Ionicons name={openRouterConnected ? 'unlink-outline' : 'log-in-outline'} size={18} color={openRouterConnected ? colors.coral : '#FFFFFF'} />
+                  {openRouterBusy ? <ActivityIndicator size="small" color={showDisconnectAction ? colors.coral : '#FFFFFF'} /> : (
+                    <Ionicons name={showDisconnectAction ? 'unlink-outline' : 'git-network-outline'} size={18} color={showDisconnectAction ? colors.coral : '#FFFFFF'} />
                   )}
-                  <Text style={openRouterConnected ? styles.disconnectButtonText : styles.connectButtonText}>
-                    {openRouterConnected ? '연결 해제' : 'OpenRouter 계정 연결'}
+                  <Text style={showDisconnectAction ? styles.disconnectButtonText : styles.connectButtonText}>
+                    {showDisconnectAction ? '연결 해제' : cloudProvider.supportsOAuth ? 'OpenRouter 계정 연결' : '서버 연결 확인'}
                   </Text>
                 </Pressable>
 
-                {!openRouterConnected ? (
+                {(!openRouterConnected || cloudProvider.supportsOptionalApiKey) && cloudProvider.id !== 'ollama' ? (
                   <View style={styles.manualKeyBlock}>
                     <View style={styles.orRow}>
                       <View style={styles.orLine} />
@@ -287,7 +379,7 @@ export function GuardianSettingsModal({
                     </View>
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel="OpenRouter API 키 직접 입력"
+                      accessibilityLabel={`${cloudProvider.name} API 키 직접 입력`}
                       accessibilityState={{ expanded: manualKeyOpen }}
                       disabled={controlsDisabled}
                       onPress={() => setManualKeyOpen((current) => !current)}
@@ -299,8 +391,10 @@ export function GuardianSettingsModal({
                     </Pressable>
                     {manualKeyOpen ? (
                       <View style={styles.manualKeyEditor}>
-                        <Text style={styles.manualKeyHelp}>새 키의 전체 문자열은 생성 직후 한 번만 표시됩니다. 기존 마스킹 키는 복구할 수 없어 새로 만들어야 합니다.</Text>
-                        <Pressable
+                        <Text style={styles.manualKeyHelp}>{cloudProvider.id === 'openRouter'
+                          ? '새 키의 전체 문자열은 생성 직후 한 번만 표시됩니다. 기존 마스킹 키는 복구할 수 없어 새로 만들어야 합니다.'
+                          : `${cloudProvider.name}에서 발급한 전체 API 키를 입력하세요.`}</Text>
+                        {cloudProvider.id === 'openRouter' ? <Pressable
                           accessibilityRole="link"
                           accessibilityLabel="OpenRouter API 키 만들기 페이지 열기"
                           onPress={() => void Linking.openURL('https://openrouter.ai/keys').catch(() => undefined)}
@@ -308,15 +402,15 @@ export function GuardianSettingsModal({
                         >
                           <Ionicons name="open-outline" size={16} color={colors.tealDark} />
                           <Text style={styles.keyPageLinkText}>OpenRouter에서 새 키 만들기</Text>
-                        </Pressable>
+                        </Pressable> : null}
                         <Text style={styles.fieldLabel}>전체 API 키</Text>
                         <View style={styles.apiKeyInputRow}>
                           <TextInput
                             value={manualApiKey}
                             onChangeText={setManualApiKey}
-                            placeholder="sk-or-v1-…"
+                            placeholder={cloudProvider.id === 'openRouter' ? 'sk-or-v1-…' : 'API Key'}
                             placeholderTextColor={colors.inkMuted}
-                            accessibilityLabel="OpenRouter 전체 API 키"
+                            accessibilityLabel={`${cloudProvider.name} 전체 API 키`}
                             autoCapitalize="none"
                             autoComplete="off"
                             autoCorrect={false}
@@ -340,9 +434,9 @@ export function GuardianSettingsModal({
                         <Pressable
                           accessibilityRole="button"
                           accessibilityLabel="OpenRouter API 키 확인 후 저장"
-                          disabled={controlsDisabled || manualApiKey.trim().length < 24}
+                          disabled={controlsDisabled || !manualApiKey.trim()}
                           onPress={() => void submitManualApiKey()}
-                          style={[styles.manualKeySaveButton, (controlsDisabled || manualApiKey.trim().length < 24) && styles.disabled]}
+                          style={[styles.manualKeySaveButton, (controlsDisabled || !manualApiKey.trim()) && styles.disabled]}
                         >
                           {openRouterBusy ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="shield-checkmark-outline" size={18} color="#FFFFFF" />}
                           <Text style={styles.manualKeySaveText}>키 확인 후 안전하게 저장</Text>
@@ -358,7 +452,7 @@ export function GuardianSettingsModal({
                       <Text style={styles.fieldLabel}>클라우드 모델</Text>
                       <Pressable
                         accessibilityRole="button"
-                        accessibilityLabel="OpenRouter 모델 목록 새로고침"
+                        accessibilityLabel={`${cloudProvider.name} 모델 목록 새로고침`}
                         disabled={controlsDisabled}
                         onPress={onRefreshOpenRouterModels}
                         style={styles.inlineRefreshButton}
@@ -369,15 +463,15 @@ export function GuardianSettingsModal({
                     </View>
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel="OpenRouter 모델 선택 목록 열기"
+                      accessibilityLabel={`${cloudProvider.name} 모델 선택 목록 열기`}
                       accessibilityState={{ expanded: modelPickerOpen }}
                       disabled={controlsDisabled || !openRouterModels.length}
                       onPress={() => setModelPickerOpen((current) => !current)}
                       style={[styles.modelPicker, (controlsDisabled || !openRouterModels.length) && styles.disabled]}
                     >
                       <View style={styles.modelCopy}>
-                        <Text style={styles.modelName} numberOfLines={2}>{selectedOpenRouterModel?.name || draft.openRouterModelId}</Text>
-                        <Text style={styles.modelMeta}>{selectedOpenRouterModel?.free ? '무료 모델' : 'OpenRouter 사용량에 따라 과금'}</Text>
+                        <Text style={styles.modelName} numberOfLines={2}>{selectedOpenRouterModel?.name || draft.cloudModelId || '모델을 선택해 주세요'}</Text>
+                        <Text style={styles.modelMeta}>{selectedOpenRouterModel?.free ? '무료 또는 로컬 모델' : `${cloudProvider.name} 정책에 따라 과금될 수 있음`}</Text>
                       </View>
                       {selectedOpenRouterModel?.free ? <Text style={styles.freeBadge}>무료</Text> : null}
                       <Ionicons name={modelPickerOpen ? 'chevron-up' : 'chevron-down'} size={18} color={colors.inkMuted} />
@@ -385,7 +479,7 @@ export function GuardianSettingsModal({
                     {modelPickerOpen ? (
                       <View style={styles.cloudModelList}>
                         {openRouterModels.slice(0, 40).map((model) => {
-                          const active = model.id === draft.openRouterModelId;
+                          const active = model.id === draft.cloudModelId;
                           return (
                             <Pressable
                               key={model.id}
@@ -411,7 +505,7 @@ export function GuardianSettingsModal({
                 ) : null}
                 <View style={styles.cloudPrivacyNote}>
                   <Ionicons name="shield-checkmark-outline" size={18} color={colors.blue} />
-                  <Text style={styles.cloudPrivacyText}>클라우드 모드에서는 지킴이 규칙, 대화 내용과 필요한 웹 검색 자료가 OpenRouter 및 선택 모델 제공자에게 전송됩니다. API 키는 기기 보안 저장소에만 보관됩니다.</Text>
+                  <Text style={styles.cloudPrivacyText}>API 모드에서는 지킴이 규칙, 대화 내용과 필요한 웹 검색 자료가 {cloudProvider.name} 서버로 전송됩니다. API 키는 기기 보안 저장소에만 보관됩니다.</Text>
                 </View>
               </View>
             ) : null}
@@ -625,6 +719,15 @@ const styles = StyleSheet.create({
   engineTitle: { color: colors.ink, fontSize: type.body, fontWeight: '900' },
   engineDetail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 17 },
   cloudPanel: { marginTop: spacing.md, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, gap: spacing.md },
+  providerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  providerOption: { minHeight: 38, paddingHorizontal: spacing.sm, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.canvas, alignItems: 'center', justifyContent: 'center' },
+  providerOptionActive: { borderColor: colors.teal, backgroundColor: colors.surfaceSoft },
+  providerOptionText: { color: colors.inkSoft, fontSize: type.small, fontWeight: '800' },
+  providerOptionTextActive: { color: colors.tealDark },
+  providerFields: { padding: spacing.md, borderRadius: radius.md, backgroundColor: colors.canvas, gap: spacing.sm },
+  fieldHelp: { color: colors.inkMuted, fontSize: type.tiny, lineHeight: 16 },
+  secondarySaveButton: { minHeight: 42, borderRadius: radius.md, borderWidth: 1, borderColor: colors.teal, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  secondarySaveText: { color: colors.tealDark, fontSize: type.small, fontWeight: '900' },
   connectionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   connectionDot: { width: 10, height: 10, borderRadius: radius.pill, backgroundColor: colors.inkMuted },
   connectionDotActive: { backgroundColor: colors.success },

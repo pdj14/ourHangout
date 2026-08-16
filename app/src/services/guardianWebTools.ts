@@ -97,7 +97,10 @@ export function normalizeGuardianWebToolCall(
 
 export function parseGuardianWebToolCall(value: string): GuardianWebToolCall | null {
   const match = value.match(TOOL_CALL_PATTERN);
-  const candidate = match?.[1] || value.trim();
+  const candidate = (match?.[1] || value.trim())
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
   if (!candidate.startsWith('{') || !candidate.endsWith('}')) return null;
   try {
     const parsed = JSON.parse(candidate) as { name?: unknown; arguments?: unknown };
