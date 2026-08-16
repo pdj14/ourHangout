@@ -7,12 +7,20 @@ import {
   type GuardianCloudConversationMessage,
 } from './guardianCloudProvider';
 import {
+  containsGuardianModelControlToken,
+  containsGuardianWebToolCall,
   executeGuardianWebTool,
+  GUARDIAN_WEB_TOOL_RESPONSE_FALLBACK,
   GUARDIAN_WEB_TOOL_DEFINITIONS,
   normalizeGuardianWebToolCall,
   parseGuardianWebToolCall,
+  sanitizeGuardianVisibleContent,
   webToolsAvailable,
 } from './guardianWebTools';
+import {
+  buildGuardianWebSearchQuery,
+  shouldSearchGuardianWeb,
+} from './guardianWebSearchPolicy';
 
 type GuardianCompletionCallbacks = {
   onPartial: (content: string) => void;
@@ -21,14 +29,10 @@ type GuardianCompletionCallbacks = {
   shouldStop?: () => boolean;
 };
 
-const MAX_TOOL_CALLS = 2;
+const MAX_TOOL_CALLS = 3;
+const MAX_CLOUD_COMPLETION_ROUNDS = 5;
 const MAX_COMPLETION_ATTEMPTS = 7;
-const TOOL_CALL_HINT_PATTERN = /<\/?tool_call>|\"name\"\s*:\s*\"(?:web_search|open_url)\"/i;
-const EXPLICIT_WEB_PATTERN = /검색|찾아\s*봐|찾아\s*줘|알아\s*봐|확인해\s*줘|웹에서|인터넷에서|최신|최근|실시간/i;
-const CURRENT_INFO_PATTERN = /오늘|내일|이번\s*주|현재|지금|뉴스|날씨|기온|미세먼지|환율|주가|시세|가격|요금|일정|시간표|운영\s*시간|영업\s*시간|교통|출시|업데이트|선거|대통령|대표|ceo/i;
-const FACT_QUESTION_PATTERN = /누구|언제|어디|얼마|몇\s*(?:시|명|개|살|년)|무엇|뭐야|정보|사실|알려\s*줘|설명해\s*줘/i;
-const PERSONAL_SUPPORT_PATTERN = /내\s*(?:마음|기분|고민|생각)|오늘\s*(?:내게\s*)?있었던\s*일|하루를?\s*정리|속상|외로|우울|불안|싸웠|관계|위로|조언|어떻게\s*말/i;
-const UNCERTAIN_PATTERN = /모르|알\s*수\s*없|확실하지|정보가\s*없|확인할\s*수\s*없|추측|잘\s*알지\s*못|don't\s+know|do\s+not\s+know|not\s+sure|cannot\s+(?:confirm|verify|tell)|unable\s+to\s+(?:confirm|verify)/i;
+const UNCERTAIN_PATTERN = /모르|알\s*수\s*없|확실하지|정보가\s*없|(?:확인|조회|검색)할\s*수\s*없|기능이\s*없|추측|잘\s*알지\s*못|don't\s+know|do\s+not\s+know|not\s+sure|cannot\s+(?:confirm|verify|tell|search|browse)|unable\s+to\s+(?:confirm|verify|search|browse)/i;
 
 function internalMessage(role: OnDeviceChatMessage['role'], content: string): OnDeviceChatMessage {
   return {
@@ -47,14 +51,14 @@ function isKoreanAnswer(value: string) {
 
 function canRevealPartial(value: string) {
   const normalized = value.trimStart();
-  if (!normalized || normalized.startsWith('<') || normalized.startsWith('{')) return false;
+  if (
+    !normalized
+    || normalized.startsWith('<')
+    || normalized.startsWith('{')
+    || containsGuardianModelControlToken(value)
+    || containsGuardianWebToolCall(value)
+  ) return false;
   return normalized.length >= 12 && isKoreanAnswer(normalized.slice(0, 180));
-}
-
-function shouldSearchBeforeAnswer(question: string) {
-  if (EXPLICIT_WEB_PATTERN.test(question)) return true;
-  if (PERSONAL_SUPPORT_PATTERN.test(question)) return false;
-  return CURRENT_INFO_PATTERN.test(question) || FACT_QUESTION_PATTERN.test(question);
 }
 
 function looksUncertain(value: string) {
@@ -73,6 +77,8 @@ export async function completeGuardianConversation(
   let automaticSearchUsed = false;
   let languageRetryUsed = false;
   let uncertaintyRetryUsed = false;
+  let controlTokenRetryUsed = false;
+  const webToolResultCache = new Map<string, string>();
 
   const appendWebResult = (result: string, assistantToolCall?: string) => {
     workingMessages = [
@@ -86,6 +92,14 @@ export async function completeGuardianConversation(
   };
 
   const runWebTool = async (call: Parameters<typeof executeGuardianWebTool>[0]) => {
+    const cacheKey = call.name === 'web_search'
+      ? `search:${call.arguments.query.replace(/\s+/g, ' ').trim().toLowerCase()}`
+      : `url:${call.arguments.url.trim().toLowerCase()}`;
+    const cached = webToolResultCache.get(cacheKey);
+    if (cached) {
+      callbacks.onStatus(`${profile.name}가 앞서 확인한 웹 자료를 다시 사용하고 있어요.`);
+      return cached;
+    }
     callbacks.onStatus(
       call.name === 'web_search'
         ? `${profile.name}가 웹에서 관련 정보를 찾고 있어요.`
@@ -93,20 +107,27 @@ export async function completeGuardianConversation(
     );
     toolCallsUsed += 1;
     try {
-      return await executeGuardianWebTool(call);
+      const result = await executeGuardianWebTool(call);
+      webToolResultCache.set(cacheKey, result);
+      return result;
     } catch (error) {
       if (callbacks.shouldStop?.()) throw new Error('답변 생성을 중지했어요.');
       const message = error instanceof Error ? error.message : String(error || '알 수 없는 오류');
-      return `웹 도구 실패: ${message}`;
+      const failure = `웹 도구 실패: ${message}`;
+      webToolResultCache.set(cacheKey, failure);
+      return failure;
     }
   };
 
   if (
     allowWeb
     && originalQuestion
-    && shouldSearchBeforeAnswer(originalQuestion)
+    && shouldSearchGuardianWeb(originalQuestion)
   ) {
-    const result = await runWebTool({ name: 'web_search', arguments: { query: originalQuestion } });
+    const result = await runWebTool({
+      name: 'web_search',
+      arguments: { query: buildGuardianWebSearchQuery(originalQuestion) },
+    });
     automaticSearchUsed = true;
     appendWebResult(result);
     callbacks.onStatus(`${profile.name}가 검색 결과를 바탕으로 답변을 준비하고 있어요.`);
@@ -119,7 +140,7 @@ export async function completeGuardianConversation(
       content: message.content,
     }));
 
-    for (let round = 0; round <= MAX_TOOL_CALLS; round += 1) {
+    for (let round = 0; round < MAX_CLOUD_COMPLETION_ROUNDS; round += 1) {
       if (callbacks.shouldStop?.()) throw new Error('답변 생성을 중지했어요.');
       const canUseAnotherTool = allowWeb && toolCallsUsed < MAX_TOOL_CALLS;
       callbacks.onStatus(
@@ -138,7 +159,11 @@ export async function completeGuardianConversation(
         {
           onPartial: (partial) => {
             const normalized = partial.trimStart();
-            if (TOOL_CALL_HINT_PATTERN.test(partial) || normalized.startsWith('{')) return;
+            if (
+              containsGuardianWebToolCall(partial)
+              || containsGuardianModelControlToken(partial)
+              || normalized.startsWith('{')
+            ) return;
             callbacks.onPartial(partial);
           },
           onModel: callbacks.onModel,
@@ -151,7 +176,58 @@ export async function completeGuardianConversation(
       const textToolCall = !result.toolCalls.length && canUseAnotherTool
         ? parseGuardianWebToolCall(result.content)
         : null;
-      if (!result.toolCalls.length && !textToolCall) return result.content;
+      if (!result.toolCalls.length && !textToolCall) {
+        if (containsGuardianModelControlToken(result.content)) {
+          callbacks.onPartial('');
+          if (!controlTokenRetryUsed) {
+            controlTokenRetryUsed = true;
+            cloudMessages = [
+              ...cloudMessages,
+              {
+                role: 'user',
+                content: '방금 출력에는 모델 제어 토큰이 섞여 있어 사용자에게 보여줄 수 없습니다. <pad> 같은 특수 토큰, XML, JSON 없이 확인한 자료를 바탕으로 자연스러운 한국어 최종 답변만 작성하세요.',
+              },
+            ];
+            callbacks.onStatus(`${profile.name}가 비정상 제어 문구를 제거하고 답변을 다시 작성하고 있어요.`);
+            continue;
+          }
+          return GUARDIAN_WEB_TOOL_RESPONSE_FALLBACK;
+        }
+        if (containsGuardianWebToolCall(result.content)) {
+          callbacks.onPartial('');
+          cloudMessages = [
+            ...cloudMessages,
+            { role: 'assistant', content: result.content || null },
+            {
+              role: 'user',
+              content: canUseAnotherTool
+                ? '도구 호출 형식이 올바르지 않습니다. 제공된 함수 도구를 사용하거나, 충분한 자료가 있다면 도구 문구 없이 한국어 최종 답변만 작성하세요.'
+                : '웹 확인은 끝났습니다. 함수 호출, XML, JSON을 출력하지 말고 이미 확인한 자료로 자연스러운 한국어 최종 답변만 작성하세요.',
+            },
+          ];
+          callbacks.onStatus(`${profile.name}가 도구 문구를 숨기고 최종 답변을 다시 정리하고 있어요.`);
+          continue;
+        }
+        if (
+          automaticSearchUsed
+          && !uncertaintyRetryUsed
+          && looksUncertain(result.content)
+        ) {
+          uncertaintyRetryUsed = true;
+          callbacks.onPartial('');
+          cloudMessages = [
+            ...cloudMessages,
+            { role: 'assistant', content: result.content || null },
+            {
+              role: 'user',
+              content: '앱이 이미 실행한 [웹 도구 결과]가 대화에 포함되어 있습니다. 웹 기능이 없다고 답하지 말고, 그 결과의 제목과 본문에서 질문에 필요한 최신 값을 찾아 짧고 자연스러운 한국어 최종 답변으로 다시 작성하세요. 결과에 없는 값은 만들지 마세요.',
+            },
+          ];
+          callbacks.onStatus(`${profile.name}가 이미 확인한 검색 결과에서 필요한 값을 다시 읽고 있어요.`);
+          continue;
+        }
+        return sanitizeGuardianVisibleContent(result.content);
+      }
 
       // 일부 제공자가 도구 호출 직전에 짧은 문장을 보낼 수 있으므로 임시 문구를 지웁니다.
       callbacks.onPartial('');
@@ -200,7 +276,7 @@ export async function completeGuardianConversation(
       callbacks.onStatus(`${profile.name}가 웹에서 확인한 내용을 정리하고 있어요.`);
     }
 
-    const fallback = '웹에서 확인한 내용을 답변으로 정리하지 못했어요. 잠시 후 다시 시도해 주세요.';
+    const fallback = GUARDIAN_WEB_TOOL_RESPONSE_FALLBACK;
     callbacks.onPartial(fallback);
     return fallback;
   }
@@ -217,6 +293,11 @@ export async function completeGuardianConversation(
     const finalText = await onDeviceAiEngine.complete(
       workingMessages,
       (partial) => {
+        if (
+          containsGuardianWebToolCall(partial)
+          || containsGuardianModelControlToken(partial)
+          || partial.trimStart().startsWith('{')
+        ) return;
         if (!revealed && canRevealPartial(partial)) revealed = true;
         if (revealed) callbacks.onPartial(partial);
       },
@@ -229,7 +310,20 @@ export async function completeGuardianConversation(
     const toolCall = canUseAnotherTool
       ? parseGuardianWebToolCall(finalText)
       : null;
-    const containsToolCall = TOOL_CALL_HINT_PATTERN.test(finalText);
+    const containsToolCall = containsGuardianWebToolCall(finalText);
+    if (containsGuardianModelControlToken(finalText)) {
+      if (!controlTokenRetryUsed) {
+        controlTokenRetryUsed = true;
+        workingMessages = [
+          ...workingMessages,
+          internalMessage('user', '특수 제어 토큰 없이 자연스러운 한국어 최종 답변만 다시 작성하세요.'),
+        ];
+        callbacks.onStatus(`${profile.name}가 비정상 제어 문구를 제거하고 답변을 다시 작성하고 있어요.`);
+        continue;
+      }
+      callbacks.onPartial(GUARDIAN_WEB_TOOL_RESPONSE_FALLBACK);
+      return GUARDIAN_WEB_TOOL_RESPONSE_FALLBACK;
+    }
     const malformedToolCall = canUseAnotherTool
       && containsToolCall
       && !toolCall;
@@ -260,7 +354,10 @@ export async function completeGuardianConversation(
     if (!toolCall) {
       if (canUseAnotherTool && !uncertaintyRetryUsed && looksUncertain(finalText)) {
         uncertaintyRetryUsed = true;
-        const result = await runWebTool({ name: 'web_search', arguments: { query: originalQuestion } });
+        const result = await runWebTool({
+          name: 'web_search',
+          arguments: { query: buildGuardianWebSearchQuery(originalQuestion) },
+        });
         appendWebResult(result, finalText);
         callbacks.onStatus(`${profile.name}가 몰랐던 내용을 웹에서 확인해 다시 답변하고 있어요.`);
         continue;
@@ -275,8 +372,9 @@ export async function completeGuardianConversation(
         callbacks.onStatus(`${profile.name}가 답변을 한국어로 다듬고 있어요.`);
         continue;
       }
-      callbacks.onPartial(finalText);
-      return finalText;
+      const visibleText = sanitizeGuardianVisibleContent(finalText);
+      callbacks.onPartial(visibleText);
+      return visibleText;
     }
 
     const result = await runWebTool(toolCall);

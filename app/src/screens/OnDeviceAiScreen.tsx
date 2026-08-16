@@ -37,7 +37,10 @@ import {
   type OnDeviceChatMessage,
   type OnDeviceModelLoadProgress,
 } from '../services/onDeviceAi';
-import { cancelGuardianWebTool } from '../services/guardianWebTools';
+import {
+  cancelGuardianWebTool,
+  sanitizeGuardianVisibleContent,
+} from '../services/guardianWebTools';
 import {
   createGuardianConversationRoom,
   readGuardianConversationStore,
@@ -803,6 +806,9 @@ export function OnDeviceAiScreen() {
         scrollEventThrottle={32}
         renderItem={({ item }) => {
           const user = item.role === 'user';
+          const visibleContent = user
+            ? item.content
+            : sanitizeGuardianVisibleContent(item.content);
           return (
             <View style={[styles.messageRow, user && styles.userMessageRow]}>
               {!user ? (
@@ -816,7 +822,7 @@ export function OnDeviceAiScreen() {
                     ? `${guardianProfile.name} · ${displayedOpenRouterModelName}`
                     : guardianProfile.name}
                 </Text>
-                <Text style={[styles.bubbleText, user && styles.userBubbleText]}>{item.content || '…'}</Text>
+                <Text style={[styles.bubbleText, user && styles.userBubbleText]}>{visibleContent || '…'}</Text>
               </View>
             </View>
           );
