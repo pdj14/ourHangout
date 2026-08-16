@@ -640,7 +640,7 @@ export function OnDeviceAiScreen() {
       });
       const next = [
         ...baseMessages,
-        { ...assistantMessage, content: finalText || '생각을 잠시 멈췄어요.' },
+        { ...assistantMessage, content: finalText || '답변 본문을 만들지 못했어요. 다시 시도해 주세요.' },
       ];
       commitMessages(next);
       setPhase('ready');

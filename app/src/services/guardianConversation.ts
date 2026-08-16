@@ -78,6 +78,7 @@ export async function completeGuardianConversation(
   let languageRetryUsed = false;
   let uncertaintyRetryUsed = false;
   let controlTokenRetryUsed = false;
+  let emptyResponseRetryUsed = false;
   const webToolResultCache = new Map<string, string>();
 
   const appendWebResult = (result: string, assistantToolCall?: string) => {
@@ -302,10 +303,27 @@ export async function completeGuardianConversation(
         if (revealed) callbacks.onPartial(partial);
       },
       {
-        maxTokens: languageRetryUsed ? 192 : toolCallsUsed > 0 ? 288 : undefined,
+        maxTokens: languageRetryUsed ? 512 : toolCallsUsed > 0 ? 640 : undefined,
         systemPrompt,
       }
     );
+
+    if (!finalText.trim()) {
+      if (!emptyResponseRetryUsed) {
+        emptyResponseRetryUsed = true;
+        const latestContext = workingMessages.at(-1)?.content || originalQuestion;
+        workingMessages = [
+          ...workingMessages,
+          internalMessage(
+            'user',
+            `내부 사고 과정은 생략하고 핵심부터 간결한 한국어 최종 답변을 작성하세요. 천천히 처리해도 좋지만 반드시 답변 본문을 완성하세요.\n\n${latestContext}`
+          ),
+        ];
+        callbacks.onStatus(`${profile.name}가 확인한 자료를 유지한 채 답변을 다시 이어가고 있어요.`);
+        continue;
+      }
+      throw new Error('온디바이스 모델이 답변 본문을 만들지 못했어요. 다시 시도해 주세요.');
+    }
 
     const toolCall = canUseAnotherTool
       ? parseGuardianWebToolCall(finalText)
@@ -364,10 +382,13 @@ export async function completeGuardianConversation(
       }
       if (!isKoreanAnswer(finalText) && !languageRetryUsed) {
         languageRetryUsed = true;
+        const latestContext = workingMessages.at(-1)?.content || originalQuestion;
         workingMessages = [
           ...workingMessages,
-          internalMessage('assistant', finalText),
-          internalMessage('user', '방금 답변을 사용자에게 보여주지 말고, 같은 내용을 자연스러운 한국어로만 다시 작성하세요.'),
+          internalMessage(
+            'user',
+            `방금 답변을 사용자에게 보여주지 말고, 내부 사고 과정 없이 같은 내용을 자연스러운 한국어로만 다시 작성하세요.\n\n${latestContext}`
+          ),
         ];
         callbacks.onStatus(`${profile.name}가 답변을 한국어로 다듬고 있어요.`);
         continue;

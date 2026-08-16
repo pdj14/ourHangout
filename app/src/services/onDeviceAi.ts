@@ -186,6 +186,7 @@ class OnDeviceAiEngine {
     this.generating = true;
     let visibleContent = '';
     let lastEmittedAt = 0;
+    const maxPredictTokens = this.contextSize <= 1024 ? 320 : 640;
     try {
       const result = await context.completion(
         {
@@ -196,7 +197,7 @@ class OnDeviceAiEngine {
           n_predict: Math.max(
             64,
             Math.min(
-              this.contextSize <= 1024 ? 256 : 384,
+              maxPredictTokens,
               Math.floor(options.maxTokens || Number.POSITIVE_INFINITY)
             )
           ),
