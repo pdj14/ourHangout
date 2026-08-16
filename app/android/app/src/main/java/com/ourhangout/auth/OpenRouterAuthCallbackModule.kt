@@ -37,11 +37,11 @@ class OpenRouterAuthCallbackModule(
         val nonceBytes = ByteArray(24).also { SecureRandom().nextBytes(it) }
         val nonce = Base64.encodeToString(nonceBytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         callbackPath = "/openrouter-callback/$nonce"
-        server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        server = ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"))
         activeServer = server
       }
 
-      Thread({ serveSingleCallback(server, callbackPath) }, "OpenRouterAuthCallback").apply {
+      Thread({ serveCallbacksUntilStopped(server, callbackPath) }, "OpenRouterAuthCallback").apply {
         isDaemon = true
         start()
       }
@@ -66,16 +66,18 @@ class OpenRouterAuthCallbackModule(
     super.invalidate()
   }
 
-  private fun serveSingleCallback(server: ServerSocket, callbackPath: String) {
+  private fun serveCallbacksUntilStopped(server: ServerSocket, callbackPath: String) {
     try {
-      server.accept().use { socket ->
-        socket.soTimeout = SOCKET_READ_TIMEOUT_MS
-        val requestLine = readRequestLine(socket)
-        val redirectUri = buildAppRedirect(requestLine, callbackPath)
-        if (redirectUri == null) {
-          writeResponse(socket, "400 Bad Request", null, "잘못된 OpenRouter 인증 요청입니다.")
-        } else {
-          writeResponse(socket, "302 Found", redirectUri, "OurHangout 앱으로 돌아갑니다.")
+      while (!server.isClosed) {
+        server.accept().use { socket ->
+          socket.soTimeout = SOCKET_READ_TIMEOUT_MS
+          val requestLine = readRequestLine(socket)
+          val redirectUri = buildAppRedirect(requestLine, callbackPath)
+          if (redirectUri == null) {
+            writeResponse(socket, "400 Bad Request", null, "잘못된 OpenRouter 인증 요청입니다.")
+          } else {
+            writeResponse(socket, "302 Found", redirectUri, "OurHangout 앱으로 돌아갑니다.")
+          }
         }
       }
     } catch (_: Exception) {

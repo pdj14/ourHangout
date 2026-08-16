@@ -8,7 +8,7 @@ import { buildOpenRouterHeaders, OPENROUTER_API_URL } from './openRouterConfig';
 const OPENROUTER_AUTH_URL = 'https://openrouter.ai/auth';
 const OPENROUTER_KEY_URL = `${OPENROUTER_API_URL}/auth/keys`;
 const OPENROUTER_CURRENT_KEY_URL = `${OPENROUTER_API_URL}/key`;
-const OPENROUTER_KEY_STORAGE = 'guardian:openrouter_api_key_v1';
+const OPENROUTER_KEY_STORAGE = 'guardian.openrouter_api_key_v1';
 const KEY_EXCHANGE_TIMEOUT_MS = 20_000;
 export const OPENROUTER_REDIRECT_URI = 'ourhangout://openrouter-callback';
 
@@ -70,9 +70,13 @@ async function storeOpenRouterApiKey(key: string) {
   if (!(await SecureStore.isAvailableAsync())) {
     throw new OpenRouterAuthError('이 기기에서는 보안 저장소를 사용할 수 없어요.', 'storage');
   }
-  await SecureStore.setItemAsync(OPENROUTER_KEY_STORAGE, key, {
-    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-  });
+  try {
+    await SecureStore.setItemAsync(OPENROUTER_KEY_STORAGE, key, {
+      keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    });
+  } catch {
+    throw new OpenRouterAuthError('OpenRouter 키를 기기 보안 저장소에 저장하지 못했어요.', 'storage');
+  }
 }
 
 async function requestKeyMetadata(key: string): Promise<OpenRouterKeyMetadata> {
@@ -124,7 +128,11 @@ export async function getOpenRouterApiKey() {
   if (!(await SecureStore.isAvailableAsync())) {
     throw authError('이 기기에서는 보안 저장소를 사용할 수 없어요.');
   }
-  return SecureStore.getItemAsync(OPENROUTER_KEY_STORAGE);
+  try {
+    return await SecureStore.getItemAsync(OPENROUTER_KEY_STORAGE);
+  } catch {
+    throw new OpenRouterAuthError('OpenRouter 연결 정보를 기기 보안 저장소에서 읽지 못했어요.', 'storage');
+  }
 }
 
 export async function hasOpenRouterConnection() {
@@ -219,6 +227,6 @@ export async function connectOpenRouter(): Promise<OpenRouterAuthResult> {
 
 export async function disconnectOpenRouter() {
   if (await SecureStore.isAvailableAsync()) {
-    await SecureStore.deleteItemAsync(OPENROUTER_KEY_STORAGE);
+    await SecureStore.deleteItemAsync(OPENROUTER_KEY_STORAGE).catch(() => undefined);
   }
 }
