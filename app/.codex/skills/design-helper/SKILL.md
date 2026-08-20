@@ -47,7 +47,8 @@ Read [document-quality-checklist.md](references/document-quality-checklist.md) f
 ## Coordinate presentation work
 
 - Design Helper may style and critique presentations as part of its broad visual-design role.
-- When presentation-design is enabled, let it govern real-screen evidence, brand-template fidelity, slide-type layout contracts, presentation-specific constraints, and rendered thumbnail QA.
+- Never improve a presentation by flattening editable text, shapes, tables, or charts into a slide-sized image or HTML render.
+- When presentation-design is enabled, let it govern workflow selection, native DrawingML editability, Korean presentation typography, real-screen evidence, brand-template fidelity, slide-type layout contracts, Geometry QA, package integrity, and rendered thumbnail QA.
 - Continue to govern visual direction, typography, hierarchy, composition quality, and anti-generic polish without weakening presentation-design's hard gates.
 
 ## Review with evidence

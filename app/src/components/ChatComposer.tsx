@@ -84,7 +84,7 @@ export const ChatComposer = forwardRef<TextInput, ChatComposerProps>(function Ch
               <Text style={styles.menuLabel}>{option.label}</Text>
             </Pressable>
           )) : (
-            <Text style={styles.unsupportedText}>{capabilityHint || '\uD604\uC7AC \uBAA8\uB378\uC740 \uBBF8\uB514\uC5B4 \uC785\uB825\uC744 \uC9C0\uC6D0\uD558\uC9C0 \uC54A\uC544\uC694.'}</Text>
+            <Text style={styles.unsupportedText}>{capabilityHint || '현재 지킴이는 글로만 대화할 수 있어요.'}</Text>
           )}
         </View>
       ) : null}
@@ -152,7 +152,6 @@ export const ChatComposer = forwardRef<TextInput, ChatComposerProps>(function Ch
           )}
         </Pressable>
       </View>
-      {capabilityHint && !menuOpen ? <Text style={styles.capabilityHint}>{capabilityHint}</Text> : null}
     </View>
   );
 });
@@ -176,5 +175,4 @@ const styles = StyleSheet.create({
   previewStatus: { color: colors.inkMuted, fontSize: type.tiny, marginTop: 2 },
   failedText: { color: colors.coral },
   previewAction: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  capabilityHint: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xs, color: colors.inkMuted, fontSize: type.tiny },
 });

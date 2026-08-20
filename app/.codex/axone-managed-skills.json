@@ -33,6 +33,44 @@
       ]
     },
     {
+      "id": "playwright-browser",
+      "precedence": 40,
+      "mode": "optional",
+      "userEditable": false,
+      "influences": [
+        {
+          "name": "Playwright MCP",
+          "contribution": "Managed browser tool usage and recovery boundaries.",
+          "url": "https://github.com/microsoft/playwright-mcp"
+        },
+        {
+          "name": "Currents Playwright Best Practices",
+          "contribution": "Progressive Playwright reliability and specialized-testing guidance.",
+          "url": "https://github.com/currents-dev/playwright-best-practices-skill"
+        },
+        {
+          "name": "TestDino Playwright Skill",
+          "contribution": "Modular test architecture, CI, POM, and migration practices.",
+          "url": "https://github.com/testdino-hq/playwright-skill"
+        },
+        {
+          "name": "Microsoft Playwright CLI",
+          "contribution": "Token-bounded snapshots, sessions, tracing, and diagnostic workflow concepts without adopting a second runtime.",
+          "url": "https://github.com/microsoft/playwright-cli"
+        },
+        {
+          "name": "Lackey Playwright Skill",
+          "contribution": "Reusable dynamic automation and safe script-execution patterns.",
+          "url": "https://github.com/lackeyjb/playwright-skill"
+        },
+        {
+          "name": "Qualiow Playwright Skills",
+          "contribution": "Project-aware suite conventions, planning, and debugging decision trees.",
+          "url": "https://github.com/willcoliveira/qualiow-playwright-skills"
+        }
+      ]
+    },
+    {
       "id": "design-helper",
       "precedence": 50,
       "mode": "optional",

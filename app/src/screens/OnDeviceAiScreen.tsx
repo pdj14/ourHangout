@@ -61,7 +61,6 @@ import {
 import {
   disconnectGuardianCloudProvider,
   fetchGuardianCloudModels,
-  formatGuardianCloudModelName,
   getGuardianCloudProvider,
   hasGuardianCloudConnection,
   importGuardianCloudApiKey,
@@ -69,7 +68,6 @@ import {
 } from '../services/guardianCloudProvider';
 import { colors, radius, spacing, type } from '../theme';
 import { pickChatAttachment } from '../services/chatAttachments';
-import { modalityLabel } from '../services/modelCapabilities';
 import type { AttachmentDraft, ChatAttachment, ChatMediaKind } from '../types';
 
 const guardianMascot = require('../../assets/forest-guardian.png');
@@ -128,7 +126,6 @@ export function OnDeviceAiScreen() {
   const [openRouterBusy, setOpenRouterBusy] = useState(false);
   const [openRouterMessage, setOpenRouterMessage] = useState('');
   const [openRouterModels, setOpenRouterModels] = useState<GuardianCloudModel[]>([]);
-  const [activeOpenRouterModelId, setActiveOpenRouterModelId] = useState(DEFAULT_GUARDIAN_PROFILE.cloudModelId);
   const [retryState, setRetryState] = useState<RetryState | null>(null);
   const mountedRef = useRef(true);
   const messagesRef = useRef<OnDeviceChatMessage[]>([]);
@@ -166,11 +163,9 @@ export function OnDeviceAiScreen() {
       (modality): modality is ChatMediaKind => modality === 'image' || modality === 'video' || modality === 'audio'
     );
   }, [guardianProfile.aiEngineType, selectedCloudModel]);
-  const capabilityHint = guardianProfile.aiEngineType !== 'openRouter'
-    ? '\uC628\uB514\uBC14\uC774\uC2A4 \uBAA8\uB378\uC740 \uD604\uC7AC \uD14D\uC2A4\uD2B8 \uC785\uB825\uB9CC \uC9C0\uC6D0\uD574\uC694.'
-    : selectedCloudModel
-      ? `\uC785\uB825: ${selectedCloudModel.inputModalities.map(modalityLabel).join(', ')} \u00B7 \uCD9C\uB825: \uD14D\uC2A4\uD2B8`
-      : '\uBAA8\uB378 \uC815\uBCF4\uB97C \uBD88\uB7EC\uC628 \uD6C4 \uCCA8\uBD80 \uAE30\uB2A5\uC744 \uC0AC\uC6A9\uD560 \uC218 \uC788\uC5B4\uC694.';
+  const attachmentMenuHint = engineReady
+    ? '현재 지킴이는 글로만 대화할 수 있어요.'
+    : '지킴이 준비가 끝나면 첨부 기능을 사용할 수 있어요.';
   const commitConversationStore = useCallback((
     nextConversations: GuardianConversationRoom[],
     nextActiveConversationId: string
@@ -289,7 +284,6 @@ export function OnDeviceAiScreen() {
         await AsyncStorage.removeItem(LEGACY_SELECTED_PROJECTOR_KEY);
         if (!mountedRef.current) return;
         setGuardianProfile(storedGuardianProfile);
-        setActiveOpenRouterModelId(storedGuardianProfile.cloudModelId);
         setOpenRouterConnected(connected);
         conversationsRef.current = conversationStore.conversations;
         activeConversationIdRef.current = conversationStore.activeConversationId;
@@ -306,8 +300,8 @@ export function OnDeviceAiScreen() {
           await onDeviceAiEngine.unload().catch(() => undefined);
           setPhase(connected ? 'ready' : 'idle');
           setStatusMessage(connected
-            ? `${storedGuardianProfile.name}가 ${getGuardianCloudProvider(storedGuardianProfile).name}에서 기다리고 있어요.`
-            : `지킴이 설정에서 ${getGuardianCloudProvider(storedGuardianProfile).name} 연결을 확인해 주세요.`);
+            ? `${storedGuardianProfile.name}가 이야기를 기다리고 있어요.`
+            : '대화를 시작하려면 지킴이 설정을 확인해 주세요.');
           if (connected) {
             try {
               const cloudModels = await fetchGuardianCloudModels(storedGuardianProfile);
@@ -323,7 +317,7 @@ export function OnDeviceAiScreen() {
                   void disconnectGuardianCloudProvider(storedGuardianProfile).catch(() => undefined);
                   setOpenRouterConnected(false);
                   setPhase('idle');
-                  setStatusMessage(`${getGuardianCloudProvider(storedGuardianProfile).name} 연결을 다시 확인해 주세요.`);
+                  setStatusMessage('대화를 시작하려면 지킴이 설정을 다시 확인해 주세요.');
                 }
                 setOpenRouterMessage(normalizeGuardianError(error));
               }
@@ -439,7 +433,7 @@ export function OnDeviceAiScreen() {
       setOpenRouterMessage('계정 연결이 완료됐어요. 모델 목록을 확인하고 있어요.');
       if (guardianProfile.aiEngineType === 'openRouter') {
         setPhase('ready');
-        setStatusMessage(`${guardianProfile.name}가 ${getGuardianCloudProvider(guardianProfile).name}에서 기다리고 있어요.`);
+        setStatusMessage(`${guardianProfile.name}가 이야기를 기다리고 있어요.`);
       }
       const cloudModels = await fetchGuardianCloudModels(guardianProfile);
       if (!mountedRef.current) return;
@@ -474,7 +468,7 @@ export function OnDeviceAiScreen() {
       setOpenRouterMessage(`연결 완료 · ${cloudModels.length}개 모델을 불러왔어요.`);
       if (guardianProfile.aiEngineType === 'openRouter') {
         setPhase('ready');
-        setStatusMessage(`${guardianProfile.name}가 ${getGuardianCloudProvider(guardianProfile).name}에서 기다리고 있어요.`);
+        setStatusMessage(`${guardianProfile.name}가 이야기를 기다리고 있어요.`);
       }
       return true;
     } catch (error) {
@@ -503,7 +497,7 @@ export function OnDeviceAiScreen() {
       setOpenRouterMessage(`이 기기에서 ${getGuardianCloudProvider(guardianProfile).name} 연결을 해제했어요.`);
       if (guardianProfile.aiEngineType === 'openRouter') {
         setPhase('idle');
-        setStatusMessage(`지킴이 설정에서 ${getGuardianCloudProvider(guardianProfile).name} 연결을 확인해 주세요.`);
+        setStatusMessage('대화를 시작하려면 지킴이 설정을 확인해 주세요.');
       }
     } finally {
       if (mountedRef.current) setOpenRouterBusy(false);
@@ -593,15 +587,14 @@ export function OnDeviceAiScreen() {
       || guardianProfile.cloudBaseUrl !== nextProfile.cloudBaseUrl;
     const saved = await writeGuardianProfile(nextProfile);
     setGuardianProfile(saved);
-    setActiveOpenRouterModelId(saved.cloudModelId);
     if (previousEngine !== saved.aiEngineType) {
       setRetryState(null);
       if (saved.aiEngineType === 'openRouter') {
         await onDeviceAiEngine.unload().catch(() => undefined);
         setPhase(openRouterConnected ? 'ready' : 'idle');
         setStatusMessage(openRouterConnected
-          ? `${saved.name}가 ${getGuardianCloudProvider(saved).name}에서 기다리고 있어요.`
-          : `${getGuardianCloudProvider(saved).name} 연결을 확인하면 바로 대화할 수 있어요.`);
+          ? `${saved.name}가 이야기를 기다리고 있어요.`
+          : '대화를 시작하려면 지킴이 설정을 확인해 주세요.');
       } else if (selectedModel) {
         await loadSelectedModel(selectedModel);
       } else {
@@ -619,8 +612,8 @@ export function OnDeviceAiScreen() {
         ? `${getGuardianCloudProvider(saved).name} 모델 목록을 새로고침해 주세요.`
         : `${getGuardianCloudProvider(saved).name} API 키 또는 서버 주소를 확인해 주세요.`);
       setStatusMessage(connected
-        ? `${saved.name}가 ${getGuardianCloudProvider(saved).name}에서 기다리고 있어요.`
-        : `${getGuardianCloudProvider(saved).name} 연결이 필요해요.`);
+        ? `${saved.name}가 이야기를 기다리고 있어요.`
+        : '대화를 시작하려면 지킴이 설정을 확인해 주세요.');
       return;
     }
     setStatusMessage(`${saved.name}의 설정을 저장했어요.`);
@@ -636,8 +629,7 @@ export function OnDeviceAiScreen() {
     commitMessages([...baseMessages, assistantMessage]);
     setPhase('generating');
     if (guardianProfile.aiEngineType === 'openRouter') {
-      setActiveOpenRouterModelId(guardianProfile.cloudModelId);
-      setStatusMessage(`${guardianProfile.name}가 ${getGuardianCloudProvider(guardianProfile).name}에 연결하고 있어요.`);
+      setStatusMessage(`${guardianProfile.name}가 답변을 준비하고 있어요.`);
     } else {
       setStatusMessage(`${guardianProfile.name}가 기기 안에서 생각하고 있어요.`);
     }
@@ -652,9 +644,6 @@ export function OnDeviceAiScreen() {
         },
         onStatus: (message) => {
           if (mountedRef.current && !stopRequestedRef.current) setStatusMessage(message);
-        },
-        onModel: (modelId) => {
-          if (mountedRef.current && !stopRequestedRef.current) setActiveOpenRouterModelId(modelId);
         },
         shouldStop: () => stopRequestedRef.current,
       });
@@ -738,25 +727,7 @@ export function OnDeviceAiScreen() {
   const activeConversation = conversations.find((room) => room.id === activeConversationId)
     ?? conversations[0]
     ?? null;
-  const displayedOpenRouterModelId = phase === 'generating'
-    ? activeOpenRouterModelId
-    : guardianProfile.cloudModelId;
-  const displayedOpenRouterModelName = formatGuardianCloudModelName(guardianProfile, displayedOpenRouterModelId, openRouterModels);
-  const cloudProviderName = getGuardianCloudProvider(guardianProfile).name;
-  const modelStateTitle = guardianProfile.aiEngineType === 'openRouter'
-    ? openRouterConnected
-      ? `${guardianProfile.name}가 클라우드에 연결되어 있어요`
-      : `${cloudProviderName} 연결을 확인해 주세요`
-    : selectedModel
-      ? phase === 'ready' || phase === 'generating'
-        ? `${guardianProfile.name}가 깨어 있어요`
-        : `${guardianProfile.name}를 준비하고 있어요`
-      : `${guardianProfile.name}의 기억을 연결해 주세요`;
-  const modelStateDetail = guardianProfile.aiEngineType === 'openRouter'
-    ? `${activeConversation?.title || '새 이야기'} · ${displayedOpenRouterModelName} · ${cloudProviderName}`
-    : selectedModel
-      ? `${activeConversation?.title || '새 이야기'} · ${selectedModel.name} · 기기 내 대화`
-      : directoryName || 'AiModels 폴더가 필요해요';
+  const showStatusRow = phase !== 'ready' || !!retryState;
 
   return (
     <ChatKeyboardLayout
@@ -796,42 +767,52 @@ export function OnDeviceAiScreen() {
         }
       />
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="지킴이 설정 열기"
-        disabled={busy}
-        onPress={() => setSettingsOpen(true)}
-        style={[styles.memoryStrip, busy && styles.disabled]}
-      >
-        <View style={[styles.stateDot, phase === 'ready' && styles.stateDotReady]} />
-        <View style={styles.memoryCopy}>
-          <Text style={styles.memoryTitle}>{modelStateTitle}</Text>
-          <Text style={styles.memoryDetail} numberOfLines={1}>{modelStateDetail}</Text>
+      <View style={styles.conversationBar}>
+        <View style={styles.conversationMark}>
+          <Ionicons name="chatbubble-ellipses-outline" size={18} color={colors.tealDark} />
         </View>
-        <Ionicons name="chevron-forward" size={18} color={colors.inkMuted} />
-      </Pressable>
-
-      <View style={styles.statusRow}>
-        {busy ? <ActivityIndicator size="small" color={colors.tealDark} /> : (
-          <Ionicons
-            name={phase === 'ready' ? 'shield-checkmark-outline' : 'information-circle-outline'}
-            size={17}
-            color={phase === 'ready' ? colors.success : colors.inkMuted}
-          />
-        )}
-        <Text style={styles.statusText} numberOfLines={2}>{statusMessage}</Text>
-        {phase === 'ready' && messages.length && !retryState ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="새 지킴이 대화 만들기" onPress={() => void createNewConversation()}>
-            <Text style={styles.clearText}>새 이야기</Text>
-          </Pressable>
-        ) : null}
-        {phase === 'ready' && retryState ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="마지막 지킴이 답변 다시 시도" onPress={() => void retryLastResponse()} style={styles.retryButton}>
-            <Ionicons name="refresh" size={15} color={colors.tealDark} />
-            <Text style={styles.retryText}>재시도</Text>
+        <View style={styles.conversationCopy}>
+          <Text style={styles.conversationEyebrow}>지금 나누는 이야기</Text>
+          <Text style={styles.conversationTitle} numberOfLines={1}>{activeConversation?.title || '새 이야기'}</Text>
+        </View>
+        {phase === 'ready' && messages.length ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="새 지킴이 대화 만들기"
+            onPress={() => void createNewConversation()}
+            style={styles.newConversationButton}
+          >
+            <Ionicons name="add" size={17} color={colors.coral} />
+            <Text style={styles.newConversationText}>새 이야기</Text>
           </Pressable>
         ) : null}
       </View>
+
+      {showStatusRow ? (
+        <View style={styles.statusRow}>
+          {busy ? <ActivityIndicator size="small" color={colors.tealDark} /> : (
+            <Ionicons name="information-circle-outline" size={17} color={colors.inkMuted} />
+          )}
+          <Text style={styles.statusText} numberOfLines={2}>{statusMessage}</Text>
+          {phase === 'idle' ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="지킴이 준비하기"
+              onPress={() => guardianProfile.aiEngineType === 'openRouter' || directoryName
+                ? setSettingsOpen(true)
+                : void pickDirectory()}
+              style={styles.statusAction}
+            >
+              <Text style={styles.statusActionText}>준비하기</Text>
+            </Pressable>
+          ) : phase === 'ready' && retryState ? (
+            <Pressable accessibilityRole="button" accessibilityLabel="마지막 지킴이 답변 다시 시도" onPress={() => void retryLastResponse()} style={styles.retryButton}>
+              <Ionicons name="refresh" size={15} color={colors.tealDark} />
+              <Text style={styles.retryText}>재시도</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
       {(phase === 'preparing' || phase === 'loading') ? (
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
@@ -865,9 +846,7 @@ export function OnDeviceAiScreen() {
               ) : null}
               <View style={[styles.bubble, user ? styles.userBubble : styles.assistantBubble]}>
                 <Text style={[styles.bubbleLabel, user && styles.userBubbleText]}>
-                  {user ? '나' : guardianProfile.aiEngineType === 'openRouter'
-                    ? `${guardianProfile.name} · ${displayedOpenRouterModelName}`
-                    : guardianProfile.name}
+                  {user ? '나' : guardianProfile.name}
                 </Text>
                 {item.attachment ? <ChatMediaContent attachment={item.attachment} /> : null}
                 <Text style={[styles.bubbleText, user && styles.userBubbleText]}>{visibleContent || '…'}</Text>
@@ -883,27 +862,23 @@ export function OnDeviceAiScreen() {
               <View style={styles.guardianWelcome}>
                 <Text style={styles.emptyEyebrow}>{guardianProfile.name}</Text>
                 <Text style={styles.emptyTitle}>오늘은 어떤 이야기를 지켜볼까요?</Text>
-                <Text style={styles.emptyText}>{guardianProfile.aiEngineType === 'openRouter'
-                  ? '마음속 이야기와 일상의 고민을 편하게 들려주세요. 답변 생성에 필요한 내용은 선택한 클라우드 모델로 안전하게 전송됩니다.'
-                  : '마음속 이야기와 일상의 고민을 편하게 들려주세요. 이곳에서 나눈 내용은 기기 밖으로 나가지 않아요.'}</Text>
+                <Text style={styles.emptyText}>마음속 이야기와 일상의 고민을 편하게 들려주세요. 천천히 듣고 함께 정리해 드릴게요.</Text>
               </View>
             </View>
 
             {!engineReady ? (
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={guardianProfile.aiEngineType === 'openRouter'
-                  ? `${cloudProviderName} 연결 설정 열기`
-                  : directoryName ? '지킴이 모델 선택' : 'AiModels 폴더 연결'}
+                accessibilityLabel="지킴이 준비하기"
                 onPress={() => guardianProfile.aiEngineType === 'openRouter'
                   ? setSettingsOpen(true)
                   : directoryName ? setSettingsOpen(true) : void pickDirectory()}
                 style={styles.wakeButton}
               >
-                <Ionicons name={guardianProfile.aiEngineType === 'openRouter' ? 'cloud-outline' : 'leaf-outline'} size={18} color="#FFFFFF" />
-                <Text style={styles.wakeButtonText}>{guardianProfile.aiEngineType === 'openRouter'
-                  ? `${cloudProviderName} 연결 확인`
-                  : directoryName ? '지킴이 깨우기' : '기억 폴더 연결하기'}</Text>
+                <Ionicons name="sparkles-outline" size={18} color="#FFFFFF" />
+                <Text style={styles.wakeButtonText}>{directoryName || guardianProfile.aiEngineType === 'openRouter'
+                  ? '지킴이 준비하기'
+                  : '기억 폴더 연결하기'}</Text>
               </Pressable>
             ) : phase === 'ready' ? (
               <View style={styles.starters}>
@@ -943,7 +918,7 @@ export function OnDeviceAiScreen() {
         sending={phase === 'generating'}
         stopping={phase === 'stopping'}
         maxLength={2000}
-        capabilityHint={capabilityHint}
+        capabilityHint={attachmentMenuHint}
       />
 
       <GuardianSettingsModal
@@ -992,15 +967,17 @@ const styles = StyleSheet.create({
   conversationCount: { position: 'absolute', right: -3, top: -3, minWidth: 18, height: 18, paddingHorizontal: 4, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.coral, borderWidth: 2, borderColor: colors.canvas },
   conversationCountText: { color: '#FFFFFF', fontSize: 9, fontWeight: '900' },
   disabled: { opacity: 0.4 },
-  memoryStrip: { marginHorizontal: spacing.lg, minHeight: 54, paddingHorizontal: spacing.md, paddingVertical: 9, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  stateDot: { width: 9, height: 9, borderRadius: radius.pill, backgroundColor: colors.inkMuted },
-  stateDotReady: { backgroundColor: colors.success },
-  memoryCopy: { flex: 1, minWidth: 0 },
-  memoryTitle: { color: colors.ink, fontSize: type.body, fontWeight: '900' },
-  memoryDetail: { color: colors.inkMuted, fontSize: type.small, marginTop: 3 },
-  statusRow: { minHeight: 42, paddingHorizontal: spacing.lg, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  conversationBar: { minHeight: 62, marginHorizontal: spacing.lg, marginBottom: spacing.xs, paddingVertical: spacing.sm, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.line },
+  conversationMark: { width: 36, height: 36, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceSoft },
+  conversationCopy: { flex: 1, minWidth: 0 },
+  conversationEyebrow: { color: colors.inkMuted, fontSize: type.tiny, fontWeight: '800' },
+  conversationTitle: { color: colors.ink, fontSize: type.body, fontWeight: '900', marginTop: 2 },
+  newConversationButton: { minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: spacing.sm, borderRadius: radius.md, backgroundColor: colors.surfaceWarm },
+  newConversationText: { color: colors.coral, fontSize: type.small, fontWeight: '900' },
+  statusRow: { minHeight: 42, marginHorizontal: spacing.lg, marginBottom: spacing.xs, paddingHorizontal: spacing.md, borderRadius: radius.md, backgroundColor: colors.surfaceSoft, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   statusText: { flex: 1, color: colors.inkSoft, fontSize: type.small, lineHeight: 17 },
-  clearText: { color: colors.coral, fontSize: type.small, fontWeight: '800' },
+  statusAction: { minHeight: 34, justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: radius.md, backgroundColor: colors.surface },
+  statusActionText: { color: colors.tealDark, fontSize: type.small, fontWeight: '900' },
   retryButton: { minHeight: 36, paddingHorizontal: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.teal, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   retryText: { color: colors.tealDark, fontSize: type.small, fontWeight: '900' },
   progressTrack: { height: 3, marginHorizontal: spacing.lg, borderRadius: radius.pill, overflow: 'hidden', backgroundColor: colors.line },

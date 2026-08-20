@@ -2,7 +2,6 @@ import type { GuardianProfile } from './guardianProfile';
 import { buildGuardianSystemPrompt } from './guardianProfile';
 import { onDeviceAiEngine, type OnDeviceChatMessage } from './onDeviceAi';
 import {
-  getGuardianCloudProvider,
   streamGuardianCloudConversation,
   type GuardianCloudConversationMessage,
 } from './guardianCloudProvider';
@@ -139,7 +138,6 @@ export async function completeGuardianConversation(
   }
 
   if (profile.aiEngineType === 'openRouter') {
-    const cloudProvider = getGuardianCloudProvider(profile);
     let cloudMessages: GuardianCloudConversationMessage[] = await Promise.all(
       workingMessages.map(async (message): Promise<GuardianCloudConversationMessage> => (
         message.role === 'user'
@@ -154,7 +152,7 @@ export async function completeGuardianConversation(
       callbacks.onStatus(
         canUseAnotherTool
           ? `${profile.name}가 필요한 정보를 판단하고 있어요.`
-          : `${profile.name}가 ${cloudProvider.name} 모델로 답변하고 있어요.`
+          : `${profile.name}가 답변을 정리하고 있어요.`
       );
       const result = await streamGuardianCloudConversation(
         profile,
