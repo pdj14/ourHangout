@@ -1,7 +1,10 @@
 {
   "mcpServers": {
     "axone_worker": {
-      "serverUrl": "http://127.0.0.1:61083/mcp/df36b76a961ca5ba310f82a9bcc1f74342a4"
+      "serverUrl": "http://127.0.0.1:53693/mcp/beaec213c930f080eb81da1488f694461ffa"
+    },
+    "axone_playwright": {
+      "serverUrl": "http://127.0.0.1:9330/mcp"
     }
   }
 }
