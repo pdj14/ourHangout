@@ -5,6 +5,7 @@ import {
   streamGuardianCloudConversation,
   type GuardianCloudConversationMessage,
 } from './guardianCloudProvider';
+import { logAiTransport } from './aiProviders/openAiCompatibleTransport';
 import {
   containsGuardianModelControlToken,
   containsGuardianWebToolCall,
@@ -32,7 +33,7 @@ type GuardianCompletionCallbacks = {
 const MAX_TOOL_CALLS = 3;
 const MAX_CLOUD_COMPLETION_ROUNDS = 5;
 const MAX_COMPLETION_ATTEMPTS = 7;
-const TEXT_OUTPUT_POLICY = '\uC774 \uC571\uC740 \uD604\uC7AC \uD14D\uC2A4\uD2B8 \uC751\uB2F5\uB9CC \uD45C\uC2DC\uD560 \uC218 \uC788\uB2E4. \uC0AC\uC6A9\uC790\uAC00 \uC774\uBBF8\uC9C0\u00B7\uC624\uB514\uC624\u00B7\uB3D9\uC601\uC0C1 \uC0DD\uC131\uC744 \uC694\uCCAD\uD558\uBA74 \uC9C1\uC811 \uC0DD\uC131\uD588\uB2E4\uACE0 \uD558\uC9C0 \uB9D0\uACE0, \uD604\uC7AC\uB294 \uD14D\uC2A4\uD2B8 \uCD9C\uB825\uB9CC \uC9C0\uC6D0\uD55C\uB2E4\uACE0 \uC9E7\uAC8C \uC548\uB0B4\uD558\uB77C.';
+const TEXT_OUTPUT_POLICY = '\uC774 \uC57D\uC740 \uD604\uC7AC \uD14D\uC2A4\uD2B8 \uC751\uB2F5\uB9CC \uD45C\uC2DC\uD560 \uC218 \uC788\uB2E4. \uC0AC\uC6A9\uC790\uAC00 \uC774\uBBF8\uC9C0\u00B7\uC624\uB514\uC624\u00B7\uB3D9\uC601\uC0C1 \uC0DD\uC131\uC744 \uC694\uCCAD\uD558\uBA74 \uC9C1\uC811 \uC0DD\uC131\uD588\uB2E4\uACE0 \uD558\uC9C0 \uB9D0\uACE0, \uD604\uC7AC\uB294 \uD14D\uC2A4\uD2B8 \uCD9C\uB825\uB9CC \uC9C0\uC6D0\uD55C\uB2E4\uACE0 \uC9E7\uAC8C \uC548\uB0B4\uD558\uB77C.';
 const UNCERTAIN_PATTERN = /모르|알\s*수\s*없|확실하지|정보가\s*없|(?:확인|조회|검색)할\s*수\s*없|기능이\s*없|추측|잘\s*알지\s*못|don't\s+know|do\s+not\s+know|not\s+sure|cannot\s+(?:confirm|verify|tell|search|browse)|unable\s+to\s+(?:confirm|verify|search|browse)/i;
 
 function internalMessage(role: OnDeviceChatMessage['role'], content: string): OnDeviceChatMessage {
@@ -84,6 +85,14 @@ export async function completeGuardianConversation(
   let emptyResponseRetryUsed = false;
   const webToolResultCache = new Map<string, string>();
 
+  logAiTransport('guardian', 'completion_start', {
+    engine: profile.aiEngineType,
+    provider: profile.cloudProviderId || '-',
+    model: profile.cloudModelId || profile.openRouterModelId || '-',
+    webBrowsing: allowWeb,
+    messages: messages.length,
+  });
+
   const appendWebResult = (result: string, assistantToolCall?: string) => {
     workingMessages = [
       ...workingMessages,
@@ -110,13 +119,20 @@ export async function completeGuardianConversation(
         : `${profile.name}가 참고 페이지를 읽고 있어요.`
     );
     toolCallsUsed += 1;
+    const toolStartedAt = Date.now();
     try {
       const result = await executeGuardianWebTool(call);
+      logAiTransport('guardian', 'web_tool_ok', {
+        name: call.name,
+        ms: Date.now() - toolStartedAt,
+        chars: result.length,
+      });
       webToolResultCache.set(cacheKey, result);
       return result;
     } catch (error) {
       if (callbacks.shouldStop?.()) throw new Error('답변 생성을 중지했어요.');
       const message = error instanceof Error ? error.message : String(error || '알 수 없는 오류');
+      logAiTransport('guardian', 'web_tool_failed', { name: call.name, error: message.slice(0, 300) });
       const failure = `웹 도구 실패: ${message}`;
       webToolResultCache.set(cacheKey, failure);
       return failure;
@@ -154,30 +170,44 @@ export async function completeGuardianConversation(
           ? `${profile.name}가 필요한 정보를 판단하고 있어요.`
           : `${profile.name}가 답변을 정리하고 있어요.`
       );
-      const result = await streamGuardianCloudConversation(
-        profile,
-        cloudMessages,
-        `${buildGuardianSystemPrompt(
+      logAiTransport('guardian', 'cloud_round_start', {
+        round: round + 1,
+        toolsAllowed: canUseAnotherTool,
+        toolCallsUsed,
+      });
+      let result;
+      try {
+        result = await streamGuardianCloudConversation(
           profile,
-          canUseAnotherTool ? 'function' : 'none',
-          toolCallsUsed > 0
-        )}\n\n${TEXT_OUTPUT_POLICY}`,
-        {
-          onPartial: (partial) => {
-            const normalized = partial.trimStart();
-            if (
-              containsGuardianWebToolCall(partial)
-              || containsGuardianModelControlToken(partial)
-              || normalized.startsWith('{')
-            ) return;
-            callbacks.onPartial(partial);
+          cloudMessages,
+          `${buildGuardianSystemPrompt(
+            profile,
+            canUseAnotherTool ? 'function' : 'none',
+            toolCallsUsed > 0
+          )}\n\n${TEXT_OUTPUT_POLICY}`,
+          {
+            onPartial: (partial) => {
+              const normalized = partial.trimStart();
+              if (
+                containsGuardianWebToolCall(partial)
+                || containsGuardianModelControlToken(partial)
+                || normalized.startsWith('{')
+              ) return;
+              callbacks.onPartial(partial);
+            },
+            onModel: callbacks.onModel,
           },
-          onModel: callbacks.onModel,
-        },
-        {
-          tools: canUseAnotherTool ? GUARDIAN_WEB_TOOL_DEFINITIONS : undefined,
-        }
-      );
+          {
+            tools: canUseAnotherTool ? GUARDIAN_WEB_TOOL_DEFINITIONS : undefined,
+          }
+        );
+      } catch (error) {
+        logAiTransport('guardian', 'cloud_round_failed', {
+          round: round + 1,
+          error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        });
+        throw error;
+      }
       callbacks.onModel?.(result.modelId);
       const textToolCall = !result.toolCalls.length && canUseAnotherTool
         ? parseGuardianWebToolCall(result.content)
@@ -187,6 +217,7 @@ export async function completeGuardianConversation(
           callbacks.onPartial('');
           if (!controlTokenRetryUsed) {
             controlTokenRetryUsed = true;
+            logAiTransport('guardian', 'retry_control_token', { round: round + 1 });
             cloudMessages = [
               ...cloudMessages,
               {
@@ -201,6 +232,7 @@ export async function completeGuardianConversation(
         }
         if (containsGuardianWebToolCall(result.content)) {
           callbacks.onPartial('');
+          logAiTransport('guardian', 'retry_malformed_tool_text', { round: round + 1 });
           cloudMessages = [
             ...cloudMessages,
             { role: 'assistant', content: result.content || null },
@@ -221,6 +253,7 @@ export async function completeGuardianConversation(
         ) {
           uncertaintyRetryUsed = true;
           callbacks.onPartial('');
+          logAiTransport('guardian', 'retry_uncertain_answer', { round: round + 1 });
           cloudMessages = [
             ...cloudMessages,
             { role: 'assistant', content: result.content || null },
@@ -232,6 +265,11 @@ export async function completeGuardianConversation(
           callbacks.onStatus(`${profile.name}가 이미 확인한 검색 결과에서 필요한 값을 다시 읽고 있어요.`);
           continue;
         }
+        logAiTransport('guardian', 'cloud_done', {
+          rounds: round + 1,
+          chars: result.content.length,
+          model: result.modelId,
+        });
         return sanitizeGuardianVisibleContent(result.content);
       }
 
@@ -295,6 +333,7 @@ export async function completeGuardianConversation(
       canUseAnotherTool ? 'prompt' : 'none',
       toolCallsUsed > 0
     );
+    logAiTransport('guardian', 'ondevice_attempt_start', { attempt: attempt + 1 });
     let revealed = false;
     const finalText = await onDeviceAiEngine.complete(
       workingMessages,
@@ -316,6 +355,7 @@ export async function completeGuardianConversation(
     if (!finalText.trim()) {
       if (!emptyResponseRetryUsed) {
         emptyResponseRetryUsed = true;
+        logAiTransport('guardian', 'retry_empty_response', { attempt: attempt + 1 });
         const latestContext = workingMessages.at(-1)?.content || originalQuestion;
         workingMessages = [
           ...workingMessages,
@@ -337,6 +377,7 @@ export async function completeGuardianConversation(
     if (containsGuardianModelControlToken(finalText)) {
       if (!controlTokenRetryUsed) {
         controlTokenRetryUsed = true;
+        logAiTransport('guardian', 'retry_control_token', { attempt: attempt + 1 });
         workingMessages = [
           ...workingMessages,
           internalMessage('user', '특수 제어 토큰 없이 자연스러운 한국어 최종 답변만 다시 작성하세요.'),
@@ -351,6 +392,7 @@ export async function completeGuardianConversation(
       && containsToolCall
       && !toolCall;
     if (malformedToolCall) {
+      logAiTransport('guardian', 'retry_malformed_tool_text', { attempt: attempt + 1 });
       workingMessages = [
         ...workingMessages,
         internalMessage('assistant', finalText),
@@ -377,6 +419,7 @@ export async function completeGuardianConversation(
     if (!toolCall) {
       if (canUseAnotherTool && !uncertaintyRetryUsed && looksUncertain(finalText)) {
         uncertaintyRetryUsed = true;
+        logAiTransport('guardian', 'retry_uncertain_answer', { attempt: attempt + 1 });
         const result = await runWebTool({
           name: 'web_search',
           arguments: { query: buildGuardianWebSearchQuery(originalQuestion) },
@@ -387,6 +430,7 @@ export async function completeGuardianConversation(
       }
       if (!isKoreanAnswer(finalText) && !languageRetryUsed) {
         languageRetryUsed = true;
+        logAiTransport('guardian', 'retry_language', { attempt: attempt + 1 });
         const latestContext = workingMessages.at(-1)?.content || originalQuestion;
         workingMessages = [
           ...workingMessages,
@@ -399,6 +443,10 @@ export async function completeGuardianConversation(
         continue;
       }
       const visibleText = sanitizeGuardianVisibleContent(finalText);
+      logAiTransport('guardian', 'ondevice_done', {
+        attempts: attempt + 1,
+        chars: visibleText.length,
+      });
       callbacks.onPartial(visibleText);
       return visibleText;
     }

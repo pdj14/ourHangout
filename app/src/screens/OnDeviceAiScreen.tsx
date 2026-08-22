@@ -6,6 +6,7 @@ import {
   Alert,
   FlatList,
   Image,
+  Modal,
   NativeEventEmitter,
   Platform,
   Pressable,
@@ -57,6 +58,8 @@ import {
 import {
   OpenAiProviderError,
   cancelOpenAiCompatibleCompletion,
+  clearAiTransportLogs,
+  getAiTransportLogs,
 } from '../services/aiProviders';
 import {
   disconnectGuardianCloudProvider,
@@ -127,6 +130,8 @@ export function OnDeviceAiScreen() {
   const [openRouterMessage, setOpenRouterMessage] = useState('');
   const [openRouterModels, setOpenRouterModels] = useState<GuardianCloudModel[]>([]);
   const [retryState, setRetryState] = useState<RetryState | null>(null);
+  const [diagOpen, setDiagOpen] = useState(false);
+  const [diagLines, setDiagLines] = useState<string[]>([]);
   const mountedRef = useRef(true);
   const messagesRef = useRef<OnDeviceChatMessage[]>([]);
   const conversationsRef = useRef<GuardianConversationRoom[]>([]);
@@ -135,6 +140,7 @@ export function OnDeviceAiScreen() {
   const listRef = useRef<FlatList<OnDeviceChatMessage> | null>(null);
   const inputRef = useRef<TextInput | null>(null);
   const stopRequestedRef = useRef(false);
+  const diagLinesRef = useRef<string[]>([]);
 
   const {
     nearBottomRef,
@@ -166,6 +172,25 @@ export function OnDeviceAiScreen() {
   const attachmentMenuHint = engineReady
     ? '현재 지킴이는 글로만 대화할 수 있어요.'
     : '지킴이 준비가 끝나면 첨부 기능을 사용할 수 있어요.';
+  const pushDiagLine = useCallback((line: string) => {
+    diagLinesRef.current = [
+      ...diagLinesRef.current.slice(-199),
+      `[${new Date().toLocaleTimeString()}] ${line}`,
+    ];
+  }, []);
+  const openDiagnostics = useCallback(() => {
+    const transport = getAiTransportLogs().map((entry) => {
+      const detail = entry.detail ? ` ${JSON.stringify(entry.detail)}` : '';
+      return `[${entry.at}] ${entry.source}/${entry.event}${detail}`;
+    });
+    setDiagLines([...diagLinesRef.current, ...transport]);
+    setDiagOpen(true);
+  }, []);
+  const clearDiagnostics = useCallback(() => {
+    diagLinesRef.current = [];
+    clearAiTransportLogs();
+    setDiagLines([]);
+  }, []);
   const commitConversationStore = useCallback((
     nextConversations: GuardianConversationRoom[],
     nextActiveConversationId: string
@@ -633,6 +658,7 @@ export function OnDeviceAiScreen() {
     } else {
       setStatusMessage(`${guardianProfile.name}가 기기 안에서 생각하고 있어요.`);
     }
+    pushDiagLine(`전송 시작 · engine=${guardianProfile.aiEngineType} · provider=${guardianProfile.cloudProviderId || '-'} · model=${guardianProfile.cloudModelId || '-'} · messages=${baseMessages.length}`);
     scheduleScrollToLatest(false);
     try {
       const finalText = await completeGuardianConversation(baseMessages, guardianProfile, {
@@ -647,6 +673,7 @@ export function OnDeviceAiScreen() {
         },
         shouldStop: () => stopRequestedRef.current,
       });
+      pushDiagLine(`응답 완료 · ${finalText.length}자`);
       const next = [
         ...baseMessages,
         { ...assistantMessage, content: finalText || '답변 본문을 만들지 못했어요. 다시 시도해 주세요.' },
@@ -661,6 +688,8 @@ export function OnDeviceAiScreen() {
       const partial = messagesRef.current.find((message) => message.id === assistantMessage.id)?.content.trim();
       const stopped = stopRequestedRef.current;
       const message = normalizeGuardianError(error);
+      const providerCode = error instanceof OpenAiProviderError ? error.code : '';
+      pushDiagLine(`오류 발생 · ${error instanceof Error ? error.name : typeof error}${providerCode ? ` · code=${providerCode}` : ''} · ${message}`);
       const next = partial || stopped
         ? messagesRef.current.filter((message) => message.id !== assistantMessage.id || !!message.content.trim())
         : [...baseMessages, { ...assistantMessage, content: `잠시 길을 잃었어요. ${message}` }];
@@ -676,7 +705,7 @@ export function OnDeviceAiScreen() {
       setRetryState(stopped || disconnected ? null : { baseMessages, content: failedContent });
       stopRequestedRef.current = false;
     }
-  }, [commitMessages, guardianProfile, scheduleScrollToLatest]);
+  }, [commitMessages, guardianProfile, pushDiagLine, scheduleScrollToLatest]);
 
   const sendMessage = useCallback(async () => {
     const content = draft.trim();
@@ -740,6 +769,14 @@ export function OnDeviceAiScreen() {
         detail={guardianProfile.synopsis}
         action={
           <View style={styles.headerActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="지킴이 진단 로그"
+              onPress={openDiagnostics}
+              style={styles.headerButton}
+            >
+              <Ionicons name="bug-outline" size={20} color={colors.tealDark} />
+            </Pressable>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`지킴이 대화 목록, ${conversations.length}개`}
@@ -956,6 +993,38 @@ export function OnDeviceAiScreen() {
         onSelect={(conversationId) => void selectConversation(conversationId)}
         onDelete={deleteConversation}
       />
+
+      <Modal
+        visible={diagOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setDiagOpen(false)}
+      >
+        <View style={styles.diagOverlay}>
+          <View style={[styles.diagSheet, { paddingBottom: insets.bottom + spacing.md }]}>
+            <View style={styles.diagHeader}>
+              <Text style={styles.diagTitle}>지킴이 진단 로그</Text>
+              <View style={styles.diagHeaderButtons}>
+                <Pressable accessibilityRole="button" accessibilityLabel="진단 로그 비우기" onPress={clearDiagnostics} style={styles.diagButton}>
+                  <Text style={styles.diagButtonText}>비우기</Text>
+                </Pressable>
+                <Pressable accessibilityRole="button" accessibilityLabel="진단 로그 닫기" onPress={() => setDiagOpen(false)} style={styles.diagButton}>
+                  <Text style={styles.diagButtonText}>닫기</Text>
+                </Pressable>
+              </View>
+            </View>
+            <Text style={styles.diagHint}>로그를 길게 눌러 선택하면 복사할 수 있어요. 오류가 난 직후에 열면 원인이 기록되어 있어요.</Text>
+            <FlatList
+              data={diagLines.length ? diagLines : ['기록된 진단 로그가 없습니다. 대화를 한 번 시도한 뒤 다시 열어 주세요.']}
+              keyExtractor={(item, index) => `${index}-${item.slice(0, 24)}`}
+              renderItem={({ item }) => (
+                <Text selectable style={styles.diagLine}>{item}</Text>
+              )}
+              contentContainerStyle={styles.diagListContent}
+            />
+          </View>
+        </View>
+      </Modal>
     </ChatKeyboardLayout>
   );
 }
@@ -1012,4 +1081,14 @@ const styles = StyleSheet.create({
   input: { flex: 1, minHeight: 43, maxHeight: 112, borderRadius: radius.lg, backgroundColor: colors.surfaceSoft, color: colors.ink, fontSize: type.body, paddingHorizontal: spacing.md, paddingVertical: 10 },
   sendButton: { width: 43, height: 43, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.tealDark },
   stopButton: { backgroundColor: colors.coral },
+  diagOverlay: { flex: 1, backgroundColor: 'rgba(23, 32, 28, 0.45)', justifyContent: 'flex-end' },
+  diagSheet: { maxHeight: '78%', backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: spacing.lg, paddingTop: spacing.md },
+  diagHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.xs },
+  diagHeaderButtons: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  diagTitle: { color: colors.ink, fontSize: type.title, fontWeight: '900' },
+  diagButton: { minHeight: 34, paddingHorizontal: spacing.sm, borderRadius: radius.md, backgroundColor: colors.surfaceSoft, alignItems: 'center', justifyContent: 'center' },
+  diagButtonText: { color: colors.tealDark, fontSize: type.small, fontWeight: '900' },
+  diagHint: { color: colors.inkMuted, fontSize: type.tiny, marginBottom: spacing.sm },
+  diagLine: { color: colors.inkSoft, fontSize: type.tiny, lineHeight: 16, paddingVertical: 2 },
+  diagListContent: { paddingBottom: spacing.md },
 });

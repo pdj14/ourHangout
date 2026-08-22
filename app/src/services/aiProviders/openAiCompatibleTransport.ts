@@ -17,6 +17,41 @@ import {
 const MODEL_LIST_TIMEOUT_MS = 20_000;
 const CHAT_TIMEOUT_MESSAGE = 'AI 제공자에 연결하지 못했어요. 네트워크와 서버 주소를 확인해 주세요.';
 
+export type AiTransportLogEntry = {
+  at: string;
+  source: string;
+  event: string;
+  detail?: Record<string, unknown>;
+};
+
+const AI_TRANSPORT_LOG_LIMIT = 150;
+const aiTransportLogs: AiTransportLogEntry[] = [];
+
+export function logAiTransport(source: string, event: string, detail?: Record<string, unknown>) {
+  aiTransportLogs.push({
+    at: new Date().toISOString().slice(11, 23),
+    source,
+    event,
+    ...(detail ? { detail } : {}),
+  });
+  if (aiTransportLogs.length > AI_TRANSPORT_LOG_LIMIT) {
+    aiTransportLogs.splice(0, aiTransportLogs.length - AI_TRANSPORT_LOG_LIMIT);
+  }
+}
+
+export function getAiTransportLogs(): AiTransportLogEntry[] {
+  return [...aiTransportLogs];
+}
+
+export function clearAiTransportLogs() {
+  aiTransportLogs.length = 0;
+}
+
+function describeErrorCause(error: unknown) {
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  return String(error || 'unknown');
+}
+
 type ModelPayload = {
   id?: unknown;
   name?: unknown;
@@ -41,6 +76,11 @@ function safeNumber(value: unknown) {
 
 function endpoint(baseUrl: string, path: string) {
   return `${baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+}
+
+function hostOf(baseUrl: string) {
+  const match = baseUrl.match(/^https?:\/\/([^/?#]+)/i);
+  return match ? match[1] : baseUrl;
 }
 
 function isFreeModel(settings: OpenAiCompatibleProviderSettings, modelId: string) {
@@ -102,38 +142,62 @@ async function responseError(
 ) {
   const descriptor = getOpenAiProviderDescriptor(settings.providerId);
   const text = await response.text().catch(() => '');
+  const bodySnippet = text.replace(/\s+/g, ' ').trim().slice(0, 400);
   let providerMessage = '';
+  let errorCode = '';
   try {
-    const payload = JSON.parse(text) as { error?: { message?: unknown } | string; message?: unknown };
+    const payload = JSON.parse(text) as {
+      error?: { message?: unknown; code?: unknown; metadata?: { raw?: unknown } } | string;
+      message?: unknown;
+    };
     providerMessage = typeof payload.error === 'string'
       ? payload.error
       : String(payload.error?.message || payload.message || '').trim();
+    errorCode = payload.error && typeof payload.error === 'object'
+      ? String(payload.error.code ?? '').trim()
+      : '';
   } catch {
     providerMessage = '';
   }
+  const technical = [
+    `HTTP ${response.status}`,
+    settings.modelId ? `model=${settings.modelId}` : '',
+    hostOf(settings.baseUrl),
+    errorCode ? `code=${errorCode}` : '',
+    providerMessage ? `msg="${providerMessage.slice(0, 200)}"` : '',
+    bodySnippet ? `body="${bodySnippet}"` : '',
+  ].filter(Boolean).join(' · ');
+  logAiTransport('transport', 'http_error', {
+    status: response.status,
+    code: errorCode,
+    providerMessage,
+    bodySnippet,
+  });
   if (response.status === 401 || response.status === 403) {
     return new OpenAiProviderError(
-      `${descriptor.name} 인증이 만료되었거나 API 키 권한이 부족해요. 연결을 다시 확인해 주세요.`,
+      `${descriptor.name} 인증이 만료되었거나 API 키 권한이 부족해요. 연결을 다시 확인해 주세요.\n[상세] ${technical}`,
       'unauthorized',
       settings.providerId
     );
   }
   if (response.status === 402) {
     return new OpenAiProviderError(
-      `${descriptor.name} 잔액 또는 사용 한도가 부족해요. 무료 모델이나 다른 모델을 선택해 주세요.`,
+      `${descriptor.name} 잔액 또는 사용 한도가 부족해요. 무료 모델이나 다른 모델을 선택해 주세요.\n[상세] ${technical}`,
       'payment_required',
       settings.providerId
     );
   }
   if (response.status === 429) {
     return new OpenAiProviderError(
-      `${descriptor.name} 사용 한도에 도달했어요. 잠시 뒤 다시 시도해 주세요.`,
+      `${descriptor.name} 사용 한도에 도달했어요. 잠시 뒤 다시 시도해 주세요.\n[상세] ${technical}`,
       'rate_limit',
       settings.providerId
     );
   }
   return new OpenAiProviderError(
-    providerMessage.slice(0, 240) || `${descriptor.name} 요청을 처리하지 못했어요. (${response.status})`,
+    providerMessage
+      ? `${providerMessage.slice(0, 240)}\n[상세] ${technical}`
+      : `${descriptor.name} 요청을 처리하지 못했어요. (${response.status})\n[상세] ${technical}`,
     response.status === 404 || response.status === 405 || response.status === 422 ? 'unsupported' : 'request',
     settings.providerId
   );
@@ -154,9 +218,10 @@ export async function fetchOpenAiCompatibleModels(
       signal: controller.signal,
       headers: buildHeaders(settings, apiKey),
     });
-  } catch {
+  } catch (error) {
+    logAiTransport('transport', 'models_request_failed', { cause: describeErrorCause(error) });
     throw new OpenAiProviderError(
-      `${descriptor.name} 모델 목록을 불러오지 못했어요. 네트워크와 서버 주소를 확인해 주세요.`,
+      `${descriptor.name} 모델 목록을 불러오지 못했어요. 네트워크와 서버 주소를 확인해 주세요. [원인: ${describeErrorCause(error).slice(0, 200)}]`,
       'network',
       settings.providerId
     );
@@ -168,6 +233,7 @@ export async function fetchOpenAiCompatibleModels(
   const models = (payload.data || [])
     .map((value) => modelFromPayload(settings, value))
     .filter((model): model is OpenAiCompatibleModel => !!model);
+  logAiTransport('transport', 'models_loaded', { count: models.length });
 
   if (settings.providerId !== 'openRouter') return models;
   const freeRouter: OpenAiCompatibleModel = {
@@ -203,6 +269,33 @@ function parseStreamEvent(data: string, onChunk: (payload: Record<string, unknow
     onChunk(JSON.parse(body) as Record<string, unknown>);
   } catch {
     // A malformed event must not discard the remaining SSE stream.
+  }
+}
+
+function describePayloadError(value: unknown) {
+  if (!value || typeof value !== 'object') return String(value || '');
+  const record = value as { message?: unknown; code?: unknown; metadata?: { raw?: unknown } };
+  const message = String(record.message || '').trim();
+  const code = String(record.code ?? '').trim();
+  let raw = '';
+  const metadataRaw = record.metadata?.raw;
+  if (metadataRaw) {
+    try {
+      raw = JSON.stringify(metadataRaw);
+    } catch {
+      raw = String(metadataRaw);
+    }
+  }
+  const combined = [
+    message,
+    code ? `(code ${code})` : '',
+    raw ? `raw=${raw.slice(0, 300)}` : '',
+  ].filter(Boolean).join(' ').trim();
+  if (combined) return combined;
+  try {
+    return JSON.stringify(value).slice(0, 300);
+  } catch {
+    return String(value);
   }
 }
 
@@ -311,6 +404,14 @@ export async function streamOpenAiCompatibleConversation(
   activeController?.abort();
   const controller = new AbortController();
   activeController = controller;
+  const startedAt = Date.now();
+  logAiTransport('transport', 'chat_request', {
+    provider: descriptor.name,
+    endpoint: hostOf(settings.baseUrl),
+    model: requestedModelId,
+    tools: hasTools ? options.tools!.length : 0,
+    messages: messages.length,
+  });
   let response: Response;
   try {
     response = await fetch(endpoint(settings.baseUrl, '/chat/completions'), {
@@ -339,8 +440,15 @@ export async function streamOpenAiCompatibleConversation(
     let buffer = '';
     let content = '';
     let resolvedModel = '';
+    let lastStreamError = '';
     const streamedToolCalls = new Map<number, StreamedToolCall>();
     const consume = (payload: Record<string, unknown>) => {
+      const payloadError = payload.error;
+      if (payloadError) {
+        lastStreamError = describePayloadError(payloadError);
+        logAiTransport('transport', 'stream_payload_error', { error: lastStreamError });
+        return;
+      }
       const model = typeof payload.model === 'string' ? payload.model : '';
       if (model && model !== resolvedModel) {
         resolvedModel = model;
@@ -388,20 +496,48 @@ export async function streamOpenAiCompatibleConversation(
         function: { name: call.name.trim(), arguments: call.arguments },
       }))
       .filter((call) => !!call.function.name);
+    if (!content.trim() && !toolCalls.length && lastStreamError) {
+      throw new OpenAiProviderError(
+        `${descriptor.name} 모델이 오류를 반환했어요. ${lastStreamError}`,
+        'request',
+        settings.providerId
+      );
+    }
     if (!content.trim() && !toolCalls.length) {
+      logAiTransport('transport', 'empty_response', { resolvedModel: resolvedModel || requestedModelId });
       throw new OpenAiProviderError(`${descriptor.name} 모델이 빈 응답을 반환했어요.`, 'request', settings.providerId);
     }
     const safeContent = sanitizeContent(content);
     if (!safeContent && !toolCalls.length) {
+      logAiTransport('transport', 'unsanitizable_response', {
+        chars: content.length,
+        preview: content.slice(0, 200),
+      });
       throw new OpenAiProviderError(`${descriptor.name} 모델이 표시할 답변을 반환하지 못했어요.`, 'request', settings.providerId);
     }
+    logAiTransport('transport', 'chat_done', {
+      ms: Date.now() - startedAt,
+      chars: safeContent.length,
+      toolCalls: toolCalls.length,
+      resolvedModel: resolvedModel || requestedModelId,
+    });
     return { content: safeContent, modelId: resolvedModel || requestedModelId, toolCalls };
   } catch (error) {
+    const cause = describeErrorCause(error);
     if (controller.signal.aborted) {
+      logAiTransport('transport', 'chat_cancelled', { ms: Date.now() - startedAt });
       throw new OpenAiProviderError('답변 생성을 중지했어요.', 'cancelled', settings.providerId);
     }
-    if (error instanceof OpenAiProviderError) throw error;
-    throw new OpenAiProviderError(CHAT_TIMEOUT_MESSAGE, 'network', settings.providerId);
+    if (error instanceof OpenAiProviderError) {
+      logAiTransport('transport', 'chat_failed', { code: error.code, message: error.message });
+      throw error;
+    }
+    logAiTransport('transport', 'chat_failed', { cause: cause.slice(0, 300) });
+    throw new OpenAiProviderError(
+      `${CHAT_TIMEOUT_MESSAGE} [원인: ${cause.slice(0, 200)}]`,
+      'network',
+      settings.providerId
+    );
   } finally {
     if (activeController === controller) activeController = null;
   }
