@@ -39,11 +39,14 @@ const adapters: Partial<Record<OpenAiCompatibleProviderId, OpenAiProviderWireAda
     requestExtensions: ({ hasTools, modelId, fallbackModelIds }) => {
       const freeOnly = isOpenRouterFreeModel(modelId);
       return {
-        // NOTE: `effort: 'none'` is not a documented OpenRouter value
-        // (allowed: high | medium | low) and was rejected with HTTP 400
-        // (metadata.provider_name = null) by the router validator.
-        // `exclude: true` alone keeps the intended behavior: hide reasoning output.
-        reasoning: { exclude: true },
+        // NOTE: send NO `reasoning` field at all. History:
+        // - `effort: 'none'` is not a documented value (high|medium|low); the
+        //   router validator rejected it with HTTP 400 (provider_name = null).
+        // - `exclude: true` made reasoning-heavy free models return EMPTY
+        //   content: they spent their whole completion budget on reasoning
+        //   tokens that were then stripped from the response.
+        // Omitting the field is safe: reasoning arrives on `delta.reasoning`
+        // (ignored by the transport) and `delta.content` keeps the real answer.
         ...(hasTools || freeOnly ? {
           provider: {
             ...(hasTools ? { require_parameters: true } : {}),

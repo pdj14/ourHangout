@@ -487,6 +487,11 @@ export async function streamOpenAiCompatibleConversation(
   let content = '';
   let resolvedModel = '';
   let lastStreamError = '';
+  // Reasoning-capable models stream their chain-of-thought on `delta.reasoning`.
+  // Tracked only for diagnostics: empty content plus a large reasoning volume
+  // means the model spent its whole token budget thinking and wrote no answer.
+  let reasoningChars = 0;
+  let lastFinishReason = '';
   const streamedToolCalls = new Map<number, StreamedToolCall>();
   const consume = (payload: Record<string, unknown>) => {
     const payloadError = payload.error;
@@ -506,6 +511,18 @@ export async function streamOpenAiCompatibleConversation(
       message?: { content?: unknown; tool_calls?: unknown };
     } | undefined;
     appendStreamedToolCalls(streamedToolCalls, first?.delta?.tool_calls || first?.message?.tool_calls);
+    const wideFirst = first as {
+      delta?: Record<string, unknown>;
+      message?: Record<string, unknown>;
+      finish_reason?: unknown;
+    } | undefined;
+    const reasoningDelta = typeof wideFirst?.delta?.reasoning === 'string'
+      ? wideFirst.delta.reasoning
+      : typeof wideFirst?.message?.reasoning === 'string' ? wideFirst.message.reasoning : '';
+    if (reasoningDelta) reasoningChars += reasoningDelta.length;
+    if (typeof wideFirst?.finish_reason === 'string' && wideFirst.finish_reason) {
+      lastFinishReason = wideFirst.finish_reason;
+    }
     const next = typeof first?.delta?.content === 'string'
       ? first.delta.content
       : typeof first?.message?.content === 'string' ? first.message.content : '';
@@ -523,7 +540,12 @@ export async function streamOpenAiCompatibleConversation(
     model: requestedModelId,
     stream: true,
     temperature: 0.35,
-    max_tokens: 800,
+    // NOTE: `max_tokens` is intentionally omitted. A fixed cap caused two
+    // distinct failures: caps above a model's completion limit are rejected
+    // with HTTP 400 by several providers (blanket breakage), while tight caps
+    // starve reasoning models whose hidden thinking consumes the whole budget
+    // (empty content). Omitting the field lets every provider apply its own
+    // default maximum.
     messages: baseMessages(),
     ...(hasTools && !reduced ? { tools: options.tools } : {}),
     ...(reduced ? {} : requestBodyExtensions(settings, hasTools, requestedModelId)),
@@ -532,7 +554,6 @@ export async function streamOpenAiCompatibleConversation(
     model: requestedModelId,
     stream: true,
     temperature: 0.35,
-    max_tokens: 800,
     messages: [
       ...baseMessages(),
       { role: 'assistant', content },
@@ -707,7 +728,22 @@ export async function streamOpenAiCompatibleConversation(
       );
     }
     if (!content.trim() && !toolCalls.length) {
-      logAiTransport('transport', 'empty_response', { resolvedModel: resolvedModel || requestedModelId });
+      if (reasoningChars > 0) {
+        logAiTransport('transport', 'empty_response_reasoning_only', {
+          reasoningChars,
+          finishReason: lastFinishReason,
+          resolvedModel: resolvedModel || requestedModelId,
+        });
+        throw new OpenAiProviderError(
+          `${descriptor.name} 모델이 추론(생각) 토큰만 생성하고 답변을 비워 두었어요. 답변이 안정적인 다른 모델로 바꿔 보세요.`,
+          'request',
+          settings.providerId
+        );
+      }
+      logAiTransport('transport', 'empty_response', {
+        resolvedModel: resolvedModel || requestedModelId,
+        finishReason: lastFinishReason,
+      });
       throw new OpenAiProviderError(`${descriptor.name} 모델이 빈 응답을 반환했어요.`, 'request', settings.providerId);
     }
     const safeContent = sanitizeContent(content);
@@ -723,6 +759,8 @@ export async function streamOpenAiCompatibleConversation(
       chars: safeContent.length,
       toolCalls: toolCalls.length,
       resolvedModel: resolvedModel || requestedModelId,
+      reasoningChars,
+      finishReason: lastFinishReason,
     });
     return { content: safeContent, modelId: resolvedModel || requestedModelId, toolCalls };
   } catch (error) {
