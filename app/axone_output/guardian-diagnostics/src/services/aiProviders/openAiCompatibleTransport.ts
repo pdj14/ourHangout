@@ -371,7 +371,9 @@ function requestMessage(message: OpenAiConversationMessage) {
   if (message.role === 'assistant') {
     return {
       role: 'assistant' as const,
-      content: message.content?.slice(0, 6000) || null,
+      // An assistant turn without tool_calls must never serialize `content: null`;
+      // several routers reject it with HTTP 400 before selecting a provider.
+      content: message.content?.slice(0, 6000) || (message.tool_calls?.length ? null : ''),
       ...(message.tool_calls?.length ? { tool_calls: message.tool_calls } : {}),
     };
   }
@@ -384,6 +386,48 @@ function requestMessage(message: OpenAiConversationMessage) {
       part.type === 'text' ? { ...part, text: part.text.slice(0, 6000) } : part
     )),
   };
+}
+
+/**
+ * Removes broken tool-call/tool-result pairs from a restored conversation.
+ * A dangling assistant `tool_calls` entry (its results were lost, e.g. the app
+ * was killed mid-run) or an orphan `tool` result makes routers reject the whole
+ * request with HTTP 400 and metadata.provider_name = null.
+ */
+function sanitizeHistory(messages: OpenAiConversationMessage[]) {
+  const answeredIds = new Set<string>();
+  const announcedIds = new Set<string>();
+  messages.forEach((message) => {
+    if (message.role === 'tool' && message.tool_call_id) answeredIds.add(message.tool_call_id);
+    if (message.role === 'assistant') {
+      message.tool_calls?.forEach((call) => {
+        if (call.id) announcedIds.add(call.id);
+      });
+    }
+  });
+  let droppedResults = 0;
+  let droppedCalls = 0;
+  const cleaned = messages
+    .filter((message) => {
+      if (message.role !== 'tool') return true;
+      const keep = !!message.tool_call_id && announcedIds.has(message.tool_call_id);
+      if (!keep) droppedResults += 1;
+      return keep;
+    })
+    .map((message) => {
+      if (message.role !== 'assistant' || !message.tool_calls?.length) return message;
+      const kept = message.tool_calls.filter((call) => !!call.id && answeredIds.has(call.id));
+      if (kept.length === message.tool_calls.length) return message;
+      droppedCalls += message.tool_calls.length - kept.length;
+      return { ...message, tool_calls: kept };
+    });
+  if (droppedResults || droppedCalls) {
+    logAiTransport('transport', 'history_sanitized', {
+      droppedToolResults: droppedResults,
+      droppedToolCalls: droppedCalls,
+    });
+  }
+  return cleaned;
 }
 
 export async function streamOpenAiCompatibleConversation(
@@ -405,32 +449,49 @@ export async function streamOpenAiCompatibleConversation(
   const controller = new AbortController();
   activeController = controller;
   const startedAt = Date.now();
+  const history = sanitizeHistory(messages.slice(-40));
   logAiTransport('transport', 'chat_request', {
     provider: descriptor.name,
     endpoint: hostOf(settings.baseUrl),
     model: requestedModelId,
     tools: hasTools ? options.tools!.length : 0,
-    messages: messages.length,
+    messages: history.length,
+  });
+  const chatUrl = endpoint(settings.baseUrl, '/chat/completions');
+  const buildRequestBody = (reduced: boolean) => JSON.stringify({
+    model: requestedModelId,
+    stream: true,
+    temperature: 0.35,
+    max_tokens: 800,
+    messages: [
+      { role: 'system', content: systemPrompt.slice(0, 5000) },
+      ...history.map(requestMessage),
+    ],
+    ...(hasTools && !reduced ? { tools: options.tools } : {}),
+    ...(reduced ? {} : requestBodyExtensions(settings, hasTools, requestedModelId)),
   });
   let response: Response;
   try {
-    response = await fetch(endpoint(settings.baseUrl, '/chat/completions'), {
+    response = await fetch(chatUrl, {
       method: 'POST',
       signal: controller.signal,
       headers: buildHeaders(settings, apiKey, true),
-      body: JSON.stringify({
-        model: requestedModelId,
-        stream: true,
-        temperature: 0.35,
-        max_tokens: 800,
-        messages: [
-          { role: 'system', content: systemPrompt.slice(0, 5000) },
-          ...messages.slice(-40).map(requestMessage),
-        ],
-        ...(hasTools ? { tools: options.tools } : {}),
-        ...requestBodyExtensions(settings, hasTools, requestedModelId),
-      }),
+      body: buildRequestBody(false),
     });
+    // HTTP 400 usually means one optional extension (reasoning/provider/tools)
+    // was rejected by the router validator. Log the original rejection, then
+    // transparently retry once with the minimal request body so the user still
+    // gets an answer while the logs preserve the root cause.
+    if (!response.ok && response.status === 400) {
+      await responseError(settings, response);
+      logAiTransport('transport', 'retry_reduced_request', {});
+      response = await fetch(chatUrl, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: buildHeaders(settings, apiKey, true),
+        body: buildRequestBody(true),
+      });
+    }
     if (!response.ok) throw await responseError(settings, response);
     if (!response.body) {
       throw new OpenAiProviderError(`${descriptor.name} 스트림을 시작하지 못했어요.`, 'request', settings.providerId);

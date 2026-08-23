@@ -38,6 +38,11 @@ const STOP_WORDS = [
   '<|END_OF_TURN_TOKEN|>',
   '<|end_of_turn|>',
   '<|endoftext|>',
+  // LFM 계열 특수 토큰과 소형 모델에서 흔한 역할 누출 방지.
+  '<|sep|>',
+  '<|pad|>',
+  '\nUser:',
+  '\nAssistant:',
 ];
 
 function requireStorageModule() {
@@ -203,7 +208,7 @@ class OnDeviceAiEngine {
               Math.floor(options.maxTokens || Number.POSITIVE_INFINITY)
             )
           ),
-          temperature: 0.3,
+          temperature: 0.12,
           min_p: 0.15,
           penalty_repeat: 1.05,
           stop: STOP_WORDS,

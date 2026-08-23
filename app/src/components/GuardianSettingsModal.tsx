@@ -112,7 +112,8 @@ export function GuardianSettingsModal({
       || draft.aiEngineType !== profile.aiEngineType
       || draft.cloudProviderId !== profile.cloudProviderId
       || draft.cloudBaseUrl !== profile.cloudBaseUrl
-      || draft.cloudModelId !== profile.cloudModelId,
+      || draft.cloudModelId !== profile.cloudModelId
+      || draft.cloudFallbackModelIds.join('|') !== profile.cloudFallbackModelIds.join('|'),
     [draft, profile]
   );
 
@@ -187,6 +188,11 @@ export function GuardianSettingsModal({
     setDraft(next);
     setModelPickerOpen(false);
     void save(next);
+  };
+
+  const updateFallbackModelIds = (value: string) => {
+    const ids = value.split(/[,\n]/).map((entry) => entry.trim()).filter(Boolean);
+    setDraft((current) => ({ ...current, cloudFallbackModelIds: ids }));
   };
 
   const selectCloudProvider = (providerId: GuardianProfile['cloudProviderId']) => {
@@ -513,6 +519,32 @@ export function GuardianSettingsModal({
                         })}
                       </View>
                     ) : null}
+                  </View>
+                ) : null}
+                {draft.cloudProviderId === 'openRouter' ? (
+                  <View style={styles.providerFields}>
+                    <Text style={styles.fieldLabel}>대체 모델 ID (쉼표 구분, 최대 2개)</Text>
+                    <TextInput
+                      value={draft.cloudFallbackModelIds.join(', ')}
+                      onChangeText={updateFallbackModelIds}
+                      placeholder="기본 모델 실패 시 순서대로 자동 전환"
+                      placeholderTextColor={colors.inkMuted}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      accessibilityLabel="OpenRouter 대체 모델 ID"
+                      style={styles.textInput}
+                    />
+                    <Text style={styles.fieldHelp}>예: qwen/qwen3-8b:free, meta-llama/llama-3.3-70b-instruct:free — 기본 모델 업스트림이 죽었을 때 이 순서로 자동 재시도합니다.</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="API 설정 저장"
+                      disabled={!profileDirty || controlsDisabled}
+                      onPress={saveBasics}
+                      style={[styles.secondarySaveButton, (!profileDirty || controlsDisabled) && styles.disabled]}
+                    >
+                      <Ionicons name="save-outline" size={17} color={colors.tealDark} />
+                      <Text style={styles.secondarySaveText}>API 설정 저장</Text>
+                    </Pressable>
                   </View>
                 ) : null}
                 <View style={styles.cloudPrivacyNote}>

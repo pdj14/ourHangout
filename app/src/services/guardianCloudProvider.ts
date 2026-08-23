@@ -29,6 +29,7 @@ export function getGuardianCloudSettings(profile: GuardianProfile) {
     modelId: profile.cloudProviderId === 'openRouter'
       ? profile.cloudModelId || profile.openRouterModelId
       : profile.cloudModelId,
+    fallbackModelIds: profile.cloudFallbackModelIds,
   });
 }
 

@@ -1,5 +1,8 @@
 import type { GuardianProfile } from './guardianProfile';
-import { buildGuardianSystemPrompt } from './guardianProfile';
+import {
+  buildGuardianOnDeviceMicroPrompt,
+  buildGuardianSystemPrompt,
+} from './guardianProfile';
 import { onDeviceAiEngine, type OnDeviceChatMessage } from './onDeviceAi';
 import {
   streamGuardianCloudConversation,
@@ -82,6 +85,7 @@ export async function completeGuardianConversation(
   let languageRetryUsed = false;
   let uncertaintyRetryUsed = false;
   let controlTokenRetryUsed = false;
+  let toolTextRetryUsed = false;
   let emptyResponseRetryUsed = false;
   const webToolResultCache = new Map<string, string>();
 
@@ -121,7 +125,8 @@ export async function completeGuardianConversation(
     toolCallsUsed += 1;
     const toolStartedAt = Date.now();
     try {
-      const result = await executeGuardianWebTool(call);
+      // 온디바이스 엔진은 좁은 컨텍스트(1024 토큰)를 고려해 핵심 스니펫만 주입한다.
+      const result = await executeGuardianWebTool(call, { compact: profile.aiEngineType !== 'openRouter' });
       logAiTransport('guardian', 'web_tool_ok', {
         name: call.name,
         ms: Date.now() - toolStartedAt,
@@ -325,15 +330,13 @@ export async function completeGuardianConversation(
     return fallback;
   }
 
+  // 온디바이스 소형 모델(LFM 2.5B~2.8B)은 단일 턴 그라운딩으로만 동작한다:
+  // 하네스가 선제 검색해 [웹 도구 결과]를 주입하고, 모델은 도구 프로토콜 없이 1회 답변한다.
   for (let attempt = 0; attempt < MAX_COMPLETION_ATTEMPTS; attempt += 1) {
     if (callbacks.shouldStop?.()) throw new Error('답변 생성을 중지했어요.');
-    const canUseAnotherTool = allowWeb && !automaticSearchUsed && toolCallsUsed < MAX_TOOL_CALLS;
-    const systemPrompt = buildGuardianSystemPrompt(
-      profile,
-      canUseAnotherTool ? 'prompt' : 'none',
-      toolCallsUsed > 0
-    );
-    logAiTransport('guardian', 'ondevice_attempt_start', { attempt: attempt + 1 });
+    const grounded = automaticSearchUsed || toolCallsUsed > 0;
+    const systemPrompt = buildGuardianOnDeviceMicroPrompt(profile, grounded);
+    logAiTransport('guardian', 'ondevice_attempt_start', { attempt: attempt + 1, grounded });
     let revealed = false;
     const finalText = await onDeviceAiEngine.complete(
       workingMessages,
@@ -370,10 +373,6 @@ export async function completeGuardianConversation(
       throw new Error('온디바이스 모델이 답변 본문을 만들지 못했어요. 다시 시도해 주세요.');
     }
 
-    const toolCall = canUseAnotherTool
-      ? parseGuardianWebToolCall(finalText)
-      : null;
-    const containsToolCall = containsGuardianWebToolCall(finalText);
     if (containsGuardianModelControlToken(finalText)) {
       if (!controlTokenRetryUsed) {
         controlTokenRetryUsed = true;
@@ -388,72 +387,70 @@ export async function completeGuardianConversation(
       callbacks.onPartial(GUARDIAN_WEB_TOOL_RESPONSE_FALLBACK);
       return GUARDIAN_WEB_TOOL_RESPONSE_FALLBACK;
     }
-    const malformedToolCall = canUseAnotherTool
-      && containsToolCall
-      && !toolCall;
-    if (malformedToolCall) {
-      logAiTransport('guardian', 'retry_malformed_tool_text', { attempt: attempt + 1 });
-      workingMessages = [
-        ...workingMessages,
-        internalMessage('assistant', finalText),
-        internalMessage(
-          'user',
-          '웹 도구 요청 형식이 올바르지 않습니다. 시스템 안내의 정확한 JSON 형식으로 다시 요청하거나, 도구 없이 최종 답변하세요.'
-        ),
-      ];
-      callbacks.onStatus(`${profile.name}가 웹 요청 형식을 다시 확인하고 있어요.`);
-      continue;
-    }
-    if (!canUseAnotherTool && containsToolCall) {
-      workingMessages = [
-        ...workingMessages,
-        internalMessage('assistant', finalText),
-        internalMessage(
-          'user',
-          '웹 확인은 이미 끝났습니다. 도구 호출 문구나 JSON을 출력하지 말고, 확인된 내용으로 사용자에게 보여줄 자연스러운 한국어 최종 답변만 작성하세요.'
-        ),
-      ];
-      callbacks.onStatus(`${profile.name}가 확인한 내용을 한국어 답변으로 정리하고 있어요.`);
-      continue;
-    }
-    if (!toolCall) {
-      if (canUseAnotherTool && !uncertaintyRetryUsed && looksUncertain(finalText)) {
-        uncertaintyRetryUsed = true;
-        logAiTransport('guardian', 'retry_uncertain_answer', { attempt: attempt + 1 });
-        const result = await runWebTool({
-          name: 'web_search',
-          arguments: { query: buildGuardianWebSearchQuery(originalQuestion) },
-        });
-        appendWebResult(result, finalText);
-        callbacks.onStatus(`${profile.name}가 몰랐던 내용을 웹에서 확인해 다시 답변하고 있어요.`);
-        continue;
-      }
-      if (!isKoreanAnswer(finalText) && !languageRetryUsed) {
-        languageRetryUsed = true;
-        logAiTransport('guardian', 'retry_language', { attempt: attempt + 1 });
-        const latestContext = workingMessages.at(-1)?.content || originalQuestion;
+
+    let candidate = finalText;
+    if (containsGuardianWebToolCall(candidate)) {
+      // 도구를 허용하지 않았으므로 형식 문구는 오출력이다. 1회 교정 후 재발 시 제거해서 사용.
+      if (!toolTextRetryUsed) {
+        toolTextRetryUsed = true;
+        callbacks.onPartial('');
+        logAiTransport('guardian', 'retry_malformed_tool_text', { attempt: attempt + 1 });
         workingMessages = [
           ...workingMessages,
+          internalMessage('assistant', candidate),
           internalMessage(
             'user',
-            `방금 답변을 사용자에게 보여주지 말고, 내부 사고 과정 없이 같은 내용을 자연스러운 한국어로만 다시 작성하세요.\n\n${latestContext}`
+            '도구 호출 문구, XML, JSON을 출력하지 말고 이미 확인한 내용으로 자연스러운 한국어 최종 답변만 작성하세요.'
           ),
         ];
-        callbacks.onStatus(`${profile.name}가 답변을 한국어로 다듬고 있어요.`);
+        callbacks.onStatus(`${profile.name}가 불필요한 도구 문구를 지우고 답변을 다시 쓰고 있어요.`);
         continue;
       }
-      const visibleText = sanitizeGuardianVisibleContent(finalText);
-      logAiTransport('guardian', 'ondevice_done', {
-        attempts: attempt + 1,
-        chars: visibleText.length,
-      });
-      callbacks.onPartial(visibleText);
-      return visibleText;
+      callbacks.onPartial('');
+      candidate = candidate
+        .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+        .replace(/<tool_call>[\s\S]*$/i, '')
+        .trim();
+      if (!candidate) {
+        callbacks.onPartial(GUARDIAN_WEB_TOOL_RESPONSE_FALLBACK);
+        return GUARDIAN_WEB_TOOL_RESPONSE_FALLBACK;
+      }
     }
 
-    const result = await runWebTool(toolCall);
-    appendWebResult(result, finalText);
-    callbacks.onStatus(`${profile.name}가 확인한 내용을 정리하고 있어요.`);
+    if (allowWeb && !automaticSearchUsed && !uncertaintyRetryUsed && looksUncertain(candidate)) {
+      // 불확실 신호 시에도 검색은 모델이 아니라 하네스가 실행한다(모델 출력 파싱 없음).
+      uncertaintyRetryUsed = true;
+      callbacks.onPartial('');
+      logAiTransport('guardian', 'retry_uncertain_answer', { attempt: attempt + 1 });
+      const result = await runWebTool({
+        name: 'web_search',
+        arguments: { query: buildGuardianWebSearchQuery(originalQuestion) },
+      });
+      appendWebResult(result, candidate);
+      callbacks.onStatus(`${profile.name}가 몰랐던 내용을 웹에서 확인해 다시 답변하고 있어요.`);
+      continue;
+    }
+    if (!isKoreanAnswer(candidate) && !languageRetryUsed) {
+      languageRetryUsed = true;
+      logAiTransport('guardian', 'retry_language', { attempt: attempt + 1 });
+      const latestContext = workingMessages.at(-1)?.content || originalQuestion;
+      workingMessages = [
+        ...workingMessages,
+        internalMessage(
+          'user',
+          `방금 답변을 사용자에게 보여주지 말고, 내부 사고 과정 없이 같은 내용을 자연스러운 한국어로만 다시 작성하세요.\n\n${latestContext}`
+        ),
+      ];
+      callbacks.onStatus(`${profile.name}가 답변을 한국어로 다듬고 있어요.`);
+      continue;
+    }
+    const visibleText = sanitizeGuardianVisibleContent(candidate);
+    logAiTransport('guardian', 'ondevice_done', {
+      attempts: attempt + 1,
+      chars: visibleText.length,
+    });
+    callbacks.onPartial(visibleText);
+    return visibleText;
   }
 
   const fallback = '죄송해요. 확인한 내용을 한국어 답변으로 정리하지 못했어요. 질문을 조금 더 짧게 다시 적어 주세요.';

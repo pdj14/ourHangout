@@ -71,26 +71,40 @@ export function webToolsAvailable() {
   return Platform.OS === 'android' && !!NativeBrowserTool;
 }
 
-function formatPage(page: NativeBrowserPage) {
+type WebPageFormatLimits = {
+  textChars: number;
+  linkCount: number;
+  totalChars: number;
+};
+
+const FULL_PAGE_LIMITS: WebPageFormatLimits = { textChars: 1800, linkCount: 5, totalChars: 4200 };
+// 온디바이스 소형 모델(LFM 2.5B~2.8B, 컨텍스트 1024)용 핵심 스니펫 예산.
+// 긴 본문은 프롬프트 예산을 고갈시켜 답변이 잘리거나 누락되므로 핵심만 남긴다.
+const COMPACT_PAGE_LIMITS: WebPageFormatLimits = { textChars: 320, linkCount: 3, totalChars: 420 };
+
+function formatPage(page: NativeBrowserPage, limits: WebPageFormatLimits) {
   const links = (page.links || [])
-    .slice(0, 5)
+    .slice(0, limits.linkCount)
     .map((link, index) => `${index + 1}. ${link.title}\n${link.url}`)
     .join('\n');
-  const text = String(page.text || '').replace(/\s+/g, ' ').trim().slice(0, 1800);
+  const text = String(page.text || '').replace(/\s+/g, ' ').trim().slice(0, limits.textChars);
   return [
     `제목: ${page.title || '제목 없음'}`,
     `주소: ${page.url}`,
     text ? `본문:\n${text}` : '본문을 읽지 못했습니다.',
     links ? `참고 링크:\n${links}` : '',
-  ].filter(Boolean).join('\n\n').slice(0, 4200);
+  ].filter(Boolean).join('\n\n').slice(0, limits.totalChars);
 }
 
-export async function executeGuardianWebTool(call: GuardianWebToolCall) {
+export async function executeGuardianWebTool(
+  call: GuardianWebToolCall,
+  options: { compact?: boolean } = {}
+) {
   if (!NativeBrowserTool) throw new Error('이 Android 빌드에는 웹 도구가 포함되어 있지 않아요.');
   const page = call.name === 'web_search'
     ? await NativeBrowserTool.search(call.arguments.query)
     : await NativeBrowserTool.openUrl(call.arguments.url);
-  return formatPage(page);
+  return formatPage(page, options.compact ? COMPACT_PAGE_LIMITS : FULL_PAGE_LIMITS);
 }
 
 export async function cancelGuardianWebTool() {

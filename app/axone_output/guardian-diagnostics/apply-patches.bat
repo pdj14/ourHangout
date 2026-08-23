@@ -1,42 +1,25 @@
 @echo off
 setlocal EnableExtensions
-set "SRC=%~dp0src"
-set "DST=%~dp0..\.."
-
-echo ==============================================
-echo  OurHangout guardian-diagnostics patch apply
-echo ==============================================
-echo.
-echo From: %SRC%
-echo To  : %DST%\src
-echo.
-
-if not exist "%SRC%\services\debugMode.ts" (
-  echo [ERROR] Patch source not found.
-  echo Keep this .bat inside axone_output\guardian-diagnostics\
-  pause
-  exit /b 1
-)
-
-copy /Y "%SRC%\services\aiProviders\openAiCompatibleTransport.ts" "%DST%\src\services\aiProviders\" || goto :fail
-copy /Y "%SRC%\services\guardianConversation.ts"                  "%DST%\src\services\"               || goto :fail
-copy /Y "%SRC%\services\debugMode.ts"                             "%DST%\src\services\"               || goto :fail
-copy /Y "%SRC%\screens\OnDeviceAiScreen.tsx"                      "%DST%\src\screens\"                || goto :fail
-copy /Y "%SRC%\screens\ProfileScreen.tsx"                         "%DST%\src\screens\"                || goto :fail
+rem ============================================================
+rem  ourHangout guardian diagnostics - patch applier (RETIRED v4)
+rem
+rem  This script is retired. Since the file-edit MCP became
+rem  available, all patches are applied DIRECTLY into src\ and
+rem  this folder's src\ copies are NO LONGER kept in sync.
+rem
+rem  Running an older version of this script would OVERWRITE the
+rem  current fixes with outdated copies, so it now does nothing.
+rem
+rem  To build:
+rem     npm run typecheck
+rem     npm run android:release
+rem ============================================================
 
 echo.
-echo [OK] 5 files applied to src.
-echo.
-echo Next steps:
-echo   cd /d "%DST%"
-echo   npm run typecheck
-echo   npm run android:release
+echo [RETIRED] apply-patches.bat no longer copies anything.
+echo All patches are already applied directly under src\.
+echo Next step:  npm run typecheck
+echo Then:       npm run android:release
 echo.
 pause
 exit /b 0
-
-:fail
-echo.
-echo [ERROR] Copy failed. Check the paths above.
-pause
-exit /b 1

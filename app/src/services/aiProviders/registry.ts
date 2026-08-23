@@ -91,6 +91,21 @@ export function normalizeProviderBaseUrl(providerId: OpenAiCompatibleProviderId,
   return parsed.toString().replace(/\/$/, '');
 }
 
+function normalizeFallbackModelIds(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  value.forEach((entry) => {
+    const id = String(entry || '').trim().slice(0, 240);
+    if (!id) return;
+    const key = id.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    ids.push(id);
+  });
+  return ids.slice(0, 2);
+}
+
 export function normalizeProviderSettings(
   value: Partial<OpenAiCompatibleProviderSettings> | null | undefined
 ): OpenAiCompatibleProviderSettings {
@@ -100,5 +115,6 @@ export function normalizeProviderSettings(
     providerId,
     baseUrl: normalizeProviderBaseUrl(providerId, value?.baseUrl),
     modelId: String(value?.modelId || descriptor.defaultModelId).trim().slice(0, 240),
+    fallbackModelIds: normalizeFallbackModelIds(value?.fallbackModelIds),
   };
 }

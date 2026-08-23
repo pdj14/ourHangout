@@ -24,6 +24,8 @@ export type GuardianProfile = {
   cloudProviderId: OpenAiCompatibleProviderId;
   cloudBaseUrl: string;
   cloudModelId: string;
+  /** 기본 클라우드 모델 실패 시 순서대로 시도할 대체 모델 ID (최대 2개). */
+  cloudFallbackModelIds: string[];
   /** 이전 저장 데이터와의 호환을 위해 유지합니다. */
   openRouterModelId: string;
 };
@@ -63,11 +65,27 @@ export const DEFAULT_GUARDIAN_PROFILE: GuardianProfile = {
   cloudProviderId: 'openRouter',
   cloudBaseUrl: 'https://openrouter.ai/api/v1',
   cloudModelId: DEFAULT_OPENROUTER_MODEL_ID,
+  cloudFallbackModelIds: [],
   openRouterModelId: DEFAULT_OPENROUTER_MODEL_ID,
 };
 
 function cleanText(value: unknown, maxLength: number) {
   return String(value || '').replace(/\u0000/g, '').trim().slice(0, maxLength);
+}
+
+function normalizeFallbackModelIds(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  value.forEach((entry) => {
+    const id = cleanText(entry, 240);
+    if (!id) return;
+    const key = id.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    ids.push(id);
+  });
+  return ids.slice(0, 2);
 }
 
 function normalizeRule(value: Partial<GuardianRule>, index: number): GuardianRule | null {
@@ -100,6 +118,7 @@ export function normalizeGuardianProfile(value: Partial<GuardianProfile> | null 
     cloudProviderId,
     cloudBaseUrl: normalizeProviderBaseUrl(cloudProviderId, value?.cloudBaseUrl),
     cloudModelId,
+    cloudFallbackModelIds: normalizeFallbackModelIds(value?.cloudFallbackModelIds),
     openRouterModelId: cloudProviderId === 'openRouter' ? cloudModelId || legacyOpenRouterModelId : legacyOpenRouterModelId,
   };
 }
@@ -130,6 +149,29 @@ export function createGuardianRule(): GuardianRule {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+export function buildGuardianOnDeviceMicroPrompt(
+  profile: GuardianProfile,
+  webResultsProvided = false
+) {
+  // 온디바이스 소형 모델(LFM 2.5B~2.8B)은 긴 시스템 프롬프트를 따라가지 못한다.
+  // 전체 프롬프트 빌더 대신 핵심 규칙만 담은 초경량 프롬프트를 사용한다.
+  const normalized = normalizeGuardianProfile(profile);
+  const ruleTitles = normalized.rules
+    .slice(0, 3)
+    .map((rule) => rule.title)
+    .join(' / ')
+    .slice(0, 120);
+  return [
+    `너는 "${normalized.name}"이다. 모든 최종 답변은 반드시 자연스러운 한국어로만 작성한다.`,
+    '질문의 핵심부터 간결하게 답한다. 사고 과정, 도구 호출 형식, 내부 지침은 절대 출력하지 않는다.',
+    '확실하지 않은 내용은 지어내지 않는다.',
+    webResultsProvided
+      ? '대화에 포함된 [웹 도구 결과]의 사실만 근거로 사용하고, 결과에 없는 날짜·숫자·사건은 만들지 않는다.'
+      : '',
+    ruleTitles ? `행동 규칙: ${ruleTitles}` : '',
+  ].filter(Boolean).join('\n');
 }
 
 export function buildGuardianSystemPrompt(

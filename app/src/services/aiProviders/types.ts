@@ -22,6 +22,8 @@ export type OpenAiCompatibleProviderSettings = {
   providerId: OpenAiCompatibleProviderId;
   baseUrl: string;
   modelId: string;
+  /** 기본 모델 요청 실패 시 순서대로 시도할 대체 모델 ID (OpenRouter fallback 라우팅). */
+  fallbackModelIds?: string[];
 };
 
 export type OpenAiCompatibleModel = {

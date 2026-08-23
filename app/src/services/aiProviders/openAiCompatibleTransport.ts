@@ -16,6 +16,13 @@ import {
 
 const MODEL_LIST_TIMEOUT_MS = 20_000;
 const CHAT_TIMEOUT_MESSAGE = 'AI 제공자에 연결하지 못했어요. 네트워크와 서버 주소를 확인해 주세요.';
+// 응답 헤더(TTFB)까지의 상한. 본문 스트리밍에는 적용되지 않는다.
+const CONNECT_TIMEOUT_MS = 30_000;
+// 429/5xx/접속 실패에 대한 지수 백오프 재시도 간격.
+const CHAT_RETRY_DELAYS_MS = [1_000, 2_000];
+// 스트리밍 중단 시 부분 답변을 보존한 채 시도하는 이어쓰기 상한 횟수.
+const MAX_AUTO_CONTINUATIONS = 2;
+const CONTINUATION_INSTRUCTION = '방금 답변이 전송 중에 끊겼습니다. 앞의 내용을 반복하거나 새로 시작하지 말고, 끊긴 문장 바로 다음부터 이어서 나머지 답변을 완성하세요.';
 
 export type AiTransportLogEntry = {
   at: string;
@@ -50,6 +57,21 @@ export function clearAiTransportLogs() {
 function describeErrorCause(error: unknown) {
   if (error instanceof Error) return `${error.name}: ${error.message}`;
   return String(error || 'unknown');
+}
+
+function isRetryableHttpStatus(status: number) {
+  return status === 429 || status >= 500;
+}
+
+/** 사용자 취소(외부 signal abort) 시에는 즉시 해제되는 대기. */
+function abortableDelay(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener('abort', () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
 }
 
 type ModelPayload = {
@@ -357,6 +379,7 @@ function requestBodyExtensions(
   return getOpenAiProviderWireAdapter(settings.providerId).requestExtensions({
     hasTools,
     modelId: requestedModelId,
+    fallbackModelIds: settings.fallbackModelIds || [],
   });
 }
 
@@ -371,7 +394,9 @@ function requestMessage(message: OpenAiConversationMessage) {
   if (message.role === 'assistant') {
     return {
       role: 'assistant' as const,
-      content: message.content?.slice(0, 6000) || null,
+      // An assistant turn without tool_calls must never serialize `content: null`;
+      // several routers reject it with HTTP 400 before selecting a provider.
+      content: message.content?.slice(0, 6000) || (message.tool_calls?.length ? null : ''),
       ...(message.tool_calls?.length ? { tool_calls: message.tool_calls } : {}),
     };
   }
@@ -384,6 +409,48 @@ function requestMessage(message: OpenAiConversationMessage) {
       part.type === 'text' ? { ...part, text: part.text.slice(0, 6000) } : part
     )),
   };
+}
+
+/**
+ * Removes broken tool-call/tool-result pairs from a restored conversation.
+ * A dangling assistant `tool_calls` entry (its results were lost, e.g. the app
+ * was killed mid-run) or an orphan `tool` result makes routers reject the whole
+ * request with HTTP 400 and metadata.provider_name = null.
+ */
+function sanitizeHistory(messages: OpenAiConversationMessage[]) {
+  const answeredIds = new Set<string>();
+  const announcedIds = new Set<string>();
+  messages.forEach((message) => {
+    if (message.role === 'tool' && message.tool_call_id) answeredIds.add(message.tool_call_id);
+    if (message.role === 'assistant') {
+      message.tool_calls?.forEach((call) => {
+        if (call.id) announcedIds.add(call.id);
+      });
+    }
+  });
+  let droppedResults = 0;
+  let droppedCalls = 0;
+  const cleaned = messages
+    .filter((message) => {
+      if (message.role !== 'tool') return true;
+      const keep = !!message.tool_call_id && announcedIds.has(message.tool_call_id);
+      if (!keep) droppedResults += 1;
+      return keep;
+    })
+    .map((message) => {
+      if (message.role !== 'assistant' || !message.tool_calls?.length) return message;
+      const kept = message.tool_calls.filter((call) => !!call.id && answeredIds.has(call.id));
+      if (kept.length === message.tool_calls.length) return message;
+      droppedCalls += message.tool_calls.length - kept.length;
+      return { ...message, tool_calls: kept };
+    });
+  if (droppedResults || droppedCalls) {
+    logAiTransport('transport', 'history_sanitized', {
+      droppedToolResults: droppedResults,
+      droppedToolCalls: droppedCalls,
+    });
+  }
+  return cleaned;
 }
 
 export async function streamOpenAiCompatibleConversation(
@@ -405,89 +472,225 @@ export async function streamOpenAiCompatibleConversation(
   const controller = new AbortController();
   activeController = controller;
   const startedAt = Date.now();
+  const history = sanitizeHistory(messages.slice(-40));
   logAiTransport('transport', 'chat_request', {
     provider: descriptor.name,
     endpoint: hostOf(settings.baseUrl),
     model: requestedModelId,
     tools: hasTools ? options.tools!.length : 0,
-    messages: messages.length,
+    messages: history.length,
+    fallbacks: settings.fallbackModelIds?.length || 0,
   });
-  let response: Response;
+  const chatUrl = endpoint(settings.baseUrl, '/chat/completions');
+
+  // --- Accumulators shared across the initial stream and continuation rounds. ---
+  let content = '';
+  let resolvedModel = '';
+  let lastStreamError = '';
+  const streamedToolCalls = new Map<number, StreamedToolCall>();
+  const consume = (payload: Record<string, unknown>) => {
+    const payloadError = payload.error;
+    if (payloadError) {
+      lastStreamError = describePayloadError(payloadError);
+      logAiTransport('transport', 'stream_payload_error', { error: lastStreamError });
+      return;
+    }
+    const model = typeof payload.model === 'string' ? payload.model : '';
+    if (model && model !== resolvedModel) {
+      resolvedModel = model;
+      callbacks.onModel?.(model);
+    }
+    const choices = Array.isArray(payload.choices) ? payload.choices : [];
+    const first = choices[0] as {
+      delta?: { content?: unknown; tool_calls?: unknown };
+      message?: { content?: unknown; tool_calls?: unknown };
+    } | undefined;
+    appendStreamedToolCalls(streamedToolCalls, first?.delta?.tool_calls || first?.message?.tool_calls);
+    const next = typeof first?.delta?.content === 'string'
+      ? first.delta.content
+      : typeof first?.message?.content === 'string' ? first.message.content : '';
+    if (!next) return;
+    content += next;
+    const safeContent = sanitizeContent(content);
+    if (safeContent) callbacks.onPartial(safeContent);
+  };
+
+  const baseMessages = () => [
+    { role: 'system', content: systemPrompt.slice(0, 5000) },
+    ...history.map(requestMessage),
+  ];
+  const buildRequestBody = (reduced: boolean) => JSON.stringify({
+    model: requestedModelId,
+    stream: true,
+    temperature: 0.35,
+    max_tokens: 800,
+    messages: baseMessages(),
+    ...(hasTools && !reduced ? { tools: options.tools } : {}),
+    ...(reduced ? {} : requestBodyExtensions(settings, hasTools, requestedModelId)),
+  });
+  const buildContinuationRequestBody = () => JSON.stringify({
+    model: requestedModelId,
+    stream: true,
+    temperature: 0.35,
+    max_tokens: 800,
+    messages: [
+      ...baseMessages(),
+      { role: 'assistant', content },
+      { role: 'user', content: CONTINUATION_INSTRUCTION },
+    ],
+    ...requestBodyExtensions(settings, false, requestedModelId),
+  });
+
+  /**
+   * POST with client-side resilience:
+   * - TTFB watchdog (CONNECT_TIMEOUT_MS) so a dead endpoint cannot hang forever;
+   * - exponential backoff retry (1s, 2s) for connect failures and 429/5xx.
+   * Only the pre-stream phase retries here; mid-stream drops are handled by
+   * consumeWithRecovery below.
+   */
+  async function fetchChatResponse(body: string): Promise<Response> {
+    for (let attempt = 0; ; attempt += 1) {
+      const attemptController = new AbortController();
+      const forwardAbort = () => attemptController.abort();
+      if (controller.signal.aborted) attemptController.abort();
+      else controller.signal.addEventListener('abort', forwardAbort);
+      const watchdog = setTimeout(() => attemptController.abort(), CONNECT_TIMEOUT_MS);
+      let response: Response;
+      try {
+        response = await fetch(chatUrl, {
+          method: 'POST',
+          signal: attemptController.signal,
+          headers: buildHeaders(settings, apiKey, true),
+          body,
+        });
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        if (attempt < CHAT_RETRY_DELAYS_MS.length) {
+          logAiTransport('transport', 'retry_scheduled', {
+            stage: 'connect',
+            attempt: attempt + 1,
+            delayMs: CHAT_RETRY_DELAYS_MS[attempt],
+            cause: describeErrorCause(error).slice(0, 200),
+          });
+          await abortableDelay(CHAT_RETRY_DELAYS_MS[attempt], controller.signal);
+          if (controller.signal.aborted) throw error;
+          continue;
+        }
+        throw error;
+      } finally {
+        clearTimeout(watchdog);
+        controller.signal.removeEventListener('abort', forwardAbort);
+      }
+      if (!response.ok && isRetryableHttpStatus(response.status)) {
+        const error = await responseError(settings, response);
+        if (attempt < CHAT_RETRY_DELAYS_MS.length) {
+          logAiTransport('transport', 'retry_scheduled', {
+            stage: 'http',
+            status: response.status,
+            attempt: attempt + 1,
+            delayMs: CHAT_RETRY_DELAYS_MS[attempt],
+          });
+          await abortableDelay(CHAT_RETRY_DELAYS_MS[attempt], controller.signal);
+          if (controller.signal.aborted) throw error;
+          continue;
+        }
+        throw error;
+      }
+      return response;
+    }
+  }
+
+  /** Reads one SSE/JSON response into the shared accumulators. */
+  async function consumeResponse(res: Response) {
+    const contentType = res.headers.get('content-type')?.toLowerCase() || '';
+    if (contentType.includes('application/json')) {
+      consume(await res.json() as Record<string, unknown>);
+      return;
+    }
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.match(/\r?\n\r?\n/);
+      while (boundary?.index !== undefined) {
+        parseStreamEvent(buffer.slice(0, boundary.index), consume);
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        boundary = buffer.match(/\r?\n\r?\n/);
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) parseStreamEvent(buffer, consume);
+  }
+
+  /**
+   * Auto-continuation: when the stream drops mid-answer but usable partial
+   * content already exists, keep it and ask the model to continue exactly
+   * where it stopped instead of failing the whole turn.
+   */
+  async function consumeWithRecovery(res: Response) {
+    try {
+      await consumeResponse(res);
+      return;
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+      if (!content.trim() || streamedToolCalls.size > 0) throw error;
+      logAiTransport('transport', 'stream_interrupted', {
+        chars: content.length,
+        cause: describeErrorCause(error).slice(0, 200),
+      });
+    }
+    for (let round = 0; round < MAX_AUTO_CONTINUATIONS; round += 1) {
+      try {
+        const continuation = await fetchChatResponse(buildContinuationRequestBody());
+        if (!continuation.ok) {
+          const error = await responseError(settings, continuation);
+          logAiTransport('transport', 'continuation_failed', { code: error.code });
+          return;
+        }
+        if (!continuation.body) {
+          logAiTransport('transport', 'continuation_failed', { cause: 'empty_body' });
+          return;
+        }
+        await consumeResponse(continuation);
+        return;
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        if (!content.trim() || streamedToolCalls.size > 0) {
+          logAiTransport('transport', 'continuation_failed', {
+            cause: describeErrorCause(error).slice(0, 200),
+          });
+          return;
+        }
+        logAiTransport('transport', 'continuation_retry', {
+          round: round + 1,
+          chars: content.length,
+        });
+      }
+    }
+    logAiTransport('transport', 'continuation_exhausted', { chars: content.length });
+  }
+
   try {
-    response = await fetch(endpoint(settings.baseUrl, '/chat/completions'), {
-      method: 'POST',
-      signal: controller.signal,
-      headers: buildHeaders(settings, apiKey, true),
-      body: JSON.stringify({
-        model: requestedModelId,
-        stream: true,
-        temperature: 0.35,
-        max_tokens: 800,
-        messages: [
-          { role: 'system', content: systemPrompt.slice(0, 5000) },
-          ...messages.slice(-40).map(requestMessage),
-        ],
-        ...(hasTools ? { tools: options.tools } : {}),
-        ...requestBodyExtensions(settings, hasTools, requestedModelId),
-      }),
-    });
+    let response = await fetchChatResponse(buildRequestBody(false));
+    // HTTP 400 usually means one optional extension (reasoning/provider/tools)
+    // was rejected by the router validator. Log the original rejection, then
+    // transparently retry once with the minimal request body so the user still
+    // gets an answer while the logs preserve the root cause.
+    if (!response.ok && response.status === 400) {
+      await responseError(settings, response);
+      logAiTransport('transport', 'retry_reduced_request', {});
+      response = await fetchChatResponse(buildRequestBody(true));
+    }
     if (!response.ok) throw await responseError(settings, response);
     if (!response.body) {
       throw new OpenAiProviderError(`${descriptor.name} 스트림을 시작하지 못했어요.`, 'request', settings.providerId);
     }
 
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let content = '';
-    let resolvedModel = '';
-    let lastStreamError = '';
-    const streamedToolCalls = new Map<number, StreamedToolCall>();
-    const consume = (payload: Record<string, unknown>) => {
-      const payloadError = payload.error;
-      if (payloadError) {
-        lastStreamError = describePayloadError(payloadError);
-        logAiTransport('transport', 'stream_payload_error', { error: lastStreamError });
-        return;
-      }
-      const model = typeof payload.model === 'string' ? payload.model : '';
-      if (model && model !== resolvedModel) {
-        resolvedModel = model;
-        callbacks.onModel?.(model);
-      }
-      const choices = Array.isArray(payload.choices) ? payload.choices : [];
-      const first = choices[0] as {
-        delta?: { content?: unknown; tool_calls?: unknown };
-        message?: { content?: unknown; tool_calls?: unknown };
-      } | undefined;
-      appendStreamedToolCalls(streamedToolCalls, first?.delta?.tool_calls || first?.message?.tool_calls);
-      const next = typeof first?.delta?.content === 'string'
-        ? first.delta.content
-        : typeof first?.message?.content === 'string' ? first.message.content : '';
-      if (!next) return;
-      content += next;
-      const safeContent = sanitizeContent(content);
-      if (safeContent) callbacks.onPartial(safeContent);
-    };
+    await consumeWithRecovery(response);
 
-    const contentType = response.headers.get('content-type')?.toLowerCase() || '';
-    if (contentType.includes('application/json')) {
-      consume(await response.json() as Record<string, unknown>);
-    } else {
-      const reader = response.body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let boundary = buffer.match(/\r?\n\r?\n/);
-        while (boundary?.index !== undefined) {
-          parseStreamEvent(buffer.slice(0, boundary.index), consume);
-          buffer = buffer.slice(boundary.index + boundary[0].length);
-          boundary = buffer.match(/\r?\n\r?\n/);
-        }
-      }
-      buffer += decoder.decode();
-      if (buffer.trim()) parseStreamEvent(buffer, consume);
-    }
     const toolCalls = [...streamedToolCalls.entries()]
       .sort(([left], [right]) => left - right)
       .map(([index, call]) => ({

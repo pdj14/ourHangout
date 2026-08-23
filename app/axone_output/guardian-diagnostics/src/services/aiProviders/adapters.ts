@@ -4,7 +4,6 @@ import type { OpenAiCompatibleProviderId } from './types';
 export type ProviderRequestContext = {
   hasTools: boolean;
   modelId: string;
-  fallbackModelIds: string[];
 };
 
 export type OpenAiProviderWireAdapter = {
@@ -36,7 +35,7 @@ const adapters: Partial<Record<OpenAiCompatibleProviderId, OpenAiProviderWireAda
     buildHeaders: (apiKey, json) => buildOpenRouterHeaders(apiKey || '', json),
     modelsQuery: '?output_modalities=text&supported_parameters=tools&sort=most-popular',
     isFreeModel: isOpenRouterFreeModel,
-    requestExtensions: ({ hasTools, modelId, fallbackModelIds }) => {
+    requestExtensions: ({ hasTools, modelId }) => {
       const freeOnly = isOpenRouterFreeModel(modelId);
       return {
         // NOTE: `effort: 'none'` is not a documented OpenRouter value
@@ -49,12 +48,6 @@ const adapters: Partial<Record<OpenAiCompatibleProviderId, OpenAiProviderWireAda
             ...(hasTools ? { require_parameters: true } : {}),
             ...(freeOnly ? { max_price: { prompt: 0, completion: 0, request: 0 } } : {}),
           },
-        } : {}),
-        // Fallback routing: when the primary model has no available provider
-        // (the recurring free-model outage), OpenRouter retries down this list.
-        ...(fallbackModelIds.length ? {
-          route: 'fallback',
-          models: [modelId, ...fallbackModelIds],
         } : {}),
       };
     },
