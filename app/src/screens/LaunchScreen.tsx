@@ -1,6 +1,7 @@
 import { Image, StyleSheet, Text, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 
-import { colors, radius, spacing, type } from '../theme';
+import { colors, gradients, radius, spacing, type } from '../theme';
 
 const launchArtwork = require('../../assets/hideout-splash.png');
 
@@ -11,6 +12,14 @@ type LaunchScreenProps = {
 export function LaunchScreen({ message = '앱을 준비하고 있습니다.' }: LaunchScreenProps) {
   return (
     <View style={styles.screen}>
+      <LinearGradient
+        colors={gradients.sky}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+      <View style={[styles.cloud, styles.cloudA]} />
+      <View style={[styles.cloud, styles.cloudB]} />
       <View style={styles.mark}>
         <Image source={launchArtwork} resizeMode="contain" style={styles.icon} />
       </View>
@@ -32,6 +41,25 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.canvas,
     paddingHorizontal: spacing.xl,
+  },
+  cloud: {
+    position: 'absolute',
+    borderRadius: radius.pill,
+    backgroundColor: '#FFFFFF',
+  },
+  cloudA: {
+    width: 230,
+    height: 86,
+    top: 74,
+    left: -64,
+    opacity: 0.55,
+  },
+  cloudB: {
+    width: 190,
+    height: 72,
+    bottom: 98,
+    right: -56,
+    opacity: 0.4,
   },
   mark: {
     width: 220,

@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -80,7 +81,7 @@ import {
   mergeMessages,
   previewForMessage,
 } from './services/mappers';
-import { colors } from './theme';
+import { colors, gradients } from './theme';
 import {
   createLocalId,
   mapFamilyLocations,
@@ -2244,9 +2245,14 @@ function RenewalApp() {
         ) : null}
       </View>
       {!keyboardVisible ? (
-        <View style={{ paddingBottom: Math.max(insets.bottom, 8), backgroundColor: colors.surface }}>
+        <LinearGradient
+          colors={gradients.nav}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={{ paddingBottom: Math.max(insets.bottom, 8) }}
+        >
           <BottomNav active={tab} onChange={navigateTab} />
-        </View>
+        </LinearGradient>
       ) : null}
       <FriendSearchModal
         visible={friendSearchOpen}

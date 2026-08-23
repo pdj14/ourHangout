@@ -10,7 +10,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 
-import { colors, radius, shadow, spacing, type } from '../theme';
+import { colors, gradients, radius, shadow, spacing, type } from '../theme';
 import type { AuthState, ServerState } from '../types';
 
 const appIcon = require('../../assets/icon.png');
@@ -36,7 +36,7 @@ export function LoginScreen({ authState, serverState, errorMessage, onSignIn }: 
   return (
     <View style={styles.screen}>
       <LinearGradient
-        colors={[colors.canvas, colors.canvasDeep, colors.surfaceWarm]}
+        colors={gradients.sky}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={StyleSheet.absoluteFill}
