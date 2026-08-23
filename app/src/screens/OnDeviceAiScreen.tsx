@@ -759,7 +759,10 @@ export function OnDeviceAiScreen() {
   const showStatusRow = phase !== 'ready' || !!retryState;
 
   return (
-    <ChatKeyboardLayout style={styles.screen}>
+    <ChatKeyboardLayout
+      keyboardVerticalOffset={Platform.OS === 'android' ? insets.top : 0}
+      style={styles.screen}
+    >
       <ScreenHeader
         eyebrow="우리들의 아지트"
         title={guardianProfile.name}

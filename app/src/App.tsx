@@ -2061,8 +2061,22 @@ function RenewalApp() {
       !!session?.accessToken,
     url: realtimeUrl,
     onEvent: handleRealtimeEvent,
-    onConnected: () => {
+    onConnected: (reconnected) => {
       setErrorMessage((current) => (current === REALTIME_UNSTABLE_MESSAGE ? '' : current));
+      if (!reconnected) return;
+      // 실시간 연결이 끊긴 동안 놓친 데이터를 조용히 다시 동기화한다.
+      const reconnectedRoomId = activeRoomRef.current;
+      void Promise.allSettled([refreshPeople(), refreshRooms()]).then(() => {
+        if (!reconnectedRoomId || activeRoomRef.current !== reconnectedRoomId) return;
+        void loadRoomMessages(reconnectedRoomId)
+          .then((roomMessages) => {
+            if (roomMessages && isRoomVisible(reconnectedRoomId)) {
+              return markRoomAsRead(reconnectedRoomId, roomMessages).catch(() => null);
+            }
+            return null;
+          })
+          .catch(() => null);
+      });
     },
     onUnstable: () => {
       setErrorMessage((current) => current || REALTIME_UNSTABLE_MESSAGE);
@@ -2136,7 +2150,9 @@ function RenewalApp() {
     return (
       <SafeAreaView style={styles.safe}>
         <StatusBar style="dark" />
-        <ConnectionBanner state={realtimeState} onRetry={() => void refreshAll()} />
+        <View pointerEvents="box-none" style={styles.bannerLayer}>
+          <ConnectionBanner state={realtimeState} onRetry={() => void refreshAll()} />
+        </View>
         <RoomScreen
           room={normalizeRoomTitle(activeRoom, users, profile.id)}
           users={users}
@@ -2171,7 +2187,9 @@ function RenewalApp() {
   return (
       <SafeAreaView style={styles.safe}>
       <StatusBar style="dark" />
-      <ConnectionBanner state={realtimeState} onRetry={() => void refreshAll()} />
+      <View pointerEvents="box-none" style={styles.bannerLayer}>
+        <ConnectionBanner state={realtimeState} onRetry={() => void refreshAll()} />
+      </View>
       <View style={styles.body}>
         {tab === 'chats' ? (
           <ChatsScreen
@@ -2334,6 +2352,13 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: colors.canvas,
+  },
+  bannerLayer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 20,
   },
   body: {
     flex: 1,

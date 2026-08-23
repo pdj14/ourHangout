@@ -13,7 +13,7 @@ type UseRealtimeConnectionOptions = {
   enabled: boolean;
   url: string;
   onEvent: (payload: RealtimeEvent) => void;
-  onConnected?: () => void;
+  onConnected?: (reconnected: boolean) => void;
   onUnstable?: () => void;
 };
 
@@ -51,9 +51,10 @@ export function useRealtimeConnection({
     const socket = new WebSocket(url);
     socket.onopen = () => {
       if (disposed) return;
+      const reconnected = attemptRef.current > 0;
       attemptRef.current = 0;
       setState('connected');
-      callbacksRef.current.onConnected?.();
+      callbacksRef.current.onConnected?.(reconnected);
     };
     socket.onmessage = (event) => {
       if (disposed) return;
