@@ -2150,7 +2150,8 @@ function RenewalApp() {
     return (
       <SafeAreaView style={styles.safe}>
         <StatusBar style="dark" />
-        <View pointerEvents="box-none" style={styles.bannerLayer}>
+        {/* 절대 배치 자식은 부모 패딩을 무시하므로 상태바 높이를 직접 더한다 */}
+        <View pointerEvents="box-none" style={[styles.bannerLayer, { top: insets.top }]}>
           <ConnectionBanner state={realtimeState} onRetry={() => void refreshAll()} />
         </View>
         <RoomScreen
@@ -2187,7 +2188,7 @@ function RenewalApp() {
   return (
       <SafeAreaView style={styles.safe}>
       <StatusBar style="dark" />
-      <View pointerEvents="box-none" style={styles.bannerLayer}>
+      <View pointerEvents="box-none" style={[styles.bannerLayer, { top: insets.top }]}>
         <ConnectionBanner state={realtimeState} onRetry={() => void refreshAll()} />
       </View>
       <View style={styles.body}>
@@ -2355,7 +2356,6 @@ const styles = StyleSheet.create({
   },
   bannerLayer: {
     position: 'absolute',
-    top: 0,
     left: 0,
     right: 0,
     zIndex: 20,
