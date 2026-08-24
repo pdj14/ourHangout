@@ -11,7 +11,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
   GoogleSignin,
   isErrorWithCode,
@@ -20,10 +20,10 @@ import {
 } from '@react-native-google-signin/google-signin';
 
 import { BottomNav } from './components/BottomNav';
-import { ConnectionBanner } from './components/ConnectionBanner';
 import { CreateFamilyRoomModal } from './components/CreateFamilyRoomModal';
 import { FamilyRelationshipModal } from './components/FamilyRelationshipModal';
 import { FriendSearchModal } from './components/FriendSearchModal';
+import { GuardianLogsModal } from './components/GuardianLogsModal';
 import { ProfilePhotoCropModal } from './components/ProfilePhotoCropModal';
 import { UserProfileModal } from './components/UserProfileModal';
 import { getDeviceId, getRuntimeConfig } from './config';
@@ -51,6 +51,10 @@ import {
   writeSession,
   type PersistedSession,
 } from './services/session';
+import {
+  fetchGuardianConversationLogs,
+  type GuardianConversationLog,
+} from './services/guardianLogSync';
 import {
   baseUrlForServerEnvironment,
   nextServerEnvironment,
@@ -121,7 +125,6 @@ import type {
   ChatMediaKind,
 } from './types';
 
-const REALTIME_UNSTABLE_MESSAGE = '실시간 연결이 불안정합니다. 자동으로 다시 연결합니다.';
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type SyncInitialOptions = {
@@ -147,7 +150,6 @@ const initialProfile: Profile = {
 
 
 function RenewalApp() {
-  const insets = useSafeAreaInsets();
   const keyboardVisible = useKeyboardVisible();
   const appState = useAppVisibility();
   const config = useMemo(getRuntimeConfig, []);
@@ -190,6 +192,9 @@ function RenewalApp() {
   const [familyStructures, setFamilyStructures] = useState<Record<string, FamilyRoomStructure>>({});
   const [familyStructureLoading, setFamilyStructureLoading] = useState(false);
   const [familyStructureActionKey, setFamilyStructureActionKey] = useState('');
+  const [guardianLogsTarget, setGuardianLogsTarget] = useState<{ userId: string; name: string } | null>(null);
+  const [guardianLogs, setGuardianLogs] = useState<GuardianConversationLog[]>([]);
+  const [guardianLogsLoading, setGuardianLogsLoading] = useState(false);
   const [familyRelationshipRoomId, setFamilyRelationshipRoomId] = useState('');
   const [familyCreateOpen, setFamilyCreateOpen] = useState(false);
   const [familyCreateBusy, setFamilyCreateBusy] = useState(false);
@@ -1757,6 +1762,21 @@ function RenewalApp() {
     [refreshFamilyStructure]
   );
 
+  const openGuardianLogs = useCallback(
+    async (childUserId: string, childName: string) => {
+      setGuardianLogsTarget({ userId: childUserId, name: childName });
+      setGuardianLogs([]);
+      setGuardianLogsLoading(true);
+      try {
+        const items = await fetchGuardianConversationLogs(client, childUserId, 30);
+        setGuardianLogs(items);
+      } finally {
+        setGuardianLogsLoading(false);
+      }
+    },
+    [client]
+  );
+
   const createFamilyRelationship = useCallback(
     async (roomId: string, targetUserId: string, requestAs: 'guardian' | 'child') => {
       const actionKey = `create:${requestAs}:${targetUserId}`;
@@ -2053,7 +2073,7 @@ function RenewalApp() {
   const realtimeUrl = session?.accessToken
     ? `${toWsBaseUrl(client.getBaseUrl())}/v1/ws?token=${encodeURIComponent(session.accessToken)}`
     : '';
-  const realtimeState = useRealtimeConnection({
+  useRealtimeConnection({
     enabled:
       appState === 'active' &&
       serverState === 'ready' &&
@@ -2062,7 +2082,6 @@ function RenewalApp() {
     url: realtimeUrl,
     onEvent: handleRealtimeEvent,
     onConnected: (reconnected) => {
-      setErrorMessage((current) => (current === REALTIME_UNSTABLE_MESSAGE ? '' : current));
       if (!reconnected) return;
       // 실시간 연결이 끊긴 동안 놓친 데이터를 조용히 다시 동기화한다.
       const reconnectedRoomId = activeRoomRef.current;
@@ -2077,9 +2096,6 @@ function RenewalApp() {
           })
           .catch(() => null);
       });
-    },
-    onUnstable: () => {
-      setErrorMessage((current) => current || REALTIME_UNSTABLE_MESSAGE);
     },
   });
 
@@ -2150,10 +2166,6 @@ function RenewalApp() {
     return (
       <SafeAreaView style={styles.safe}>
         <StatusBar style="dark" />
-        {/* 절대 배치 자식은 부모 패딩을 무시하므로 상태바 높이를 직접 더한다 */}
-        <View pointerEvents="box-none" style={[styles.bannerLayer, { top: insets.top }]}>
-          <ConnectionBanner state={realtimeState} onRetry={() => void refreshAll()} />
-        </View>
         <RoomScreen
           room={normalizeRoomTitle(activeRoom, users, profile.id)}
           users={users}
@@ -2188,9 +2200,6 @@ function RenewalApp() {
   return (
       <SafeAreaView style={styles.safe}>
       <StatusBar style="dark" />
-      <View pointerEvents="box-none" style={[styles.bannerLayer, { top: insets.top }]}>
-        <ConnectionBanner state={realtimeState} onRetry={() => void refreshAll()} />
-      </View>
       <View style={styles.body}>
         {tab === 'chats' ? (
           <ChatsScreen
@@ -2200,7 +2209,7 @@ function RenewalApp() {
             currentUserId={profile.id}
             query={chatQuery}
             loading={refreshing}
-            syncMessage={syncMessage || (errorMessage === REALTIME_UNSTABLE_MESSAGE ? '' : errorMessage)}
+            syncMessage={syncMessage || errorMessage}
             onQueryChange={setChatQuery}
             onOpenRoom={openRoom}
             onRefresh={() => void refreshAll()}
@@ -2241,9 +2250,15 @@ function RenewalApp() {
             onRefreshLocations={(roomId) => void refreshFamilyRoomLocations(roomId)}
             onRequestLocation={(roomId, userId) => void requestFamilyLocationRefresh(roomId, userId)}
             onOpenLocationMap={(latitude, longitude) => void openLocationMap(latitude, longitude)}
+            onViewGuardianLogs={(userId, name) => void openGuardianLogs(userId, name)}
           />
         ) : null}
-        {tab === 'ai' ? <OnDeviceAiScreen /> : null}
+        {tab === 'ai' ? (
+          <OnDeviceAiScreen
+            syncRoomId={primaryFamilyRoom?.id || ''}
+            backendClient={client}
+          />
+        ) : null}
         {tab === 'me' ? (
           <ProfileScreen
             profile={profile}
@@ -2268,7 +2283,6 @@ function RenewalApp() {
           colors={gradients.nav}
           start={{ x: 0, y: 0 }}
           end={{ x: 0, y: 1 }}
-          style={{ paddingBottom: Math.max(insets.bottom, 8) }}
         >
           <BottomNav active={tab} onChange={navigateTab} />
         </LinearGradient>
@@ -2337,6 +2351,15 @@ function RenewalApp() {
         onApply={applyCroppedProfileAvatar}
       />
       <UserProfileModal user={viewingUser} onClose={() => setViewingUserId('')} />
+      {guardianLogsTarget ? (
+        <GuardianLogsModal
+          visible
+          childName={guardianLogsTarget.name}
+          loading={guardianLogsLoading}
+          logs={guardianLogs}
+          onClose={() => setGuardianLogsTarget(null)}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -2353,12 +2376,6 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: colors.canvas,
-  },
-  bannerLayer: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    zIndex: 20,
   },
   body: {
     flex: 1,

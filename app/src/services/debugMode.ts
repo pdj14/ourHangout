@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // 숨겨진 개발자 모드 상태.
-// - 프로필 화면의 지킴이 마스코트를 짧은 시간 안에 여러 번 탭하면 토글된다.
+// - 프로필 화면의 지키미 마스코트를 짧은 시간 안에 여러 번 탭하면 토글된다.
 // - 설정은 AsyncStorage에 저장되므로 앱 재시작 후에도 유지된다.
 // - 릴리스 빌드에서도 동작한다(__DEV__와 무관한 순수 앱 상태).
 

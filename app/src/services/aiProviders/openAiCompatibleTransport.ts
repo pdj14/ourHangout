@@ -23,6 +23,7 @@ const CHAT_RETRY_DELAYS_MS = [1_000, 2_000];
 // 스트리밍 중단 시 부분 답변을 보존한 채 시도하는 이어쓰기 상한 횟수.
 const MAX_AUTO_CONTINUATIONS = 2;
 const CONTINUATION_INSTRUCTION = '방금 답변이 전송 중에 끊겼습니다. 앞의 내용을 반복하거나 새로 시작하지 말고, 끊긴 문장 바로 다음부터 이어서 나머지 답변을 완성하세요.';
+const LENGTH_FINISH_REASONS = new Set(['length', 'max_tokens', 'max_output_tokens']);
 
 export type AiTransportLogEntry = {
   at: string;
@@ -711,6 +712,60 @@ export async function streamOpenAiCompatibleConversation(
     }
 
     await consumeWithRecovery(response);
+
+    // Providers can finish a healthy stream with `finish_reason=length` when
+    // their output budget is exhausted. This is not a transport error, so the
+    // recovery path above does not run. Continue explicitly while preserving
+    // the answer already shown to the user.
+    for (let round = 0; round < MAX_AUTO_CONTINUATIONS; round += 1) {
+      if (!LENGTH_FINISH_REASONS.has(lastFinishReason.toLowerCase())) break;
+      if (!content.trim() || streamedToolCalls.size > 0) break;
+      const previousLength = content.length;
+      logAiTransport('transport', 'length_continuation_start', {
+        round: round + 1,
+        chars: previousLength,
+        finishReason: lastFinishReason,
+      });
+      lastFinishReason = '';
+      try {
+        const continuation = await fetchChatResponse(buildContinuationRequestBody());
+        if (!continuation.ok) {
+          const error = await responseError(settings, continuation);
+          logAiTransport('transport', 'length_continuation_failed', {
+            round: round + 1,
+            code: error.code,
+          });
+          break;
+        }
+        if (!continuation.body) {
+          logAiTransport('transport', 'length_continuation_failed', {
+            round: round + 1,
+            cause: 'empty_body',
+          });
+          break;
+        }
+        await consumeWithRecovery(continuation);
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        logAiTransport('transport', 'length_continuation_failed', {
+          round: round + 1,
+          cause: describeErrorCause(error).slice(0, 200),
+        });
+        break;
+      }
+      if (content.length <= previousLength) {
+        logAiTransport('transport', 'length_continuation_stalled', {
+          round: round + 1,
+          chars: content.length,
+        });
+        break;
+      }
+      logAiTransport('transport', 'length_continuation_done', {
+        round: round + 1,
+        addedChars: content.length - previousLength,
+        finishReason: lastFinishReason,
+      });
+    }
 
     const toolCalls = [...streamedToolCalls.entries()]
       .sort(([left], [right]) => left - right)

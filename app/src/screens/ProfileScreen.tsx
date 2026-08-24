@@ -198,7 +198,7 @@ export function ProfileScreen({
 
   return (
     <View style={styles.screen}>
-      <ScreenHeader eyebrow="Account" title="프로필" detail="가족 계정, 사진, 연결 상태" />
+      <ScreenHeader title="프로필" detail="가족 계정, 사진, 연결 상태" />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.profilePanel}>
           <View style={styles.avatarButton}>
@@ -227,17 +227,6 @@ export function ProfileScreen({
               {profile.status || profile.email || '가족에게 보여줄 한마디를 남겨보세요.'}
             </Text>
           </View>
-        </View>
-
-        <View style={styles.guardianPanel}>
-          <View style={styles.guardianCopy}>
-            <Text style={styles.guardianTitle}>작은 숲 지킴이와 함께</Text>
-            <Text style={styles.guardianText}>부모와 아이가 같은 앱에서 대화하고, 가족 탭에서 필요한 연결을 확인해요.</Text>
-          </View>
-          {/* 숨겨진 개발자 모드 토글: 이 마스코트를 연속으로 탭한다. */}
-          <Pressable onPress={handleGuardianMascotTap} hitSlop={6}>
-            <Image source={guardianMascot} resizeMode="contain" style={styles.guardianImage} />
-          </Pressable>
         </View>
 
         {tapHintRemaining !== null ? (
@@ -503,40 +492,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.line,
     ...shadow,
-  },
-  guardianPanel: {
-    minHeight: 100,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    padding: spacing.md,
-    borderRadius: radius.lg,
-    backgroundColor: colors.surfaceWarm,
-    borderWidth: 1,
-    borderColor: colors.line,
-    overflow: 'hidden',
-    ...shadow,
-  },
-  guardianCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-  guardianTitle: {
-    color: colors.ink,
-    fontSize: type.title,
-    fontWeight: '900',
-  },
-  guardianText: {
-    marginTop: spacing.sm,
-    color: colors.inkSoft,
-    fontSize: type.body,
-    lineHeight: 20,
-    fontWeight: '700',
-  },
-  guardianImage: {
-    width: 76,
-    height: 76,
-    marginRight: -4,
   },
   avatarButton: {
     width: 74,

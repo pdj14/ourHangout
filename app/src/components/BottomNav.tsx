@@ -16,7 +16,7 @@ type NavItem = {
 const items: NavItem[] = [
   { key: 'people', label: '사람', icon: 'people-outline' },
   { key: 'chats', label: '대화', icon: 'chatbubbles-outline' },
-  { key: 'ai', label: '지킴이', icon: 'leaf-outline' },
+  { key: 'ai', label: '지키미', icon: 'leaf-outline' },
   { key: 'family', label: '가족', icon: 'shield-checkmark-outline' },
   { key: 'me', label: '프로필', icon: 'person-circle-outline' },
 ];
@@ -41,9 +41,11 @@ export const BottomNav = memo(function BottomNav({ active, onChange }: BottomNav
             style={({ pressed }) => [styles.item, selected && styles.itemOn, pressed && styles.itemPressed]}
           >
             <Ionicons name={item.icon} size={20} color={selected ? colors.tealDark : colors.inkMuted} />
-            <Text style={[styles.label, selected && styles.labelOn]} numberOfLines={1}>
-              {item.label}
-            </Text>
+            {selected ? (
+              <Text style={styles.labelOn} numberOfLines={1}>
+                {item.label}
+              </Text>
+            ) : null}
           </Pressable>
         );
       })}

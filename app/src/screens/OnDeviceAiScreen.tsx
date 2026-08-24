@@ -26,6 +26,7 @@ import { ScreenHeader } from '../components/ScreenHeader';
 import { useChatKeyboard } from '../hooks/useChatKeyboard';
 import { NativeAiModelStorage, type NativeAiModelFile } from '../native';
 import { completeGuardianConversation } from '../services/guardianConversation';
+import { syncGuardianConversationLog } from '../services/guardianLogSync';
 import {
   DEFAULT_GUARDIAN_PROFILE,
   readGuardianProfile,
@@ -47,6 +48,7 @@ import {
 } from '../services/guardianWebTools';
 import {
   createGuardianConversationRoom,
+  archiveDeletedConversation,
   readGuardianConversationStore,
   updateGuardianConversationRoom,
   writeGuardianConversationStore,
@@ -109,7 +111,13 @@ function normalizeGuardianError(error: unknown) {
   return normalizeOnDeviceAiError(error);
 }
 
-export function OnDeviceAiScreen() {
+type OnDeviceAiScreenProps = {
+  syncRoomId?: string;
+  backendClient?: Parameters<typeof syncGuardianConversationLog>[0];
+};
+
+export function OnDeviceAiScreen({ syncRoomId, backendClient }: OnDeviceAiScreenProps) {
+  const activeSyncRoomId = String(syncRoomId || '').trim();
   const insets = useSafeAreaInsets();
   const [models, setModels] = useState<NativeAiModelFile[]>([]);
   const [directoryName, setDirectoryName] = useState('');
@@ -121,7 +129,8 @@ export function OnDeviceAiScreen() {
   const [attachment, setAttachment] = useState<AttachmentDraft | null>(null);
   const [phase, setPhase] = useState<Phase>('scanning');
   const [progress, setProgress] = useState(0);
-  const [statusMessage, setStatusMessage] = useState('지킴이가 기억을 살펴보고 있어요.');
+  const [statusMessage, setStatusMessage] = useState('지키미가 기억을 살펴보고 있어요.');
+  const [progressHint, setProgressHint] = useState<{ hint: string; detail?: string; at: number } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [conversationsOpen, setConversationsOpen] = useState(false);
   const [guardianProfile, setGuardianProfile] = useState<GuardianProfile>(DEFAULT_GUARDIAN_PROFILE);
@@ -170,8 +179,8 @@ export function OnDeviceAiScreen() {
     );
   }, [guardianProfile.aiEngineType, selectedCloudModel]);
   const attachmentMenuHint = engineReady
-    ? '현재 지킴이는 글로만 대화할 수 있어요.'
-    : '지킴이 준비가 끝나면 첨부 기능을 사용할 수 있어요.';
+    ? '현재 지키미는 글로만 대화할 수 있어요.'
+    : '지키미 준비가 끝나면 첨부 기능을 사용할 수 있어요.';
   const pushDiagLine = useCallback((line: string) => {
     diagLinesRef.current = [
       ...diagLinesRef.current.slice(-199),
@@ -220,7 +229,7 @@ export function OnDeviceAiScreen() {
   }, [commitConversationStore]);
 
   const loadSelectedModel = useCallback(async (model: NativeAiModelFile) => {
-    setStatusMessage(model.prepared ? '지킴이를 깨우고 있어요.' : '지킴이의 기억을 앱 저장소에 준비하고 있어요.');
+    setStatusMessage(model.prepared ? '지키미를 깨우고 있어요.' : '지키미의 기억을 앱 저장소에 준비하고 있어요.');
     setPhase(model.prepared ? 'loading' : 'preparing');
     setProgress(0);
     try {
@@ -231,7 +240,7 @@ export function OnDeviceAiScreen() {
         setStatusMessage(
           update.phase === 'preparing'
             ? '모델 파일을 준비하고 있어요. 앱을 종료하지 마세요.'
-            : '지킴이를 깨우고 있어요.'
+            : '지키미를 깨우고 있어요.'
         );
       });
       if (!mountedRef.current || !onDeviceAiEngine.isLoaded(model.uri)) return;
@@ -240,7 +249,7 @@ export function OnDeviceAiScreen() {
       )));
       setPhase('ready');
       setProgress(1);
-      setStatusMessage('지킴이가 아지트에서 기다리고 있어요.');
+      setStatusMessage('지키미가 아지트에서 기다리고 있어요.');
     } catch (error) {
       if (!mountedRef.current) return;
       setPhase('idle');
@@ -278,7 +287,7 @@ export function OnDeviceAiScreen() {
       await loadSelectedModel(preferred);
     } else {
       setPhase('idle');
-      setStatusMessage('지킴이가 사용할 GGUF 모델을 선택해 주세요.');
+      setStatusMessage('지키미가 사용할 GGUF 모델을 선택해 주세요.');
       setSettingsOpen(true);
     }
   }, [loadSelectedModel]);
@@ -326,7 +335,7 @@ export function OnDeviceAiScreen() {
           setPhase(connected ? 'ready' : 'idle');
           setStatusMessage(connected
             ? `${storedGuardianProfile.name}가 이야기를 기다리고 있어요.`
-            : '대화를 시작하려면 지킴이 설정을 확인해 주세요.');
+            : '대화를 시작하려면 지키미 설정을 확인해 주세요.');
           if (connected) {
             try {
               const cloudModels = await fetchGuardianCloudModels(storedGuardianProfile);
@@ -342,7 +351,7 @@ export function OnDeviceAiScreen() {
                   void disconnectGuardianCloudProvider(storedGuardianProfile).catch(() => undefined);
                   setOpenRouterConnected(false);
                   setPhase('idle');
-                  setStatusMessage('대화를 시작하려면 지킴이 설정을 다시 확인해 주세요.');
+                  setStatusMessage('대화를 시작하려면 지키미 설정을 다시 확인해 주세요.');
                 }
                 setOpenRouterMessage(normalizeGuardianError(error));
               }
@@ -392,7 +401,7 @@ export function OnDeviceAiScreen() {
 
   const refreshModels = useCallback(async () => {
     setPhase('scanning');
-    setStatusMessage('지킴이의 기억 목록을 새로 살펴보고 있어요.');
+    setStatusMessage('지키미의 기억 목록을 새로 살펴보고 있어요.');
     try {
       const result = await getOnDeviceModels();
       if (!mountedRef.current) return;
@@ -522,7 +531,7 @@ export function OnDeviceAiScreen() {
       setOpenRouterMessage(`이 기기에서 ${getGuardianCloudProvider(guardianProfile).name} 연결을 해제했어요.`);
       if (guardianProfile.aiEngineType === 'openRouter') {
         setPhase('idle');
-        setStatusMessage('대화를 시작하려면 지킴이 설정을 확인해 주세요.');
+        setStatusMessage('대화를 시작하려면 지키미 설정을 확인해 주세요.');
       }
     } finally {
       if (mountedRef.current) setOpenRouterBusy(false);
@@ -576,6 +585,8 @@ export function OnDeviceAiScreen() {
 
   const deleteConversation = useCallback((conversationId: string) => {
     if (phase === 'generating' || phase === 'stopping') return;
+    const deletingRoom = conversationsRef.current.find((room) => room.id === conversationId);
+    if (deletingRoom) void archiveDeletedConversation(deletingRoom).catch(() => undefined);
     let remaining = conversationsRef.current.filter((room) => room.id !== conversationId);
     if (!remaining.length) remaining = [createGuardianConversationRoom()];
     const deletingActive = activeConversationIdRef.current === conversationId;
@@ -619,7 +630,7 @@ export function OnDeviceAiScreen() {
         setPhase(openRouterConnected ? 'ready' : 'idle');
         setStatusMessage(openRouterConnected
           ? `${saved.name}가 이야기를 기다리고 있어요.`
-          : '대화를 시작하려면 지킴이 설정을 확인해 주세요.');
+          : '대화를 시작하려면 지키미 설정을 확인해 주세요.');
       } else if (selectedModel) {
         await loadSelectedModel(selectedModel);
       } else {
@@ -638,7 +649,7 @@ export function OnDeviceAiScreen() {
         : `${getGuardianCloudProvider(saved).name} API 키 또는 서버 주소를 확인해 주세요.`);
       setStatusMessage(connected
         ? `${saved.name}가 이야기를 기다리고 있어요.`
-        : '대화를 시작하려면 지킴이 설정을 확인해 주세요.');
+        : '대화를 시작하려면 지키미 설정을 확인해 주세요.');
       return;
     }
     setStatusMessage(`${saved.name}의 설정을 저장했어요.`);
@@ -651,6 +662,7 @@ export function OnDeviceAiScreen() {
     const assistantMessage = createMessage('assistant', '');
     stopRequestedRef.current = false;
     setRetryState(null);
+    setProgressHint(null);
     commitMessages([...baseMessages, assistantMessage]);
     setPhase('generating');
     if (guardianProfile.aiEngineType === 'openRouter') {
@@ -659,17 +671,26 @@ export function OnDeviceAiScreen() {
       setStatusMessage(`${guardianProfile.name}가 기기 안에서 생각하고 있어요.`);
     }
     pushDiagLine(`전송 시작 · engine=${guardianProfile.aiEngineType} · provider=${guardianProfile.cloudProviderId || '-'} · model=${guardianProfile.cloudModelId || '-'} · messages=${baseMessages.length}`);
+    nearBottomRef.current = true;
     scheduleScrollToLatest(false);
     try {
       const finalText = await completeGuardianConversation(baseMessages, guardianProfile, {
         onPartial: (partial) => {
           if (!mountedRef.current || stopRequestedRef.current) return;
+          const shouldFollowOutput = nearBottomRef.current;
           const next = [...baseMessages, { ...assistantMessage, content: partial }];
           messagesRef.current = next;
           setMessages(next);
+          if (shouldFollowOutput) scrollToLatest(false);
         },
         onStatus: (message) => {
           if (mountedRef.current && !stopRequestedRef.current) setStatusMessage(message);
+        },
+        onProgress: (hint, detail) => {
+          if (mountedRef.current && !stopRequestedRef.current) {
+            setStatusMessage(`${guardianProfile.name}가 ${hint}.`);
+            setProgressHint({ hint: `${guardianProfile.name}가 ${hint}.`, detail, at: Date.now() });
+          }
         },
         shouldStop: () => stopRequestedRef.current,
       });
@@ -679,8 +700,17 @@ export function OnDeviceAiScreen() {
         { ...assistantMessage, content: finalText || '답변 본문을 만들지 못했어요. 다시 시도해 주세요.' },
       ];
       commitMessages(next);
+      if (activeSyncRoomId && backendClient) {
+        void syncGuardianConversationLog(backendClient, {
+          roomId: activeSyncRoomId,
+          clientLogId: activeConversationIdRef.current,
+          title: conversationsRef.current.find((room) => room.id === activeConversationIdRef.current)?.title,
+          messages: next,
+        });
+      }
       setPhase('ready');
       setRetryState(null);
+      setProgressHint(null);
       setStatusMessage(finalText ? `${guardianProfile.name}가 다음 이야기를 기다리고 있어요.` : '답변 생성을 멈췄어요.');
       scheduleScrollToLatest(false);
     } catch (error) {
@@ -701,11 +731,12 @@ export function OnDeviceAiScreen() {
         setOpenRouterConnected(false);
       }
       setPhase(disconnected ? 'idle' : 'ready');
+      setProgressHint(null);
       setStatusMessage(stopped ? '답변 생성을 멈췄어요.' : message);
       setRetryState(stopped || disconnected ? null : { baseMessages, content: failedContent });
       stopRequestedRef.current = false;
     }
-  }, [commitMessages, guardianProfile, pushDiagLine, scheduleScrollToLatest]);
+  }, [activeSyncRoomId, backendClient, commitMessages, guardianProfile, nearBottomRef, pushDiagLine, scheduleScrollToLatest, scrollToLatest]);
 
   const sendMessage = useCallback(async () => {
     const content = draft.trim();
@@ -764,14 +795,13 @@ export function OnDeviceAiScreen() {
       style={styles.screen}
     >
       <ScreenHeader
-        eyebrow="우리들의 아지트"
         title={guardianProfile.name}
         detail={guardianProfile.synopsis}
         action={
           <View style={styles.headerActions}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="지킴이 진단 로그"
+              accessibilityLabel="지키미 진단 로그"
               onPress={openDiagnostics}
               style={styles.headerButton}
             >
@@ -779,7 +809,7 @@ export function OnDeviceAiScreen() {
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`지킴이 대화 목록, ${conversations.length}개`}
+              accessibilityLabel={`지키미 대화 목록, ${conversations.length}개`}
               disabled={busy}
               onPress={() => setConversationsOpen(true)}
               style={[styles.headerButton, busy && styles.disabled]}
@@ -793,7 +823,7 @@ export function OnDeviceAiScreen() {
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="지킴이 설정"
+              accessibilityLabel="지키미 설정"
               disabled={busy}
               onPress={() => setSettingsOpen(true)}
               style={[styles.headerButton, busy && styles.disabled]}
@@ -815,7 +845,7 @@ export function OnDeviceAiScreen() {
         {phase === 'ready' && messages.length ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="새 지킴이 대화 만들기"
+            accessibilityLabel="새 지키미 대화 만들기"
             onPress={() => void createNewConversation()}
             style={styles.newConversationButton}
           >
@@ -831,10 +861,18 @@ export function OnDeviceAiScreen() {
             <Ionicons name="information-circle-outline" size={17} color={colors.inkMuted} />
           )}
           <Text style={styles.statusText} numberOfLines={2}>{statusMessage}</Text>
+          {phase === 'generating' && progressHint ? (
+            <View style={[styles.progressChip, !!progressHint.detail && styles.progressChipWide]}>
+              <Ionicons name="pulse-outline" size={13} color={colors.tealDark} />
+              <Text style={styles.progressChipText} numberOfLines={1}>
+                {progressHint.detail || progressHint.hint.replace(`${guardianProfile.name}가 `, '')}
+              </Text>
+            </View>
+          ) : null}
           {phase === 'idle' ? (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="지킴이 준비하기"
+              accessibilityLabel="지키미 준비하기"
               onPress={() => guardianProfile.aiEngineType === 'openRouter' || directoryName
                 ? setSettingsOpen(true)
                 : void pickDirectory()}
@@ -843,7 +881,7 @@ export function OnDeviceAiScreen() {
               <Text style={styles.statusActionText}>준비하기</Text>
             </Pressable>
           ) : phase === 'ready' && retryState ? (
-            <Pressable accessibilityRole="button" accessibilityLabel="마지막 지킴이 답변 다시 시도" onPress={() => void retryLastResponse()} style={styles.retryButton}>
+            <Pressable accessibilityRole="button" accessibilityLabel="마지막 지키미 답변 다시 시도" onPress={() => void retryLastResponse()} style={styles.retryButton}>
               <Ionicons name="refresh" size={15} color={colors.tealDark} />
               <Text style={styles.retryText}>재시도</Text>
             </Pressable>
@@ -878,7 +916,11 @@ export function OnDeviceAiScreen() {
             <View style={[styles.messageRow, user && styles.userMessageRow]}>
               {!user ? (
                 <View style={styles.guardianAvatar}>
-                  <Image source={guardianMascot} resizeMode="contain" style={styles.guardianAvatarImage} />
+                  {guardianProfile.avatarUri ? (
+                    <Image source={{ uri: guardianProfile.avatarUri }} style={styles.guardianAvatarImage} />
+                  ) : (
+                    <Image source={guardianMascot} resizeMode="contain" style={styles.guardianAvatarImage} />
+                  )}
                 </View>
               ) : null}
               <View style={[styles.bubble, user ? styles.userBubble : styles.assistantBubble]}>
@@ -895,7 +937,11 @@ export function OnDeviceAiScreen() {
           <View style={styles.emptyState}>
             <View style={styles.guardianScene}>
               <View style={styles.lanternGlow} />
-              <Image source={guardianMascot} resizeMode="contain" style={styles.guardianImage} />
+              {guardianProfile.avatarUri ? (
+                <Image source={{ uri: guardianProfile.avatarUri }} style={[styles.guardianImage, styles.guardianCustomImage]} />
+              ) : (
+                <Image source={guardianMascot} resizeMode="contain" style={styles.guardianImage} />
+              )}
               <View style={styles.guardianWelcome}>
                 <Text style={styles.emptyEyebrow}>{guardianProfile.name}</Text>
                 <Text style={styles.emptyTitle}>오늘은 어떤 이야기를 지켜볼까요?</Text>
@@ -906,7 +952,7 @@ export function OnDeviceAiScreen() {
             {!engineReady ? (
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="지킴이 준비하기"
+                accessibilityLabel="지키미 준비하기"
                 onPress={() => guardianProfile.aiEngineType === 'openRouter'
                   ? setSettingsOpen(true)
                   : directoryName ? setSettingsOpen(true) : void pickDirectory()}
@@ -914,7 +960,7 @@ export function OnDeviceAiScreen() {
               >
                 <Ionicons name="sparkles-outline" size={18} color="#FFFFFF" />
                 <Text style={styles.wakeButtonText}>{directoryName || guardianProfile.aiEngineType === 'openRouter'
-                  ? '지킴이 준비하기'
+                  ? '지키미 준비하기'
                   : '기억 폴더 연결하기'}</Text>
               </Pressable>
             ) : phase === 'ready' ? (
@@ -949,7 +995,7 @@ export function OnDeviceAiScreen() {
         onSend={() => void sendMessage()}
         onStop={() => void stopGeneration()}
         onFocus={handleComposerFocus}
-        placeholder={phase === 'ready' ? '지킴이에게 이야기해 보세요' : '지킴이가 깨어나면 이야기할 수 있어요'}
+        placeholder={phase === 'ready' ? '지키미에게 이야기해 보세요' : '지키미가 깨어나면 이야기할 수 있어요'}
         accessibilityLabel={`${guardianProfile.name}에게 보낼 메시지`}
         editable={phase === 'ready'}
         sending={phase === 'generating'}
@@ -1003,7 +1049,7 @@ export function OnDeviceAiScreen() {
         <View style={styles.diagOverlay}>
           <View style={[styles.diagSheet, { paddingBottom: insets.bottom + spacing.md }]}>
             <View style={styles.diagHeader}>
-              <Text style={styles.diagTitle}>지킴이 진단 로그</Text>
+              <Text style={styles.diagTitle}>지키미 진단 로그</Text>
               <View style={styles.diagHeaderButtons}>
                 <Pressable accessibilityRole="button" accessibilityLabel="진단 로그 비우기" onPress={clearDiagnostics} style={styles.diagButton}>
                   <Text style={styles.diagButtonText}>비우기</Text>
@@ -1045,6 +1091,25 @@ const styles = StyleSheet.create({
   newConversationText: { color: colors.coral, fontSize: type.small, fontWeight: '900' },
   statusRow: { minHeight: 42, marginHorizontal: spacing.lg, marginBottom: spacing.xs, paddingHorizontal: spacing.md, borderRadius: radius.md, backgroundColor: colors.surfaceSoft, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   statusText: { flex: 1, color: colors.inkSoft, fontSize: type.small, lineHeight: 17 },
+  progressChip: {
+    height: 24,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.pill,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  progressChipWide: {
+    maxWidth: 180,
+  },
+  progressChipText: {
+    color: colors.tealDark,
+    fontSize: type.tiny,
+    fontWeight: '800',
+  },
   statusAction: { minHeight: 34, justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: radius.md, backgroundColor: colors.surface },
   statusActionText: { color: colors.tealDark, fontSize: type.small, fontWeight: '900' },
   retryButton: { minHeight: 36, paddingHorizontal: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.teal, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
@@ -1071,6 +1136,7 @@ const styles = StyleSheet.create({
   userMessageRow: { alignSelf: 'flex-end' },
   guardianAvatar: { width: 34, height: 34, borderRadius: radius.pill, overflow: 'hidden', backgroundColor: colors.surfaceWarm, borderWidth: 1, borderColor: '#E9D9BE' },
   guardianAvatarImage: { width: '100%', height: '100%' },
+  guardianCustomImage: { borderRadius: radius.pill },
   bubble: { flexShrink: 1, paddingHorizontal: spacing.md, paddingVertical: 10, borderRadius: radius.lg },
   userBubble: { backgroundColor: colors.mine },
   assistantBubble: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line },

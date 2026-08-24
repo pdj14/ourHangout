@@ -13,8 +13,16 @@ export type GuardianConversationRoom = {
   title: string;
   createdAt: number;
   updatedAt: number;
+  deletedAt?: number;
   messages: OnDeviceChatMessage[];
 };
+
+export type GuardianParentArchive = {
+  version: 1;
+  rooms: GuardianConversationRoom[];
+};
+
+const PARENT_ARCHIVE_KEY = 'guardian:parent_archive_v1';
 
 export type GuardianConversationStore = {
   activeConversationId: string;
@@ -82,6 +90,9 @@ function normalizeRoom(value: unknown): GuardianConversationRoom | null {
       : titleFromMessages(messages),
     createdAt,
     updatedAt,
+    ...(Number.isFinite(record.deletedAt) && Number(record.deletedAt) > 0
+      ? { deletedAt: Number(record.deletedAt) }
+      : {}),
     messages,
   };
 }
@@ -169,4 +180,44 @@ export async function writeGuardianConversationStore(store: GuardianConversation
   const normalized = normalizeStore(store);
   if (!normalized) return;
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+}
+
+export async function archiveDeletedConversation(room: GuardianConversationRoom) {
+  if (!room.messages.length) return;
+  const deletedRoom: GuardianConversationRoom = {
+    ...room,
+    deletedAt: Date.now(),
+    messages: room.messages.slice(-MAX_MESSAGES_PER_CONVERSATION),
+  };
+  const raw = await AsyncStorage.getItem(PARENT_ARCHIVE_KEY);
+  let archive: GuardianParentArchive = { version: 1, rooms: [] };
+  try {
+    const parsed = raw ? (JSON.parse(raw) as Partial<GuardianParentArchive>) : null;
+    if (Array.isArray(parsed?.rooms)) {
+      archive = { version: 1, rooms: parsed.rooms.filter((item): item is GuardianConversationRoom => !!normalizeRoom(item)) };
+    }
+  } catch {
+    archive = { version: 1, rooms: [] };
+  }
+  const remaining = archive.rooms.filter((item) => item.id !== deletedRoom.id);
+  const nextArchive: GuardianParentArchive = {
+    version: 1,
+    rooms: [...remaining, deletedRoom].slice(-100),
+  };
+  await AsyncStorage.setItem(PARENT_ARCHIVE_KEY, JSON.stringify(nextArchive));
+}
+
+export async function readParentArchive(): Promise<GuardianConversationRoom[]> {
+  try {
+    const raw = await AsyncStorage.getItem(PARENT_ARCHIVE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as Partial<GuardianParentArchive>;
+    if (!Array.isArray(parsed.rooms)) return [];
+    return parsed.rooms
+      .map(normalizeRoom)
+      .filter((room): room is GuardianConversationRoom => !!room && !!room.deletedAt)
+      .sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
+  } catch {
+    return [];
+  }
 }

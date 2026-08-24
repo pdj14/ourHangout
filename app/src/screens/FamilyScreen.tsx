@@ -27,6 +27,7 @@ type FamilyScreenProps = {
   onRefreshLocations: (roomId: string) => void;
   onRequestLocation: (roomId: string, userId: string) => void;
   onOpenLocationMap: (latitude: number, longitude: number) => void;
+  onViewGuardianLogs?: (childUserId: string, childName: string) => void;
 };
 
 function formatLocationTime(value?: string): string {
@@ -60,6 +61,7 @@ export function FamilyScreen({
   onRefreshLocations,
   onRequestLocation,
   onOpenLocationMap,
+  onViewGuardianLogs,
 }: FamilyScreenProps) {
   const family = Object.values(users).filter((user) => user.role === 'family');
   const familyRooms = rooms.filter((room) => room.type === 'family');
@@ -68,9 +70,7 @@ export function FamilyScreen({
   return (
     <View style={styles.screen}>
       <ScreenHeader
-        eyebrow="Family"
         title="가족"
-        detail="가족 구성, 가족방, 위치 공유 상태를 한곳에서 확인해요."
         action={
           <Pressable accessibilityRole="button" accessibilityLabel="가족 정보 새로고침" style={styles.iconBtn} onPress={onRefresh}>
             <Ionicons name="refresh" size={21} color={colors.ink} />
@@ -81,7 +81,6 @@ export function FamilyScreen({
         <View style={styles.hero}>
           <View style={styles.heroCopy}>
             <Text style={styles.heroTitle}>우리 가족을 지키는 작은 숲</Text>
-            <Text style={styles.heroText}>가족방을 기준으로 보호자·자녀 관계와 위치 공유를 한곳에서 관리해요.</Text>
             <Pressable
               accessibilityRole="button"
               onPress={() => familyRooms[0] ? onManageRelationships(familyRooms[0].id) : onCreateFamily()}
@@ -98,7 +97,6 @@ export function FamilyScreen({
           <View style={styles.panelTop}>
             <View style={styles.panelCopy}>
               <Text style={styles.panelTitle}>가족 구성</Text>
-              <Text style={styles.panelSub}>서버에 저장된 가족 관계를 가족방별로 확인해요.</Text>
             </View>
             <View style={styles.familyMark}>
               <Ionicons name="shield-checkmark" size={19} color={colors.tealDark} />
@@ -131,7 +129,13 @@ export function FamilyScreen({
                 const relationSummaries = (structure?.relationships || []).map((relationship) => {
                   const guardian = profileById.get(relationship.guardianUserId);
                   const child = profileById.get(relationship.childUserId);
-                  return `${guardian?.alias || guardian?.name || relationship.guardianName || '보호자'} → ${child?.alias || child?.name || relationship.childName || '자녀'}`;
+                  const childName = child?.alias || child?.name || relationship.childName || '자녀';
+                  return {
+                    key: relationship.id,
+                    label: `${guardian?.alias || guardian?.name || relationship.guardianName || '보호자'} → ${childName}`,
+                    childUserId: relationship.childUserId,
+                    childName,
+                  };
                 });
                 return (
                   <View key={`relationships-${room.id}`} style={styles.relationshipRoomGroup}>
@@ -168,10 +172,21 @@ export function FamilyScreen({
                     </View>
                     {relationSummaries.length ? (
                       <View style={styles.relationSummaryList}>
-                        {relationSummaries.map((summary, index) => (
-                          <View key={`${room.id}-summary-${index}`} style={styles.relationSummaryRow}>
+                        {relationSummaries.map((summary) => (
+                          <View key={`${room.id}-summary-${summary.key}`} style={styles.relationSummaryRow}>
                             <Ionicons name="shield-checkmark-outline" size={15} color={colors.tealDark} />
-                            <Text style={styles.relationSummaryText} numberOfLines={1}>{summary}</Text>
+                            <Text style={styles.relationSummaryText} numberOfLines={1}>{summary.label}</Text>
+                            {onViewGuardianLogs ? (
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={`${summary.childName} 지키미 사용 내역 보기`}
+                                onPress={() => onViewGuardianLogs(summary.childUserId, summary.childName)}
+                                style={styles.logsButton}
+                              >
+                                <Ionicons name="sparkles-outline" size={13} color={colors.tealDark} />
+                                <Text style={styles.logsButtonText}>지키미 내역</Text>
+                              </Pressable>
+                            ) : null}
                           </View>
                         ))}
                       </View>
@@ -206,17 +221,11 @@ export function FamilyScreen({
               <View style={[styles.toggleKnob, profile.locationSharingEnabled && styles.toggleKnobOn]} />
             </Pressable>
           </View>
-          <Text style={styles.locationHint}>
-            위치 공유는 가족 기능이 켜진 방에서만 쓰이며, 기기 권한과 서버 동기화가 함께 필요해요.
-          </Text>
         </View>
         <View style={styles.panel}>
           <View style={styles.panelTop}>
             <View style={styles.panelCopy}>
               <Text style={styles.panelTitle}>자녀 위치 확인</Text>
-              <Text style={styles.panelSub}>
-                가족방 멤버의 최근 위치를 보고, 필요할 때 최신 위치를 요청할 수 있어요.
-              </Text>
             </View>
             <Pressable
               accessibilityRole="button"
@@ -333,13 +342,6 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: type.title,
     fontWeight: '900',
-  },
-  heroText: {
-    marginTop: spacing.sm,
-    color: colors.inkSoft,
-    fontSize: type.body,
-    lineHeight: 20,
-    fontWeight: '700',
   },
   heroAction: {
     alignSelf: 'flex-start',
@@ -552,12 +554,6 @@ const styles = StyleSheet.create({
   toggleKnobOn: {
     transform: [{ translateX: 24 }],
   },
-  locationHint: {
-    color: colors.inkSoft,
-    fontSize: type.small,
-    lineHeight: 18,
-    fontWeight: '700',
-  },
   locationRefreshBtn: {
     width: 42,
     height: 42,
@@ -608,6 +604,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.tealDark,
   },
+  logsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  logsButtonText: { fontSize: type.tiny, color: colors.tealDark, fontWeight: '700' },
   locationEmpty: {
     alignItems: 'center',
     gap: spacing.sm,

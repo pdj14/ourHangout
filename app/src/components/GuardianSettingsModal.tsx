@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   KeyboardAvoidingView,
   Linking,
   Modal,
@@ -16,6 +17,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 
 import type { NativeAiModelFile } from '../native';
 import {
@@ -23,6 +25,7 @@ import {
   normalizeGuardianProfile,
   type GuardianProfile,
   type GuardianRule,
+  type OnDeviceResponseLength,
 } from '../services/guardianProfile';
 import {
   getOpenAiProviderDescriptor,
@@ -60,6 +63,16 @@ function formatBytes(value: number) {
   if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(0)} MB`;
   return `${(value / 1024).toFixed(0)} KB`;
 }
+
+const ON_DEVICE_RESPONSE_LENGTHS: Array<{
+  value: OnDeviceResponseLength;
+  label: string;
+  detail: string;
+}> = [
+  { value: 'short', label: '짧게', detail: '빠른 핵심 답변' },
+  { value: 'balanced', label: '보통', detail: '권장 · 완결성 균형' },
+  { value: 'long', label: '길게', detail: '창작·긴 설명 우선' },
+];
 
 export function GuardianSettingsModal({
   visible,
@@ -108,14 +121,36 @@ export function GuardianSettingsModal({
   const profileDirty = useMemo(
     () => draft.name !== profile.name
       || draft.synopsis !== profile.synopsis
+      || (draft.avatarUri || '') !== (profile.avatarUri || '')
       || draft.webBrowsingEnabled !== profile.webBrowsingEnabled
       || draft.aiEngineType !== profile.aiEngineType
+      || draft.onDeviceResponseLength !== profile.onDeviceResponseLength
       || draft.cloudProviderId !== profile.cloudProviderId
       || draft.cloudBaseUrl !== profile.cloudBaseUrl
       || draft.cloudModelId !== profile.cloudModelId
       || draft.cloudFallbackModelIds.join('|') !== profile.cloudFallbackModelIds.join('|'),
     [draft, profile]
   );
+
+  const pickAvatar = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('사진 접근 권한이 필요해요.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.85,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    setDraft((current) => ({ ...current, avatarUri: result.assets[0]!.uri }));
+  };
+
+  const resetAvatar = () => {
+    setDraft((current) => ({ ...current, avatarUri: undefined }));
+  };
 
   const save = async (next: GuardianProfile) => {
     setSaving(true);
@@ -176,6 +211,13 @@ export function GuardianSettingsModal({
     const next = { ...draft, aiEngineType };
     setDraft(next);
     setModelPickerOpen(false);
+    void save(next);
+  };
+
+  const selectOnDeviceResponseLength = (onDeviceResponseLength: OnDeviceResponseLength) => {
+    if (draft.onDeviceResponseLength === onDeviceResponseLength || controlsDisabled) return;
+    const next = { ...draft, onDeviceResponseLength };
+    setDraft(next);
     void save(next);
   };
 
@@ -243,10 +285,10 @@ export function GuardianSettingsModal({
         >
           <View style={styles.header}>
             <View style={styles.headerCopy}>
-              <Text style={styles.title}>지킴이 설정</Text>
+              <Text style={styles.title}>지키미 설정</Text>
               <Text style={styles.detail}>AI 방식, 이름과 행동 규칙을 대화 기준으로 사용해요.</Text>
             </View>
-            <Pressable accessibilityRole="button" accessibilityLabel="지킴이 설정 닫기" onPress={onClose} style={styles.closeButton}>
+            <Pressable accessibilityRole="button" accessibilityLabel="지키미 설정 닫기" onPress={onClose} style={styles.closeButton}>
               <Ionicons name="close" size={25} color={colors.ink} />
             </Pressable>
           </View>
@@ -549,7 +591,7 @@ export function GuardianSettingsModal({
                 ) : null}
                 <View style={styles.cloudPrivacyNote}>
                   <Ionicons name="shield-checkmark-outline" size={18} color={colors.blue} />
-                  <Text style={styles.cloudPrivacyText}>API 모드에서는 지킴이 규칙, 대화 내용과 필요한 웹 검색 자료가 {cloudProvider.name} 서버로 전송됩니다. API 키는 기기 보안 저장소에만 보관됩니다.</Text>
+                  <Text style={styles.cloudPrivacyText}>API 모드에서는 지키미 규칙, 대화 내용과 필요한 웹 검색 자료가 {cloudProvider.name} 서버로 전송됩니다. API 키는 기기 보안 저장소에만 보관됩니다.</Text>
                 </View>
               </View>
             ) : null}
@@ -559,14 +601,38 @@ export function GuardianSettingsModal({
               <Text style={styles.sectionDetail}>모든 답변의 기본 성격과 관점을 정합니다.</Text>
             </View>
             <View style={styles.formBlock}>
+              <View style={styles.avatarRow}>
+                <Pressable accessibilityRole="imagebutton" accessibilityLabel="지키미 프로필 이미지 변경" onPress={() => void pickAvatar()}>
+                  {draft.avatarUri ? (
+                    <Image source={{ uri: draft.avatarUri }} style={styles.avatarPreview} />
+                  ) : (
+                    <Image source={require('../../assets/forest-guardian.png')} resizeMode="cover" style={styles.avatarPreview} />
+                  )}
+                </Pressable>
+                <View style={styles.avatarCopy}>
+                  <Text style={styles.fieldLabel}>프로필 이미지</Text>
+                  <Text style={styles.sectionDetail}>기본 이미지를 유지하거나 갤러리에서 변경할 수 있어요.</Text>
+                  {draft.avatarUri ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="지키미 이미지 기본으로 되돌리기"
+                      onPress={resetAvatar}
+                      style={styles.resetAvatarButton}
+                    >
+                      <Ionicons name="refresh" size={14} color={colors.inkSoft} />
+                      <Text style={styles.resetAvatarText}>기본 이미지로 복원</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              </View>
               <Text style={styles.fieldLabel}>이름</Text>
               <TextInput
                 value={draft.name}
                 onChangeText={(name) => setDraft((current) => ({ ...current, name }))}
-                placeholder="예: 우리집 지킴이"
+                placeholder="예: 우리집 지키미"
                 placeholderTextColor={colors.inkMuted}
                 maxLength={30}
-                accessibilityLabel="지킴이 이름"
+                accessibilityLabel="지키미 이름"
                 style={styles.textInput}
               />
               <Text style={styles.fieldLabel}>시놉시스</Text>
@@ -577,7 +643,7 @@ export function GuardianSettingsModal({
                 placeholderTextColor={colors.inkMuted}
                 maxLength={1000}
                 multiline
-                accessibilityLabel="지킴이 시놉시스"
+                accessibilityLabel="지키미 시놉시스"
                 style={[styles.textInput, styles.synopsisInput]}
               />
               <View style={styles.switchRow}>
@@ -590,12 +656,12 @@ export function GuardianSettingsModal({
                   onValueChange={(webBrowsingEnabled) => setDraft((current) => ({ ...current, webBrowsingEnabled }))}
                   trackColor={{ false: colors.line, true: colors.teal }}
                   thumbColor={colors.surface}
-                  accessibilityLabel="지킴이 웹 확인 허용"
+                  accessibilityLabel="지키미 웹 확인 허용"
                 />
               </View>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="지킴이 기본 정보 저장"
+                accessibilityLabel="지키미 기본 정보 저장"
                 disabled={!profileDirty || controlsDisabled || !draft.name.trim() || !draft.synopsis.trim()}
                 onPress={saveBasics}
                 style={[styles.primaryButton, (!profileDirty || controlsDisabled) && styles.disabled]}
@@ -609,11 +675,11 @@ export function GuardianSettingsModal({
             <View style={styles.ruleHeading}>
               <View style={styles.ruleHeadingCopy}>
                 <Text style={styles.sectionTitle}>행동 규칙</Text>
-                <Text style={styles.sectionDetail}>위에서 아래 순서로 지킴이의 답변에 적용됩니다.</Text>
+                <Text style={styles.sectionDetail}>위에서 아래 순서로 지키미의 답변에 적용됩니다.</Text>
               </View>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="지킴이 규칙 추가"
+                accessibilityLabel="지키미 규칙 추가"
                 disabled={controlsDisabled || draft.rules.length >= 30}
                 onPress={() => setEditingRule(createGuardianRule())}
                 style={[styles.addButton, controlsDisabled && styles.disabled]}
@@ -692,6 +758,29 @@ export function GuardianSettingsModal({
             {draft.aiEngineType === 'onDevice' ? (
               <>
                 <View style={styles.sectionHeadingSpaced}>
+                  <Text style={styles.sectionTitle}>답변 길이</Text>
+                  <Text style={styles.sectionDetail}>기기 성능에 맞춰 출력 한도와 이어쓰기를 조절합니다.</Text>
+                </View>
+                <View style={styles.responseLengthGrid}>
+                  {ON_DEVICE_RESPONSE_LENGTHS.map((option) => {
+                    const active = draft.onDeviceResponseLength === option.value;
+                    return (
+                      <Pressable
+                        key={option.value}
+                        accessibilityRole="button"
+                        accessibilityLabel={`온디바이스 답변 길이 ${option.label}`}
+                        accessibilityState={{ selected: active }}
+                        disabled={controlsDisabled}
+                        onPress={() => selectOnDeviceResponseLength(option.value)}
+                        style={[styles.responseLengthOption, active && styles.responseLengthOptionActive, controlsDisabled && styles.disabled]}
+                      >
+                        <Text style={[styles.responseLengthLabel, active && styles.responseLengthLabelActive]}>{option.label}</Text>
+                        <Text style={styles.responseLengthDetail}>{option.detail}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <View style={styles.sectionHeadingSpaced}>
                   <Text style={styles.sectionTitle}>대화 모델</Text>
                   <Text style={styles.sectionDetail}>{directoryName || 'AiModels 폴더를 연결해 주세요.'}</Text>
                 </View>
@@ -723,8 +812,8 @@ export function GuardianSettingsModal({
             <View style={styles.localNote}>
               <Ionicons name={draft.aiEngineType === 'onDevice' ? 'phone-portrait-outline' : 'information-circle-outline'} size={18} color={colors.tealDark} />
               <Text style={styles.localNoteText}>{draft.aiEngineType === 'onDevice'
-                ? '설정과 대화 내용은 기기에 저장됩니다. 웹 확인을 켠 경우 지킴이가 선택한 공개 페이지 주소와 내용만 기기의 숨겨진 브라우저에서 처리합니다.'
-                : '대화 기록은 이 기기에 저장되지만, 답변 생성에 필요한 대화와 지킴이 설정은 선택한 클라우드 모델로 전송됩니다.'}</Text>
+                ? '설정과 대화 내용은 기기에 저장됩니다. 웹 확인을 켠 경우 지키미가 선택한 공개 페이지 주소와 내용만 기기의 숨겨진 브라우저에서 처리합니다.'
+                : '대화 기록은 이 기기에 저장되지만, 답변 생성에 필요한 대화와 지키미 설정은 선택한 클라우드 모델로 전송됩니다.'}</Text>
             </View>
           </ScrollView>
 
@@ -757,6 +846,12 @@ const styles = StyleSheet.create({
   sectionHeadingSpaced: { marginTop: spacing.xxl, marginBottom: spacing.md },
   sectionTitle: { color: colors.ink, fontSize: type.section, fontWeight: '900' },
   sectionDetail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 17, marginTop: 4 },
+  responseLengthGrid: { flexDirection: 'row', gap: spacing.sm },
+  responseLengthOption: { flex: 1, minHeight: 74, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, justifyContent: 'center', gap: 4 },
+  responseLengthOptionActive: { borderColor: colors.teal, backgroundColor: colors.surfaceSoft },
+  responseLengthLabel: { color: colors.inkSoft, fontSize: type.body, fontWeight: '900' },
+  responseLengthLabelActive: { color: colors.tealDark },
+  responseLengthDetail: { color: colors.inkMuted, fontSize: type.tiny, lineHeight: 15 },
   engineGrid: { flexDirection: 'row', gap: spacing.sm },
   engineOption: { flex: 1, minHeight: 118, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, alignItems: 'flex-start', justifyContent: 'center', gap: spacing.xs },
   engineOptionActive: { borderColor: colors.teal, backgroundColor: colors.surfaceSoft },
@@ -809,6 +904,27 @@ const styles = StyleSheet.create({
   cloudPrivacyNote: { padding: spacing.md, borderRadius: radius.lg, backgroundColor: '#EEF4F8', flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
   cloudPrivacyText: { flex: 1, color: colors.inkSoft, fontSize: type.small, lineHeight: 18 },
   formBlock: { padding: spacing.md, borderWidth: 1, borderColor: colors.line, borderRadius: radius.lg, backgroundColor: colors.surface, gap: spacing.sm },
+  avatarRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.xs },
+  avatarPreview: { width: 64, height: 64, borderRadius: 20, borderWidth: 2, borderColor: colors.line, backgroundColor: colors.surfaceSoft },
+  avatarCopy: { flex: 1, minWidth: 0 },
+  resetAvatarButton: {
+    marginTop: spacing.xs,
+    alignSelf: 'flex-start',
+    minHeight: 32,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: colors.canvas,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  resetAvatarText: {
+    color: colors.inkSoft,
+    fontSize: type.tiny,
+    fontWeight: '800',
+  },
   fieldLabel: { color: colors.inkSoft, fontSize: type.small, fontWeight: '900', marginTop: spacing.xs },
   textInput: { minHeight: 44, paddingHorizontal: spacing.md, paddingVertical: 10, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.canvas, color: colors.ink, fontSize: type.body },
   synopsisInput: { minHeight: 100, textAlignVertical: 'top', lineHeight: 20 },

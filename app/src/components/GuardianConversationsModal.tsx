@@ -61,17 +61,17 @@ export function GuardianConversationsModal({
         <View style={styles.header}>
           <View style={styles.headerCopy}>
             <Text style={styles.eyebrow}>{guardianName}</Text>
-            <Text style={styles.title}>지킴이 대화</Text>
+            <Text style={styles.title}>지키미 대화</Text>
             <Text style={styles.detail}>이전 이야기를 이어가거나 새 대화를 시작할 수 있어요.</Text>
           </View>
-          <Pressable accessibilityRole="button" accessibilityLabel="지킴이 대화 목록 닫기" onPress={onClose} style={styles.iconButton}>
+          <Pressable accessibilityRole="button" accessibilityLabel="지키미 대화 목록 닫기" onPress={onClose} style={styles.iconButton}>
             <Ionicons name="close" size={22} color={colors.ink} />
           </Pressable>
         </View>
 
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="새 지킴이 대화 만들기"
+          accessibilityLabel="새 지키미 대화 만들기"
           disabled={busy}
           onPress={onCreate}
           style={[styles.newButton, busy && styles.disabled]}

@@ -84,7 +84,7 @@ export const ChatComposer = forwardRef<TextInput, ChatComposerProps>(function Ch
               <Text style={styles.menuLabel}>{option.label}</Text>
             </Pressable>
           )) : (
-            <Text style={styles.unsupportedText}>{capabilityHint || '현재 지킴이는 글로만 대화할 수 있어요.'}</Text>
+            <Text style={styles.unsupportedText}>{capabilityHint || '현재 지키미는 글로만 대화할 수 있어요.'}</Text>
           )}
         </View>
       ) : null}

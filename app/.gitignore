@@ -13,3 +13,9 @@ g/
 expo-*.log
 expo-*.err
 npm-debug.log*
+.tmp/
+.android-home/
+assets/*-v2.png
+device-screen*.png
+after-room-fix-*.png
+start-*.png

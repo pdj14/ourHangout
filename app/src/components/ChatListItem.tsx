@@ -14,11 +14,11 @@ type ChatListItemProps = {
   onOpenRoom: (roomId: string) => void;
 };
 
-const typeLabel = {
-  direct: '1:1',
-  group: '모임',
-  family: '가족방',
-};
+const typeBadge = {
+  direct: null,
+  group: 'people',
+  family: 'home',
+} as const;
 
 export const ChatListItem = memo(function ChatListItem({ room, users, currentUserId, latest, onOpenRoom }: ChatListItemProps) {
   const peer = room.memberIds.map((id) => users[id]).find((user) => user && user.id !== currentUserId);
@@ -40,12 +40,23 @@ export const ChatListItem = memo(function ChatListItem({ room, users, currentUse
       onPress={() => onOpenRoom(room.id)}
       style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
     >
-      <Avatar
-        name={avatarName}
-        color={avatarColor}
-        uri={room.type === 'direct' ? peer?.avatarUri : undefined}
-        online={room.memberIds.some((id) => users[id]?.online)}
-      />
+      <View>
+        <Avatar
+          name={avatarName}
+          color={avatarColor}
+          uri={room.type === 'direct' ? peer?.avatarUri : undefined}
+          online={room.memberIds.some((id) => users[id]?.online)}
+        />
+        {typeBadge[room.type] ? (
+          <View style={[styles.typeBadge, room.type === 'family' && styles.familyTypeBadge]}>
+            <Ionicons
+              name={typeBadge[room.type]!}
+              size={11}
+              color={room.type === 'family' ? colors.tealDark : colors.indigo}
+            />
+          </View>
+        ) : null}
+      </View>
       <View style={styles.copy}>
         <View style={styles.topRow}>
           <Text style={styles.title} numberOfLines={1}>
@@ -59,11 +70,6 @@ export const ChatListItem = memo(function ChatListItem({ room, users, currentUse
           {preview}
         </Text>
         <View style={styles.metaRow}>
-          <View style={[styles.pill, room.type === 'family' && styles.familyPill]}>
-            <Text style={[styles.pillText, room.type === 'family' && styles.familyPillText]}>
-              {typeLabel[room.type]}
-            </Text>
-          </View>
           {room.favorite ? <Ionicons name="star" size={13} color={colors.amber} /> : null}
           {room.familySignal ? <Text style={styles.signal}>{room.familySignal}</Text> : null}
           {room.muted ? <Ionicons name="notifications-off-outline" size={14} color={colors.inkMuted} /> : null}
@@ -128,24 +134,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
   },
-  pill: {
-    height: 22,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.pill,
+  typeBadge: {
+    position: 'absolute',
+    right: -3,
+    bottom: -3,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: colors.cream,
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.surfaceSoft,
   },
-  familyPill: {
+  familyTypeBadge: {
     backgroundColor: colors.surfaceWarm,
-  },
-  pillText: {
-    fontSize: type.tiny,
-    fontWeight: '800',
-    color: colors.inkSoft,
-  },
-  familyPillText: {
-    color: colors.tealDark,
   },
   signal: {
     color: colors.tealDark,

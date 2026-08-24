@@ -61,7 +61,6 @@ export function ChatsScreen({
   return (
     <View style={styles.screen}>
       <ScreenHeader
-        eyebrow="Chats"
         title="대화"
         detail={`${rooms.length}개 방 · 읽지 않은 메시지 ${unreadTotal}개`}
         action={

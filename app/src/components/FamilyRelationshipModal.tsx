@@ -253,6 +253,12 @@ export function FamilyRelationshipModal({
                         <Text style={[styles.choiceText, requestAs === 'child' && styles.choiceTextSelected]}>내 보호자로 지정</Text>
                       </Pressable>
                     </View>
+                    <View style={styles.consentBox}>
+                      <Ionicons name="information-circle-outline" size={18} color={colors.tealDark} />
+                      <Text style={styles.consentText}>
+                        부모·자녀 관계를 수락하면 자녀의 지키미(AI) 사용 내역을 부모가 기기에서 확인할 수 있음에 양측이 동의하는 것으로 간주됩니다.
+                      </Text>
+                    </View>
                     <Pressable
                       accessibilityRole="button"
                       disabled={!selectedUserId || busy}
@@ -274,6 +280,21 @@ export function FamilyRelationshipModal({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.surface },
+  consentBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceSoft,
+  },
+  consentText: {
+    flex: 1,
+    fontSize: type.small,
+    lineHeight: 17,
+    color: colors.inkMuted,
+  },
   header: {
     minHeight: 84,
     paddingHorizontal: spacing.lg,

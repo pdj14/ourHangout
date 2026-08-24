@@ -15,12 +15,16 @@ export type GuardianRule = {
   updatedAt: number;
 };
 
+export type OnDeviceResponseLength = 'short' | 'balanced' | 'long';
+
 export type GuardianProfile = {
   name: string;
   synopsis: string;
+  avatarUri?: string;
   rules: GuardianRule[];
   webBrowsingEnabled: boolean;
   aiEngineType: 'onDevice' | 'openRouter';
+  onDeviceResponseLength: OnDeviceResponseLength;
   cloudProviderId: OpenAiCompatibleProviderId;
   cloudBaseUrl: string;
   cloudModelId: string;
@@ -57,11 +61,12 @@ const DEFAULT_RULES: GuardianRule[] = [
 ];
 
 export const DEFAULT_GUARDIAN_PROFILE: GuardianProfile = {
-  name: '숲 지킴이',
+  name: '지키미',
   synopsis: '우리 가족의 이야기를 차분히 듣고, 따뜻하면서도 실용적인 도움을 주는 기기 속 동반자',
   rules: DEFAULT_RULES,
   webBrowsingEnabled: true,
   aiEngineType: 'onDevice',
+  onDeviceResponseLength: 'balanced',
   cloudProviderId: 'openRouter',
   cloudBaseUrl: 'https://openrouter.ai/api/v1',
   cloudModelId: DEFAULT_OPENROUTER_MODEL_ID,
@@ -112,9 +117,13 @@ export function normalizeGuardianProfile(value: Partial<GuardianProfile> | null 
   return {
     name: cleanText(value?.name, 30) || DEFAULT_GUARDIAN_PROFILE.name,
     synopsis: cleanText(value?.synopsis, 1000) || DEFAULT_GUARDIAN_PROFILE.synopsis,
+    ...(value?.avatarUri ? { avatarUri: cleanText(value.avatarUri, 2000) } : {}),
     rules,
     webBrowsingEnabled: value?.webBrowsingEnabled !== false,
     aiEngineType: value?.aiEngineType === 'openRouter' ? 'openRouter' : 'onDevice',
+    onDeviceResponseLength: value?.onDeviceResponseLength === 'short' || value?.onDeviceResponseLength === 'long'
+      ? value.onDeviceResponseLength
+      : 'balanced',
     cloudProviderId,
     cloudBaseUrl: normalizeProviderBaseUrl(cloudProviderId, value?.cloudBaseUrl),
     cloudModelId,

@@ -29,6 +29,7 @@ import { buildGuardianUserContent } from './guardianMultimodal';
 type GuardianCompletionCallbacks = {
   onPartial: (content: string) => void;
   onStatus: (message: string) => void;
+  onProgress?: (hint: string, detail?: string) => void;
   onModel?: (modelId: string) => void;
   shouldStop?: () => boolean;
 };
@@ -89,6 +90,20 @@ export async function completeGuardianConversation(
   let emptyResponseRetryUsed = false;
   const webToolResultCache = new Map<string, string>();
 
+  const emitProgress = (
+    stage: 'thinking' | 'searching' | 'reading' | 'organizing' | 'retrying',
+    detail?: string
+  ) => {
+    const labels = {
+      thinking: '생각을 정리하고 있어요',
+      searching: '웹에서 필요한 정보를 찾고 있어요',
+      reading: '찾은 내용을 읽고 있어요',
+      organizing: '검색 결과를 바탕으로 답변을 정리하고 있어요',
+      retrying: '답변을 다시 확인하고 다듬고 있어요',
+    } as const;
+    callbacks.onProgress?.(labels[stage], detail);
+  };
+
   logAiTransport('guardian', 'completion_start', {
     engine: profile.aiEngineType,
     provider: profile.cloudProviderId || '-',
@@ -115,12 +130,17 @@ export async function completeGuardianConversation(
     const cached = webToolResultCache.get(cacheKey);
     if (cached) {
       callbacks.onStatus(`${profile.name}가 앞서 확인한 웹 자료를 다시 사용하고 있어요.`);
+      emitProgress('reading', call.name === 'web_search' ? `저장된 검색 · ${call.arguments.query}` : '저장된 페이지');
       return cached;
     }
     callbacks.onStatus(
       call.name === 'web_search'
         ? `${profile.name}가 웹에서 관련 정보를 찾고 있어요.`
         : `${profile.name}가 참고 페이지를 읽고 있어요.`
+    );
+    emitProgress(
+      call.name === 'web_search' ? 'searching' : 'reading',
+      call.name === 'web_search' ? `검색어 · ${call.arguments.query}` : undefined
     );
     toolCallsUsed += 1;
     const toolStartedAt = Date.now();
@@ -156,6 +176,7 @@ export async function completeGuardianConversation(
     automaticSearchUsed = true;
     appendWebResult(result);
     callbacks.onStatus(`${profile.name}가 검색 결과를 바탕으로 답변을 준비하고 있어요.`);
+    emitProgress('organizing', '자동 검색 완료');
   }
 
   if (profile.aiEngineType === 'openRouter') {
@@ -175,6 +196,7 @@ export async function completeGuardianConversation(
           ? `${profile.name}가 필요한 정보를 판단하고 있어요.`
           : `${profile.name}가 답변을 정리하고 있어요.`
       );
+      emitProgress(canUseAnotherTool ? 'thinking' : 'organizing');
       logAiTransport('guardian', 'cloud_round_start', {
         round: round + 1,
         toolsAllowed: canUseAnotherTool,
@@ -351,7 +373,9 @@ export async function completeGuardianConversation(
       },
       {
         maxTokens: languageRetryUsed ? 512 : toolCallsUsed > 0 ? 640 : undefined,
+        responseLength: profile.onDeviceResponseLength,
         systemPrompt,
+        onContinuation: () => callbacks.onStatus(`${profile.name}가 끊긴 답변을 이어서 완성하고 있어요.`),
       }
     );
 

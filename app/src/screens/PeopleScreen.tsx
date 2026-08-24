@@ -54,9 +54,7 @@ export function PeopleScreen({
   return (
     <View style={styles.screen}>
       <ScreenHeader
-        eyebrow="People"
         title="사람"
-        detail={`가족 ${family.length}명 · 친구 ${friends.length}명`}
         action={
           <View style={styles.headerActions}>
             <Pressable accessibilityRole="button" accessibilityLabel="친구 추가" style={styles.iconBtn} onPress={onAddFriend}>
@@ -80,13 +78,6 @@ export function PeopleScreen({
         removeClippedSubviews
         ListHeaderComponent={
           <View style={styles.headerStack}>
-            <View style={styles.familyCard}>
-              <View style={styles.familyCopy}>
-                <Text style={styles.familyTitle}>우리 가족 숲</Text>
-                <Text style={styles.familyText}>가까운 사람들과 바로 이야기하고, 가족은 가족 탭에서 더 자세히 볼 수 있어요.</Text>
-              </View>
-              <Image source={guardianMascot} resizeMode="contain" style={styles.mascot} />
-            </View>
             {incomingRequests.length ? (
               <View style={styles.requestGroup}>
                 {incomingRequests.map((request) => (
@@ -197,39 +188,6 @@ const styles = StyleSheet.create({
   },
   headerStack: {
     gap: spacing.md,
-  },
-  familyCard: {
-    minHeight: 104,
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: spacing.md,
-    borderRadius: radius.lg,
-    backgroundColor: colors.surfaceWarm,
-    borderWidth: 1,
-    borderColor: colors.line,
-    overflow: 'hidden',
-    ...shadow,
-  },
-  familyCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-  familyTitle: {
-    color: colors.ink,
-    fontSize: type.title,
-    fontWeight: '900',
-  },
-  familyText: {
-    marginTop: spacing.sm,
-    color: colors.inkSoft,
-    fontSize: type.body,
-    lineHeight: 20,
-    fontWeight: '700',
-  },
-  mascot: {
-    width: 80,
-    height: 80,
-    marginRight: -8,
   },
   requestGroup: {
     gap: spacing.sm,
