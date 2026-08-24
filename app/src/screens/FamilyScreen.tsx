@@ -130,11 +130,13 @@ export function FamilyScreen({
                   const guardian = profileById.get(relationship.guardianUserId);
                   const child = profileById.get(relationship.childUserId);
                   const childName = child?.alias || child?.name || relationship.childName || '자녀';
+                  const isMyGuardianship = relationship.guardianUserId === profile.id;
                   return {
                     key: relationship.id,
                     label: `${guardian?.alias || guardian?.name || relationship.guardianName || '보호자'} → ${childName}`,
                     childUserId: relationship.childUserId,
                     childName,
+                    isMyGuardianship,
                   };
                 });
                 return (
@@ -176,7 +178,7 @@ export function FamilyScreen({
                           <View key={`${room.id}-summary-${summary.key}`} style={styles.relationSummaryRow}>
                             <Ionicons name="shield-checkmark-outline" size={15} color={colors.tealDark} />
                             <Text style={styles.relationSummaryText} numberOfLines={1}>{summary.label}</Text>
-                            {onViewGuardianLogs ? (
+                            {onViewGuardianLogs && summary.isMyGuardianship ? (
                               <Pressable
                                 accessibilityRole="button"
                                 accessibilityLabel={`${summary.childName} 지키미 사용 내역 보기`}
