@@ -11,6 +11,7 @@
     "check": "npm run typecheck && npm run config:check",
     "test:web-tools": "node --test tests/guardianWebToolProtocol.test.mjs tests/guardianWebSearchPolicy.test.mjs",
     "test:chat-capabilities": "node --test tests/modelCapabilities.test.mjs tests/chatComposerIntegration.test.mjs",
+    "test:room-search": "node --test tests/roomSearch.test.mjs",
     "typecheck": "tsc --noEmit",
     "config:check": "expo config --type public",
     "android:prebuild": "expo prebuild --platform android --no-install",

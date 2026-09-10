@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { ChatListItem } from '../components/ChatListItem';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { filterRooms } from '../utils/roomSearch';
 import { colors, radius, spacing, type } from '../theme';
 import type { Message, Room, User } from '../types';
 
@@ -20,6 +21,7 @@ type ChatsScreenProps = {
   onQueryChange: (value: string) => void;
   onOpenRoom: (roomId: string) => void;
   onRefresh: () => void;
+  onStartChat: () => void;
 };
 
 export function ChatsScreen({
@@ -33,15 +35,11 @@ export function ChatsScreen({
   onQueryChange,
   onOpenRoom,
   onRefresh,
+  onStartChat,
 }: ChatsScreenProps) {
   const normalized = query.trim().toLowerCase();
   const filteredRooms = useMemo(
-    () => normalized
-      ? rooms.filter((room) => {
-          const memberNames = room.memberIds.map((id) => users[id]?.name || '').join(' ');
-          return `${room.title} ${room.preview} ${memberNames}`.toLowerCase().includes(normalized);
-        })
-      : rooms,
+    () => filterRooms(rooms, users, normalized),
     [normalized, rooms, users]
   );
   const unreadTotal = useMemo(() => rooms.reduce((sum, room) => sum + room.unread, 0), [rooms]);
@@ -64,9 +62,14 @@ export function ChatsScreen({
         title="대화"
         detail={`${rooms.length}개 방 · 읽지 않은 메시지 ${unreadTotal}개`}
         action={
-          <Pressable accessibilityRole="button" accessibilityLabel="대화 목록 새로고침" style={styles.iconBtn} onPress={onRefresh} disabled={loading}>
-            {loading ? <ActivityIndicator size="small" color={colors.ink} /> : <Ionicons name="refresh" size={20} color={colors.ink} />}
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable accessibilityRole="button" accessibilityLabel="새 대화 시작" style={[styles.iconBtn, styles.primaryIconBtn]} onPress={onStartChat}>
+              <Ionicons name="create-outline" size={21} color={colors.tealDark} />
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="대화 목록 새로고침" style={styles.iconBtn} onPress={onRefresh} disabled={loading}>
+              {loading ? <ActivityIndicator size="small" color={colors.ink} /> : <Ionicons name="refresh" size={20} color={colors.ink} />}
+            </Pressable>
+          </View>
         }
       />
       <View style={styles.searchWrap}>
@@ -74,11 +77,12 @@ export function ChatsScreen({
         <TextInput
           value={query}
           onChangeText={onQueryChange}
-          placeholder="대화방 검색"
+          placeholder="이름, 별명, 대화 내용 검색"
           placeholderTextColor={colors.inkMuted}
           style={styles.search}
           accessibilityLabel="대화방 검색"
           returnKeyType="search"
+          autoCorrect={false}
         />
         {query ? (
           <Pressable accessibilityRole="button" accessibilityLabel="검색어 지우기" onPress={() => onQueryChange('')} style={styles.clearSearch}>
@@ -87,6 +91,7 @@ export function ChatsScreen({
         ) : null}
       </View>
       {syncMessage ? <Text style={styles.syncMessage}>{syncMessage}</Text> : null}
+      {normalized ? <Text accessibilityLiveRegion="polite" style={styles.searchResult}>검색 결과 {filteredRooms.length}개</Text> : null}
       <FlatList
         data={filteredRooms}
         keyExtractor={(room) => room.id}
@@ -106,6 +111,13 @@ export function ChatsScreen({
             <Text style={styles.emptyText}>
               {loading ? '서버에서 가족과 친구의 대화방을 가져오고 있어요.' : normalized ? '다른 이름이나 메시지 내용으로 검색해 보세요.' : '사람 탭에서 친구와 대화를 시작하면 이곳에 모여요.'}
             </Text>
+            {!loading ? <Pressable
+              accessibilityRole="button"
+              onPress={normalized ? () => onQueryChange('') : onStartChat}
+              style={({ pressed }) => [styles.emptyAction, pressed && { opacity: 0.75 }]}
+            >
+              <Text style={styles.emptyActionText}>{normalized ? '검색 초기화' : '첫 대화 시작하기'}</Text>
+            </Pressable> : null}
           </View>
         }
       />
@@ -119,8 +131,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.canvas,
   },
   iconBtn: {
-    width: 42,
-    height: 42,
+    width: 44,
+    height: 44,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -143,14 +155,15 @@ const styles = StyleSheet.create({
   },
   search: {
     flex: 1,
+    minWidth: 0,
     color: colors.ink,
     fontSize: type.body,
     fontWeight: '700',
     paddingVertical: 0,
   },
   clearSearch: {
-    width: 32,
-    height: 32,
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -166,6 +179,11 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
     gap: spacing.md,
   },
+  headerActions: { flexDirection: 'row', gap: spacing.sm },
+  primaryIconBtn: { backgroundColor: colors.surfaceSoft },
+  searchResult: { marginHorizontal: spacing.lg, marginBottom: spacing.md, color: colors.inkSoft, fontSize: type.small },
+  emptyAction: { minHeight: 44, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, marginTop: spacing.lg, borderRadius: radius.md, backgroundColor: colors.tealDark, justifyContent: 'center' },
+  emptyActionText: { color: colors.surface, fontSize: type.body, fontWeight: '700', textAlign: 'center' },
   empty: {
     padding: spacing.xl,
     borderRadius: radius.lg,

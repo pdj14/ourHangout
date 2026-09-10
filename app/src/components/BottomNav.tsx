@@ -36,16 +36,14 @@ export const BottomNav = memo(function BottomNav({ active, onChange }: BottomNav
             key={item.key}
             accessibilityRole="button"
             accessibilityLabel={`${item.label} 탭`}
-            accessibilityState={{ selected }}
+            aria-selected={selected}
             onPress={() => onChange(item.key)}
             style={({ pressed }) => [styles.item, selected && styles.itemOn, pressed && styles.itemPressed]}
           >
             <Ionicons name={item.icon} size={20} color={selected ? colors.tealDark : colors.inkMuted} />
-            {selected ? (
-              <Text style={styles.labelOn} numberOfLines={1}>
-                {item.label}
-              </Text>
-            ) : null}
+            <Text style={[styles.label, selected && styles.labelOn]} numberOfLines={1}>
+              {item.label}
+            </Text>
           </Pressable>
         );
       })}
@@ -56,16 +54,18 @@ export const BottomNav = memo(function BottomNav({ active, onChange }: BottomNav
 const styles = StyleSheet.create({
   wrap: {
     flexDirection: 'row',
-    gap: spacing.sm,
+    gap: spacing.xs,
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
+    paddingBottom: spacing.sm,
     borderTopWidth: 1,
     borderColor: colors.line,
     backgroundColor: 'transparent',
   },
   item: {
     flex: 1,
-    height: 52,
+    minHeight: 56,
+    paddingVertical: spacing.xs,
     borderRadius: radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
@@ -78,7 +78,7 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   label: {
-    fontSize: type.tiny,
+    fontSize: type.small,
     fontWeight: '700',
     color: colors.inkMuted,
   },

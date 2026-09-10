@@ -55,19 +55,20 @@ export function LoginScreen({ authState, serverState, errorMessage, onSignIn }: 
 
           <View style={styles.statusRow}>
             <View style={styles.statusIcon}>
-              {busy || serverState === 'checking' ? <ActivityIndicator size="small" color={colors.tealDark} /> : null}
+              {busy || serverState === 'checking' ? <ActivityIndicator size="small" color={colors.tealDark} /> : <Ionicons name={serverState === 'ready' ? 'checkmark-circle-outline' : 'cloud-offline-outline'} size={18} color={serverState === 'ready' ? colors.tealDark : colors.coral} />}
             </View>
             <Text style={[styles.statusText, serverState === 'error' && styles.statusError]}>{serverLabel}</Text>
           </View>
 
-          {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+          {errorMessage ? <Text accessibilityRole="alert" style={styles.errorText}>{errorMessage}</Text> : null}
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Google로 로그인"
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Google로 로그인"
+            aria-busy={busy}
             onPress={onSignIn}
             disabled={busy}
-            style={[styles.signIn, busy && styles.signInDisabled]}
+            style={({ pressed }) => [styles.signIn, busy && styles.signInDisabled, pressed && { opacity: 0.8 }]}
           >
             <View style={styles.signInIcon}>
               {busy ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="logo-google" size={18} color="#FFFFFF" />}
@@ -166,6 +167,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   statusText: {
+    flexShrink: 1,
     color: colors.inkSoft,
     fontSize: type.small,
     fontWeight: '800',
@@ -182,7 +184,8 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   signIn: {
-    height: 50,
+    minHeight: 50,
+    paddingVertical: spacing.md,
     alignSelf: 'stretch',
     marginTop: spacing.xl,
     borderRadius: radius.md,

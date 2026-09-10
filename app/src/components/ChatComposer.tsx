@@ -62,6 +62,7 @@ export const ChatComposer = forwardRef<TextInput, ChatComposerProps>(function Ch
   );
   const canSend = editable && (!!value.trim() || !!attachment) && attachment?.status !== 'uploading';
   const generating = sending && !!onStop;
+  const sendDisabled = stopping || (!generating && (!canSend || sending));
 
   const pick = (kind: ChatMediaKind) => {
     setMenuOpen(false);
@@ -70,7 +71,7 @@ export const ChatComposer = forwardRef<TextInput, ChatComposerProps>(function Ch
 
   return (
     <View style={styles.wrap}>
-      {menuOpen ? (
+      {menuOpen && editable && !sending && !attachment ? (
         <View style={styles.attachmentMenu}>
           {options.length ? options.map((option) => (
             <Pressable
@@ -105,11 +106,11 @@ export const ChatComposer = forwardRef<TextInput, ChatComposerProps>(function Ch
             </Text>
           </View>
           {attachment.status === 'failed' && onRetryAttachment ? (
-            <Pressable accessibilityRole="button" accessibilityLabel="\uCCA8\uBD80 \uB2E4\uC2DC \uBCF4\uB0B4\uAE30" onPress={onRetryAttachment} style={styles.previewAction}>
+            <Pressable accessibilityRole="button" accessibilityLabel="첨부 다시 보내기" onPress={onRetryAttachment} style={styles.previewAction}>
               <Ionicons name="refresh" size={18} color={colors.coral} />
             </Pressable>
           ) : null}
-          <Pressable accessibilityRole="button" accessibilityLabel="\uCCA8\uBD80 \uC0AD\uC81C" onPress={onRemoveAttachment} style={styles.previewAction}>
+          <Pressable accessibilityRole="button" accessibilityLabel="첨부 삭제" onPress={onRemoveAttachment} style={styles.previewAction}>
             <Ionicons name="close" size={18} color={colors.inkMuted} />
           </Pressable>
         </View>
@@ -118,7 +119,8 @@ export const ChatComposer = forwardRef<TextInput, ChatComposerProps>(function Ch
       <View style={styles.composer}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="\uCCA8\uBD80 \uBA54\uB274"
+          accessibilityLabel="첨부 메뉴"
+          aria-expanded={menuOpen && editable && !sending && !attachment}
           disabled={!editable || sending || !!attachment}
           onPress={() => setMenuOpen((current) => !current)}
           style={[styles.attachButton, (!editable || sending || !!attachment) && styles.disabled]}
@@ -141,9 +143,10 @@ export const ChatComposer = forwardRef<TextInput, ChatComposerProps>(function Ch
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={generating ? '\uC751\uB2F5 \uC911\uC9C0' : '\uBA54\uC2DC\uC9C0 \uBCF4\uB0B4\uAE30'}
-          disabled={stopping || (!generating && !canSend)}
+          disabled={sendDisabled}
+          aria-busy={sending && !generating}
           onPress={generating ? onStop : onSend}
-          style={[styles.sendButton, generating && styles.stopButton, !generating && !canSend && styles.disabled]}
+          style={[styles.sendButton, generating && styles.stopButton, sendDisabled && styles.disabled]}
         >
           {sending && !onStop ? (
             <ActivityIndicator size="small" color="#FFFFFF" />

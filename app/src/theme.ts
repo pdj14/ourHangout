@@ -13,7 +13,7 @@ export const colors = {
   surfaceWarm: '#FFF1E8',
   ink: '#453F5C',
   inkSoft: '#6E6889',
-  inkMuted: '#9C95B3',
+  inkMuted: '#706883',
   line: '#E4DEF2',
   teal: '#5E6BBA',
   tealDark: '#49559B',

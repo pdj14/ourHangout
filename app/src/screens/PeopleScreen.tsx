@@ -55,9 +55,10 @@ export function PeopleScreen({
     <View style={styles.screen}>
       <ScreenHeader
         title="사람"
+        detail={`가족 ${family.length}명 · 친구 ${friends.length}명`}
         action={
           <View style={styles.headerActions}>
-            <Pressable accessibilityRole="button" accessibilityLabel="친구 추가" style={styles.iconBtn} onPress={onAddFriend}>
+            <Pressable accessibilityRole="button" accessibilityLabel="친구 추가" style={[styles.iconBtn, styles.primaryIconBtn]} onPress={onAddFriend}>
               <Ionicons name="person-add-outline" size={20} color={colors.tealDark} />
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="사람 목록 새로고침" style={styles.iconBtn} onPress={onRefresh} disabled={loading}>
@@ -84,7 +85,7 @@ export function PeopleScreen({
                   <View key={request.id} style={styles.requestCard}>
                     <Avatar name={request.name} color={colors.coral} uri={request.avatarUri} size={38} />
                     <View style={styles.requestCopy}>
-                      <Text style={styles.requestTitle}>{request.name}</Text>
+                      <Text style={styles.requestTitle} numberOfLines={2}>{request.name}</Text>
                       <Text style={styles.requestText}>친구 요청을 보냈어요.</Text>
                     </View>
                     <View style={styles.requestActions}>
@@ -118,7 +119,7 @@ export function PeopleScreen({
           return (
             <View>
               {sectionStart ? (
-                <Text style={styles.section}>{item.role === 'family' ? '가족' : '친구'}</Text>
+                <Text accessibilityRole="header" style={styles.section}>{item.role === 'family' ? `가족 ${family.length}` : `친구 ${friends.length}`}</Text>
               ) : null}
               <View style={styles.personCard}>
                 <Pressable
@@ -153,8 +154,13 @@ export function PeopleScreen({
         ListEmptyComponent={
           <View style={styles.empty}>
             <Image source={guardianMascot} resizeMode="contain" style={styles.emptyMascot} />
-            <Text style={styles.emptyTitle}>아직 보이는 사람이 없어요</Text>
-            <Text style={styles.emptyText}>친구를 추가하거나 가족방에 초대되면 이곳에 나타나요.</Text>
+            {loading ? <ActivityIndicator color={colors.tealDark} style={styles.emptySpinner} /> : null}
+            <Text style={styles.emptyTitle}>{loading ? '사람들을 불러오는 중이에요' : '소중한 사람과 연결해 보세요'}</Text>
+            <Text style={styles.emptyText}>{loading ? '가족과 친구 목록을 확인하고 있어요.' : '친구를 추가하면 대화를 시작할 수 있어요. 가족방에서 연결된 가족도 여기에 모여요.'}</Text>
+            {!loading ? <Pressable accessibilityRole="button" accessibilityLabel="친구 추가하기" onPress={onAddFriend} style={({ pressed }) => [styles.emptyAction, pressed && { opacity: 0.75 }]}>
+              <Ionicons name="person-add-outline" size={18} color={colors.surface} />
+              <Text style={styles.emptyActionText}>친구 추가하기</Text>
+            </Pressable> : null}
           </View>
         }
       />
@@ -168,8 +174,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.canvas,
   },
   iconBtn: {
-    width: 42,
-    height: 42,
+    width: 44,
+    height: 44,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -205,6 +211,7 @@ const styles = StyleSheet.create({
   },
   requestCopy: {
     flex: 1,
+    minWidth: 0,
   },
   requestTitle: {
     color: colors.ink,
@@ -222,8 +229,8 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   miniBtn: {
-    width: 34,
-    height: 34,
+    width: 44,
+    height: 44,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -236,7 +243,7 @@ const styles = StyleSheet.create({
   },
   section: {
     color: colors.inkMuted,
-    fontSize: type.tiny,
+    fontSize: type.small,
     fontWeight: '900',
     marginBottom: spacing.sm,
     marginTop: spacing.xs,
@@ -275,8 +282,8 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   iconSmall: {
-    width: 36,
-    height: 36,
+    width: 44,
+    height: 44,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -290,6 +297,10 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     alignItems: 'center',
   },
+  primaryIconBtn: { backgroundColor: colors.surfaceSoft },
+  emptySpinner: { marginBottom: spacing.md },
+  emptyAction: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, marginTop: spacing.lg, borderRadius: radius.md, backgroundColor: colors.tealDark },
+  emptyActionText: { color: colors.surface, fontSize: type.body, fontWeight: '700' },
   emptyMascot: {
     width: 72,
     height: 72,

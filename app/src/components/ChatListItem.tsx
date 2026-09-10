@@ -45,7 +45,7 @@ export const ChatListItem = memo(function ChatListItem({ room, users, currentUse
           name={avatarName}
           color={avatarColor}
           uri={room.type === 'direct' ? peer?.avatarUri : undefined}
-          online={room.memberIds.some((id) => users[id]?.online)}
+          online={room.memberIds.some((id) => id !== currentUserId && users[id]?.online)}
         />
         {typeBadge[room.type] ? (
           <View style={[styles.typeBadge, room.type === 'family' && styles.familyTypeBadge]}>
@@ -69,11 +69,13 @@ export const ChatListItem = memo(function ChatListItem({ room, users, currentUse
         <Text style={styles.preview} numberOfLines={1}>
           {preview}
         </Text>
-        <View style={styles.metaRow}>
-          {room.favorite ? <Ionicons name="star" size={13} color={colors.amber} /> : null}
-          {room.familySignal ? <Text style={styles.signal}>{room.familySignal}</Text> : null}
-          {room.muted ? <Ionicons name="notifications-off-outline" size={14} color={colors.inkMuted} /> : null}
-        </View>
+        {room.favorite || room.familySignal || room.muted ? (
+          <View style={styles.metaRow}>
+            {room.favorite ? <Ionicons name="star" size={13} color={colors.amber} /> : null}
+            {room.familySignal ? <Text style={styles.signal}>{room.familySignal}</Text> : null}
+            {room.muted ? <Ionicons name="notifications-off-outline" size={14} color={colors.inkMuted} /> : null}
+          </View>
+        ) : null}
       </View>
       {room.unread > 0 ? (
         <View style={styles.unread}>

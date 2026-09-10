@@ -71,6 +71,7 @@ export function FamilyScreen({
     <View style={styles.screen}>
       <ScreenHeader
         title="가족"
+        detail="가족 관계와 위치 공유를 한곳에서"
         action={
           <Pressable accessibilityRole="button" accessibilityLabel="가족 정보 새로고침" style={styles.iconBtn} onPress={onRefresh}>
             <Ionicons name="refresh" size={21} color={colors.ink} />
@@ -216,7 +217,8 @@ export function FamilyScreen({
             <Pressable
               accessibilityRole="switch"
               accessibilityLabel="가족 위치 공유"
-              accessibilityState={{ checked: !!profile.locationSharingEnabled }}
+              aria-checked={!!profile.locationSharingEnabled}
+              hitSlop={{ top: 7, bottom: 7, left: 0, right: 0 }}
               onPress={onToggleLocationConsent}
               style={[styles.toggle, profile.locationSharingEnabled && styles.toggleOn]}
             >
@@ -232,7 +234,7 @@ export function FamilyScreen({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="가족 위치 새로고침"
-              style={styles.locationRefreshBtn}
+              style={[styles.locationRefreshBtn, (!activeLocationRoomId || locationLoading) && styles.disabled]}
               disabled={!activeLocationRoomId || locationLoading}
               onPress={() => activeLocationRoomId && onRefreshLocations(activeLocationRoomId)}
             >
@@ -310,8 +312,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.canvas,
   },
   iconBtn: {
-    width: 42,
-    height: 42,
+    width: 44,
+    height: 44,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -347,7 +349,8 @@ const styles = StyleSheet.create({
   },
   heroAction: {
     alignSelf: 'flex-start',
-    minHeight: 38,
+    minHeight: 44,
+    paddingVertical: spacing.sm,
     marginTop: spacing.md,
     paddingHorizontal: spacing.md,
     flexDirection: 'row',
@@ -357,6 +360,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.tealDark,
   },
   heroActionText: {
+    flexShrink: 1,
     color: '#FFFFFF',
     fontSize: type.small,
     fontWeight: '900',
@@ -428,15 +432,15 @@ const styles = StyleSheet.create({
     backgroundColor: colors.canvas,
   },
   roomOpenButton: {
-    width: 36,
-    height: 36,
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: radius.md,
     backgroundColor: colors.surface,
   },
   manageButton: {
-    minHeight: 36,
+    minHeight: 44,
     paddingHorizontal: spacing.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -494,6 +498,7 @@ const styles = StyleSheet.create({
   },
   memberCopy: {
     flex: 1,
+    minWidth: 0,
   },
   memberName: {
     color: colors.ink,
@@ -557,8 +562,8 @@ const styles = StyleSheet.create({
     transform: [{ translateX: 24 }],
   },
   locationRefreshBtn: {
-    width: 42,
-    height: 42,
+    width: 44,
+    height: 44,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -589,8 +594,8 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   locationAction: {
-    width: 36,
-    height: 36,
+    width: 44,
+    height: 44,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -599,14 +604,15 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
   },
   locationActionPrimary: {
-    width: 36,
-    height: 36,
+    width: 44,
+    height: 44,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.tealDark,
   },
   logsButton: {
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
@@ -622,6 +628,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
   },
+  disabled: { opacity: 0.45 },
   locationMascot: {
     width: 72,
     height: 72,

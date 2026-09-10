@@ -13,7 +13,7 @@ export function ScreenHeader({ title, detail, action }: ScreenHeaderProps) {
   return (
     <View style={styles.wrap}>
       <View style={styles.copy}>
-        <Text style={styles.title} numberOfLines={1}>
+        <Text accessibilityRole="header" style={styles.title}>
           {title}
         </Text>
         {detail ? <Text style={styles.detail}>{detail}</Text> : null}
@@ -29,8 +29,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.md,
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.md,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.lg,
   },
   copy: {
     flex: 1,

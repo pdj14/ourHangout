@@ -2211,6 +2211,7 @@ function RenewalApp() {
             loading={refreshing}
             syncMessage={syncMessage || errorMessage}
             onQueryChange={setChatQuery}
+            onStartChat={() => navigateTab('people')}
             onOpenRoom={openRoom}
             onRefresh={() => void refreshAll()}
           />
@@ -2375,6 +2376,9 @@ export default function App() {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
+    width: '100%',
+    maxWidth: Platform.OS === 'web' ? 760 : undefined,
+    alignSelf: 'center',
     backgroundColor: colors.canvas,
   },
   body: {
