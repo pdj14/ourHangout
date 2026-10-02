@@ -9,7 +9,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Switch,
@@ -18,6 +17,7 @@ import {
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { NativeAiModelFile } from '../native';
 import {
@@ -95,6 +95,7 @@ export function GuardianSettingsModal({
   onRefreshModels,
   onPickDirectory,
 }: GuardianSettingsModalProps) {
+  const insets = useSafeAreaInsets();
   const [draft, setDraft] = useState(profile);
   const [editingRule, setEditingRule] = useState<GuardianRule | null>(null);
   const [saving, setSaving] = useState(false);
@@ -276,11 +277,13 @@ export function GuardianSettingsModal({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={styles.screen}>
+    <Modal visible={visible} animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={onClose}>
+      <SafeAreaProvider style={styles.screen}>
+      <SafeAreaView style={styles.screen} edges={['top', 'right', 'bottom', 'left']}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          enabled={Platform.OS === 'ios'}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'android' ? insets.top : 0}
+          enabled
           style={styles.screen}
         >
           <View style={styles.header}>
@@ -823,6 +826,7 @@ export function GuardianSettingsModal({
           </View> : null}
         </KeyboardAvoidingView>
       </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   );
 }
