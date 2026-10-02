@@ -60,11 +60,11 @@ export function ChatsScreen({
     <View style={styles.screen}>
       <ScreenHeader
         title="대화"
-        detail={`${rooms.length}개 방 · 읽지 않은 메시지 ${unreadTotal}개`}
+        detail={unreadTotal ? `새 메시지 ${unreadTotal}개` : undefined}
         action={
           <View style={styles.headerActions}>
             <Pressable accessibilityRole="button" accessibilityLabel="새 대화 시작" style={[styles.iconBtn, styles.primaryIconBtn]} onPress={onStartChat}>
-              <Ionicons name="create-outline" size={21} color={colors.tealDark} />
+              <Ionicons name="create-outline" size={21} color={colors.surface} />
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="대화 목록 새로고침" style={styles.iconBtn} onPress={onRefresh} disabled={loading}>
               {loading ? <ActivityIndicator size="small" color={colors.ink} /> : <Ionicons name="refresh" size={20} color={colors.ink} />}
@@ -77,7 +77,7 @@ export function ChatsScreen({
         <TextInput
           value={query}
           onChangeText={onQueryChange}
-          placeholder="이름, 별명, 대화 내용 검색"
+          placeholder="대화 검색"
           placeholderTextColor={colors.inkMuted}
           style={styles.search}
           accessibilityLabel="대화방 검색"
@@ -109,7 +109,7 @@ export function ChatsScreen({
             <Image source={guardianMascot} resizeMode="contain" style={styles.emptyMascot} />
             <Text style={styles.emptyTitle}>{loading ? '대화를 불러오는 중이에요' : normalized ? '검색 결과가 없어요' : '아직 대화방이 없어요'}</Text>
             <Text style={styles.emptyText}>
-              {loading ? '서버에서 가족과 친구의 대화방을 가져오고 있어요.' : normalized ? '다른 이름이나 메시지 내용으로 검색해 보세요.' : '사람 탭에서 친구와 대화를 시작하면 이곳에 모여요.'}
+              {loading ? '잠시만 기다려 주세요.' : normalized ? '다른 이름으로 찾아보세요.' : '소중한 사람에게 안부를 건네보세요.'}
             </Text>
             {!loading ? <Pressable
               accessibilityRole="button"
@@ -131,8 +131,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.canvas,
   },
   iconBtn: {
-    width: 44,
-    height: 44,
+    width: 48,
+    height: 48,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -141,7 +141,7 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
   },
   searchWrap: {
-    height: 50,
+    minHeight: 52,
     marginHorizontal: spacing.lg,
     marginBottom: spacing.md,
     borderRadius: radius.lg,
@@ -177,19 +177,18 @@ const styles = StyleSheet.create({
   list: {
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xl,
-    gap: spacing.md,
+    gap: 0,
   },
   headerActions: { flexDirection: 'row', gap: spacing.sm },
-  primaryIconBtn: { backgroundColor: colors.surfaceSoft },
+  primaryIconBtn: { backgroundColor: colors.tealDark, borderColor: colors.tealDark },
   searchResult: { marginHorizontal: spacing.lg, marginBottom: spacing.md, color: colors.inkSoft, fontSize: type.small },
   emptyAction: { minHeight: 44, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, marginTop: spacing.lg, borderRadius: radius.md, backgroundColor: colors.tealDark, justifyContent: 'center' },
   emptyActionText: { color: colors.surface, fontSize: type.body, fontWeight: '700', textAlign: 'center' },
   empty: {
-    padding: spacing.xl,
+    paddingVertical: spacing.xxl,
+    paddingHorizontal: spacing.xl,
     borderRadius: radius.lg,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.line,
     alignItems: 'center',
   },
   emptyMascot: {
@@ -206,7 +205,7 @@ const styles = StyleSheet.create({
   emptyText: {
     color: colors.inkSoft,
     fontSize: type.body,
-    lineHeight: 20,
+    lineHeight: 24,
     marginTop: spacing.sm,
     textAlign: 'center',
   },

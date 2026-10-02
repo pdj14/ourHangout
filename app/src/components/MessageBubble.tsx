@@ -190,7 +190,7 @@ const styles = StyleSheet.create({
   body: {
     color: colors.ink,
     fontSize: type.body,
-    lineHeight: 20,
+    lineHeight: 26,
   },
   mineText: {
     color: '#FFFFFF',
@@ -274,7 +274,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   retry: {
-    minHeight: 28,
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,

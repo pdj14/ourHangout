@@ -71,7 +71,6 @@ export function FamilyScreen({
     <View style={styles.screen}>
       <ScreenHeader
         title="가족"
-        detail="가족 관계와 위치 공유를 한곳에서"
         action={
           <Pressable accessibilityRole="button" accessibilityLabel="가족 정보 새로고침" style={styles.iconBtn} onPress={onRefresh}>
             <Ionicons name="refresh" size={21} color={colors.ink} />
@@ -81,14 +80,14 @@ export function FamilyScreen({
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.hero}>
           <View style={styles.heroCopy}>
-            <Text style={styles.heroTitle}>우리 가족을 지키는 작은 숲</Text>
+            <Text style={styles.heroTitle}>함께라서 든든한{ '\n' }우리 가족</Text>
             <Pressable
               accessibilityRole="button"
               onPress={() => familyRooms[0] ? onManageRelationships(familyRooms[0].id) : onCreateFamily()}
               style={styles.heroAction}
             >
               <Ionicons name="people-outline" size={16} color="#FFFFFF" />
-              <Text style={styles.heroActionText}>{familyRooms.length ? '가족 관계 관리' : '가족 구성 시작하기'}</Text>
+              <Text style={styles.heroActionText}>{familyRooms.length ? '가족 관리' : '가족 연결하기'}</Text>
             </Pressable>
           </View>
           <Image source={guardianMascot} resizeMode="contain" style={styles.heroMascot} />
@@ -327,16 +326,15 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   hero: {
-    minHeight: 112,
+    minHeight: 152,
     flexDirection: 'row',
     alignItems: 'center',
-    padding: spacing.md,
+    padding: spacing.lg,
     borderRadius: radius.lg,
     backgroundColor: colors.surfaceWarm,
     borderWidth: 1,
     borderColor: colors.line,
     overflow: 'hidden',
-    ...shadow,
   },
   heroCopy: {
     flex: 1,
@@ -345,7 +343,8 @@ const styles = StyleSheet.create({
   heroTitle: {
     color: colors.ink,
     fontSize: type.title,
-    fontWeight: '900',
+    fontWeight: '800',
+    lineHeight: 30,
   },
   heroAction: {
     alignSelf: 'flex-start',
@@ -377,7 +376,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.line,
     gap: spacing.lg,
-    ...shadow,
   },
   panelTop: {
     flexDirection: 'row',

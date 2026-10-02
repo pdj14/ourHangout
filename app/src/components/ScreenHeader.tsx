@@ -28,8 +28,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
     paddingBottom: spacing.lg,
   },
   copy: {
@@ -39,12 +39,12 @@ const styles = StyleSheet.create({
   title: {
     color: colors.ink,
     fontSize: type.hero,
-    fontWeight: '900',
+    fontWeight: '800',
   },
   detail: {
     color: colors.inkSoft,
-    fontSize: type.body,
-    lineHeight: 20,
+    fontSize: type.small,
+    lineHeight: 19,
     marginTop: 6,
   },
   action: {

@@ -3,6 +3,8 @@ package com.ourhangout.ai
 import android.app.Activity
 import android.app.ActivityManager
 import android.content.Intent
+import android.content.ComponentCallbacks2
+import android.content.res.Configuration
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import com.facebook.react.bridge.ActivityEventListener
@@ -18,8 +20,10 @@ import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.io.File
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.security.MessageDigest
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 
 class AiModelStorageModule(
   private val reactContext: ReactApplicationContext
@@ -34,7 +38,15 @@ class AiModelStorageModule(
   }
 
   private val executor = Executors.newSingleThreadExecutor()
+  private val prepareGeneration = AtomicLong(0)
   private var directoryPromise: Promise? = null
+  private val memoryCallbacks = object : ComponentCallbacks2 {
+    override fun onConfigurationChanged(configuration: Configuration) = Unit
+    override fun onLowMemory() = emitMemoryWarning()
+    override fun onTrimMemory(level: Int) {
+      if (level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL || level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) emitMemoryWarning()
+    }
+  }
 
   private val activityEventListener: ActivityEventListener = object : BaseActivityEventListener() {
     override fun onActivityResult(
@@ -69,12 +81,17 @@ class AiModelStorageModule(
 
   init {
     reactContext.addActivityEventListener(activityEventListener)
+    reactContext.registerComponentCallbacks(memoryCallbacks)
   }
 
   override fun getName(): String = "AiModelStorageModule"
 
   override fun invalidate() {
+    prepareGeneration.incrementAndGet()
+    directoryPromise?.reject("AI_MODELS_PICK_CANCELLED", "Model storage closed.")
+    directoryPromise = null
     reactContext.removeActivityEventListener(activityEventListener)
+    reactContext.unregisterComponentCallbacks(memoryCallbacks)
     executor.shutdownNow()
     super.invalidate()
   }
@@ -120,8 +137,11 @@ class AiModelStorageModule(
 
   @ReactMethod
   fun prepareModel(modelUri: String, promise: Promise) {
+    val generation = prepareGeneration.get()
     executor.execute {
+      var partialFile: File? = null
       try {
+        checkPreparation(generation)
         val document = findAllowedModel(modelUri)
           ?: throw IllegalArgumentException("The selected GGUF file is not in the granted AiModels folder.")
         val size = document.length().coerceAtLeast(0L)
@@ -134,7 +154,7 @@ class AiModelStorageModule(
         val safeName = sanitizeModelName(document.name ?: "model.gguf")
         val identity = sha256("${document.uri}|$size|$modifiedAt").take(12)
         val destination = File(destinationDirectory, "${safeName.removeSuffix(".gguf")}-$identity.gguf")
-        if (destination.isFile && (size <= 0L || destination.length() == size)) {
+        if (destination.isFile && (size <= 0L || destination.length() == size) && validGguf(destination)) {
           promise.resolve(destination.absolutePath)
           return@execute
         }
@@ -146,6 +166,7 @@ class AiModelStorageModule(
         }
 
         val partial = File(destinationDirectory, "${destination.name}.part")
+        partialFile = partial
         if (partial.exists()) partial.delete()
         var copied = 0L
         var lastProgressAt = 0L
@@ -154,19 +175,25 @@ class AiModelStorageModule(
           FileOutputStream(partial).use { output ->
             val buffer = ByteArray(COPY_BUFFER_BYTES)
             while (true) {
+              checkPreparation(generation)
               val read = input.read(buffer)
               if (read < 0) break
               output.write(buffer, 0, read)
               copied += read
               val now = System.currentTimeMillis()
               if (now - lastProgressAt >= 250L) {
-                emitCopyProgress(copied, size)
+                if (destinationDirectory.usableSpace < RESERVED_DISK_BYTES) {
+                  throw IllegalStateException("Not enough storage to finish preparing the model.")
+                }
+                emitCopyProgress(modelUri, copied, size)
                 lastProgressAt = now
               }
             }
             output.fd.sync()
           }
         }
+        checkPreparation(generation)
+        if (!validGguf(partial)) throw IllegalArgumentException("The selected file is not a valid GGUF model.")
         if (size > 0L && partial.length() != size) {
           partial.delete()
           throw IllegalStateException("The copied model size does not match the source file.")
@@ -176,13 +203,30 @@ class AiModelStorageModule(
           partial.delete()
           throw IllegalStateException("Unable to finalize the prepared model file.")
         }
-        emitCopyProgress(destination.length(), size)
+        emitCopyProgress(modelUri, destination.length(), size)
         promise.resolve(destination.absolutePath)
       } catch (error: Exception) {
-        promise.reject("AI_MODEL_PREPARE_FAILED", error.message, error)
+        partialFile?.delete()
+        promise.reject(if (error is InterruptedException) "AI_MODEL_PREPARE_CANCELLED" else "AI_MODEL_PREPARE_FAILED", error.message, error)
       }
     }
   }
+
+  @ReactMethod
+  fun cancelPrepareModel(promise: Promise) {
+    prepareGeneration.incrementAndGet()
+    promise.resolve(null)
+  }
+
+  private fun checkPreparation(generation: Long) {
+    if (Thread.currentThread().isInterrupted || prepareGeneration.get() != generation) {
+      throw InterruptedException("Model preparation cancelled.")
+    }
+  }
+
+  private fun validGguf(file: File): Boolean = try {
+    file.length() >= 8L && RandomAccessFile(file, "r").use { it.readInt() == 0x47475546 }
+  } catch (_: Exception) { false }
 
   @ReactMethod
   fun getRuntimeCapacity(promise: Promise) {
@@ -199,6 +243,7 @@ class AiModelStorageModule(
           putDouble("availableMemoryBytes", info.availMem.toDouble())
           putDouble("lowMemoryThresholdBytes", info.threshold.toDouble())
           putBoolean("lowMemory", info.lowMemory)
+          putInt("cpuCount", Runtime.getRuntime().availableProcessors())
           putDouble("availableStorageBytes", storageProbe.usableSpace.toDouble())
         }
         promise.resolve(result)
@@ -266,7 +311,7 @@ class AiModelStorageModule(
       putString("name", name)
       putDouble("sizeBytes", size.toDouble())
       putDouble("modifiedAt", modifiedAt.toDouble())
-      putBoolean("prepared", prepared.isFile && (size <= 0L || prepared.length() == size))
+      putBoolean("prepared", prepared.isFile && (size <= 0L || prepared.length() == size) && validGguf(prepared))
     }
   }
 
@@ -280,9 +325,10 @@ class AiModelStorageModule(
     }
   }
 
-  private fun emitCopyProgress(copiedBytes: Long, totalBytes: Long) {
+  private fun emitCopyProgress(modelUri: String, copiedBytes: Long, totalBytes: Long) {
     if (!reactContext.hasActiveReactInstance()) return
     val event = Arguments.createMap().apply {
+      putString("modelUri", modelUri)
       putDouble("copiedBytes", copiedBytes.toDouble())
       putDouble("totalBytes", totalBytes.toDouble())
     }
@@ -295,6 +341,12 @@ class AiModelStorageModule(
     putNull("directoryUri")
     putNull("directoryName")
     putArray("models", Arguments.createArray())
+  }
+
+  private fun emitMemoryWarning() {
+    if (!reactContext.hasActiveReactInstance()) return
+    reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+      .emit("AiRuntimeMemoryWarning", null)
   }
 
   private fun preferences() =

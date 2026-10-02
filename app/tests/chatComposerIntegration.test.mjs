@@ -17,9 +17,9 @@ test('regular and Guardian chat use the shared composer', async () => {
 
 test('Guardian chat keeps provider and model details out of the conversation surface', async () => {
   const guardian = await read('../src/screens/OnDeviceAiScreen.tsx');
-  assert.match(guardian, /지금 나누는 이야기/);
+  assert.match(guardian, /activeConversation\?\.title/);
   assert.doesNotMatch(guardian, /displayedOpenRouterModelName|modelStateTitle|modelStateDetail/);
-  assert.match(guardian, /\{user \? '나' : guardianProfile\.name\}/);
+  assert.match(guardian, /<GuardianMessageBubble message=\{item\} name=\{guardianProfile\.name\}/);
 });
 
 test('OpenRouter content mapping covers image, video and audio', async () => {

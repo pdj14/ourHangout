@@ -7,6 +7,8 @@ const STORAGE_KEY = 'guardian:conversation_rooms_v1';
 export const LEGACY_GUARDIAN_HISTORY_KEY = 'on_device_ai:history_v1';
 const MAX_CONVERSATIONS = 30;
 const MAX_MESSAGES_PER_CONVERSATION = 60;
+let storeWrites: Promise<unknown> = Promise.resolve();
+let archiveWrites: Promise<unknown> = Promise.resolve();
 
 export type GuardianConversationRoom = {
   id: string;
@@ -179,10 +181,19 @@ export async function readGuardianConversationStore(): Promise<GuardianConversat
 export async function writeGuardianConversationStore(store: GuardianConversationStore) {
   const normalized = normalizeStore(store);
   if (!normalized) return;
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+  const serialized = JSON.stringify(normalized);
+  const operation = storeWrites.then(() => AsyncStorage.setItem(STORAGE_KEY, serialized));
+  storeWrites = operation.catch(() => undefined);
+  await operation;
 }
 
-export async function archiveDeletedConversation(room: GuardianConversationRoom) {
+export function archiveDeletedConversation(room: GuardianConversationRoom): Promise<void> {
+  const operation = archiveWrites.then(() => appendDeletedConversation(room));
+  archiveWrites = operation.catch(() => undefined);
+  return operation;
+}
+
+async function appendDeletedConversation(room: GuardianConversationRoom) {
   if (!room.messages.length) return;
   const deletedRoom: GuardianConversationRoom = {
     ...room,

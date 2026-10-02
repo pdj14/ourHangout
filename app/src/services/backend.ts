@@ -5,6 +5,7 @@ import type {
   BackendRequestError,
 } from '../types';
 import type { PersistedSession } from './session';
+import { readWithDeadline } from './asyncControl';
 
 type BackendClientOptions = {
   baseUrl: string;
@@ -140,12 +141,12 @@ function unwrapEnvelope<T>(raw: unknown): T {
   return raw as T;
 }
 
-async function parseJsonResponse(response: Response): Promise<unknown> {
-  const text = await response.text();
+async function parseJsonResponse(response: Response, text: string): Promise<unknown> {
   if (!text) return {};
   try {
     return JSON.parse(text);
   } catch {
+    if (response.ok) throw createBackendRequestError('서버 응답을 읽지 못했어요. 다시 시도해 주세요.', { status: response.status, code: 'INVALID_RESPONSE' });
     return {};
   }
 }
@@ -154,13 +155,16 @@ async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs = DEFAULT_TIMEOUT_MS
-): Promise<Response> {
+): Promise<{ response: Response; text: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    const text = await readWithDeadline(() => response.text(), controller.signal, timeoutMs);
+    return { response, text };
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
+    if (controller.signal.aborted || (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError'))) {
+      controller.abort();
       throw createBackendRequestError('Request timed out.', { code: 'NETWORK_TIMEOUT' });
     }
     throw createBackendRequestError(error instanceof Error ? error.message : 'Network request failed.', {
@@ -220,8 +224,8 @@ export class BackendClient {
         headers.Authorization = `Bearer ${accessToken}`;
       }
 
-      const response = await fetchWithTimeout(url, { ...init, headers }, options.timeoutMs);
-      const json = await parseJsonResponse(response);
+      const { response, text } = await fetchWithTimeout(url, { ...init, headers }, options.timeoutMs);
+      const json = await parseJsonResponse(response, text);
       return { response, json };
     };
 
@@ -309,7 +313,7 @@ export class BackendClient {
         throw createBackendRequestError('Refresh token is missing.', { code: 'AUTH_REFRESH_INVALID' });
       }
 
-      const response = await fetchWithTimeout(
+      const { response, text } = await fetchWithTimeout(
         `${this.baseUrl}/v1/auth/refresh`,
         {
           method: 'POST',
@@ -318,7 +322,7 @@ export class BackendClient {
         },
         DEFAULT_TIMEOUT_MS
       );
-      const json = await parseJsonResponse(response);
+      const json = await parseJsonResponse(response, text);
       if (!response.ok) {
         throw toBackendRequestError(json, `HTTP ${response.status}`, response.status);
       }

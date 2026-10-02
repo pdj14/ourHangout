@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import { initLlama, type LlamaContext, type RNLlamaOAICompatibleMessage } from 'llama.rn';
+import type { LlamaContext, RNLlamaOAICompatibleMessage } from 'llama.rn';
 
 import {
   NativeAiModelStorage,
@@ -9,6 +9,8 @@ import {
 } from '../native';
 import type { OnDeviceResponseLength } from './guardianProfile';
 import type { ChatAttachment } from '../types';
+import { ExclusiveResource, operationCancelled } from './exclusiveResource';
+import { fitPrompt, modelRuntimePlan } from './onDeviceAiPolicy';
 
 export type OnDeviceChatMessage = {
   id: string;
@@ -30,7 +32,6 @@ export type OnDeviceCompletionOptions = {
   onContinuation?: () => void;
 };
 
-const GIB = 1024 * 1024 * 1024;
 const LOCAL_CONTINUATION_TAIL_CHARS = 1200;
 const STOP_WORDS = [
   '</s>',
@@ -92,15 +93,6 @@ function trimConversation(messages: OnDeviceChatMessage[], characterBudget: numb
   return selected;
 }
 
-function selectContextSize(capacity: NativeAiRuntimeCapacity, modelSizeBytes: number) {
-  const highMemoryDevice = capacity.totalMemoryBytes >= 10 * GIB
-    && capacity.availableMemoryBytes >= 4 * GIB
-    && (modelSizeBytes <= 0 || modelSizeBytes <= 6 * GIB);
-  if (highMemoryDevice) return 4096;
-  if (capacity.totalMemoryBytes >= 7 * GIB && capacity.availableMemoryBytes >= 2 * GIB) return 2048;
-  return 1024;
-}
-
 function maxPredictTokensFor(contextSize: number, responseLength: OnDeviceResponseLength) {
   if (contextSize >= 4096) {
     if (responseLength === 'short') return 512;
@@ -153,14 +145,14 @@ function stripReasoningBlocks(value: string) {
 }
 
 class OnDeviceAiEngine {
-  private context: LlamaContext | null = null;
-  private modelUri = '';
-  private operationId = 0;
-  private contextSize = 2048;
-  private generating = false;
+  private runtime = new ExclusiveResource<{ context: LlamaContext; uri: string; contextSize: number }>(
+    async ({ context }) => context.release(),
+    async ({ context }) => context.stopCompletion()
+  );
 
   isLoaded(modelUri?: string) {
-    return !!this.context && (!modelUri || this.modelUri === modelUri);
+    const loaded = this.runtime.current;
+    return !!loaded && (!modelUri || loaded.uri === modelUri);
   }
 
   async loadModel(
@@ -168,32 +160,28 @@ class OnDeviceAiEngine {
     onProgress?: (progress: OnDeviceModelLoadProgress) => void
   ) {
     if (this.isLoaded(model.uri)) return;
-    const operationId = ++this.operationId;
-    await this.releaseContext();
-
     const storage = requireStorageModule();
-    const capacity = await storage.getRuntimeCapacity();
-    if (capacity.lowMemory) {
-      throw new Error('현재 기기 메모리가 부족합니다. 다른 앱을 종료한 뒤 다시 시도해 주세요.');
-    }
-    if (model.sizeBytes > 0 && capacity.availableStorageBytes < model.sizeBytes + 128 * 1024 * 1024) {
-      throw new Error('모델을 준비할 저장 공간이 부족합니다. 기기 저장 공간을 확보해 주세요.');
-    }
-
-    onProgress?.({ phase: 'preparing', progress: model.prepared ? 1 : 0 });
-    const preparedPath = await storage.prepareModel(model.uri);
-    if (operationId !== this.operationId) return;
-
-    this.contextSize = selectContextSize(capacity, model.sizeBytes);
-    const threadCount = capacity.totalMemoryBytes < 6 * GIB ? 3 : 4;
-    onProgress?.({ phase: 'loading', progress: 0 });
-
-    const nextContext = await initLlama(
+    void storage.cancelPrepareModel?.().catch(() => undefined);
+    await this.runtime.replace(async (isCurrent) => {
+      const checkCurrent = () => { if (!isCurrent()) throw operationCancelled(); };
+      checkCurrent();
+      modelRuntimePlan(await storage.getRuntimeCapacity(), model.sizeBytes);
+      checkCurrent();
+      onProgress?.({ phase: 'preparing', progress: model.prepared ? 1 : 0 });
+      const preparedPath = await storage.prepareModel(model.uri);
+      checkCurrent();
+      // Recheck after a potentially long file copy; memory pressure may have changed.
+      const { contextSize, threadCount, batchSize } = modelRuntimePlan(await storage.getRuntimeCapacity(), model.sizeBytes);
+      checkCurrent();
+      onProgress?.({ phase: 'loading', progress: 0 });
+      const { initLlama } = await import('llama.rn');
+      checkCurrent();
+      const context = await initLlama(
       {
         model: pathToFileUri(preparedPath),
-        n_ctx: this.contextSize,
-        n_batch: 256,
-        n_ubatch: 128,
+        n_ctx: contextSize,
+        n_batch: batchSize,
+        n_ubatch: Math.min(128, batchSize),
         n_parallel: 1,
         n_threads: threadCount,
         n_gpu_layers: 0,
@@ -205,19 +193,14 @@ class OnDeviceAiEngine {
         state_cache_budget_mb: 0,
         state_cache_max_checkpoints: 0,
       },
-      (progress) => onProgress?.({
+      (progress) => isCurrent() && onProgress?.({
         phase: 'loading',
         progress: Math.max(0, Math.min(1, progress / 100)),
       })
-    );
-
-    if (operationId !== this.operationId) {
-      await nextContext.release().catch(() => undefined);
-      return;
-    }
-    this.context = nextContext;
-    this.modelUri = model.uri;
-    onProgress?.({ phase: 'loading', progress: 1 });
+      );
+      return { context, uri: model.uri, contextSize };
+    });
+    if (this.isLoaded(model.uri)) onProgress?.({ phase: 'loading', progress: 1 });
   }
 
   async complete(
@@ -225,69 +208,73 @@ class OnDeviceAiEngine {
     onPartial: (content: string) => void,
     options: OnDeviceCompletionOptions = {}
   ): Promise<string> {
-    const context = this.context;
-    if (!context) throw new Error('먼저 사용할 GGUF 모델을 선택해 주세요.');
-    if (this.generating) throw new Error('이미 답변을 생성하고 있습니다.');
+    return this.runtime.run(async ({ context, contextSize }, signal) => {
+      const checkCancelled = () => { if (signal.aborted) throw operationCancelled(); };
+      const characterBudget = contextSize >= 4096 ? 8000 : contextSize >= 2048 ? 4000 : 2000;
+      const recentMessages = trimConversation(messages, characterBudget);
+      const defaultSystemPrompt = '당신은 우리들의 아지트를 지키는 작은 숲 지키미입니다. 다정하고 차분하며 실용적으로 답하세요. 확실하지 않은 내용은 꾸며내지 말고, 내부 사고 과정은 보여주지 마세요.';
+      const systemPrompt = String(options.systemPrompt || defaultSystemPrompt)
+        .trim()
+        .slice(0, contextSize >= 4096 ? 3600 : contextSize >= 2048 ? 2400 : 1200);
+      const promptMessages: RNLlamaOAICompatibleMessage[] = [
+        {
+          role: 'system',
+          content: systemPrompt,
+        },
+        ...recentMessages.map((message) => (
+          { role: message.role, content: message.content } satisfies RNLlamaOAICompatibleMessage
+        )),
+      ];
 
-    const characterBudget = this.contextSize >= 4096 ? 4000 : this.contextSize >= 2048 ? 1800 : 900;
-    const recentMessages = trimConversation(messages, characterBudget);
-    const defaultSystemPrompt = '당신은 우리들의 아지트를 지키는 작은 숲 지키미입니다. 다정하고 차분하며 실용적으로 답하세요. 확실하지 않은 내용은 꾸며내지 말고, 내부 사고 과정은 보여주지 마세요.';
-    const systemPrompt = String(options.systemPrompt || defaultSystemPrompt)
-      .trim()
-      .slice(0, this.contextSize >= 4096 ? 3600 : this.contextSize >= 2048 ? 2400 : 1200);
-    const promptMessages: RNLlamaOAICompatibleMessage[] = [
-      {
-        role: 'system',
-        content: systemPrompt,
-      },
-      ...recentMessages.map((message) => (
-        { role: message.role, content: message.content } satisfies RNLlamaOAICompatibleMessage
-      )),
-    ];
-
-    this.generating = true;
-    let visibleContent = '';
-    let lastEmittedAt = 0;
-    const responseLength = options.responseLength || 'balanced';
-    const maxPredictTokens = maxPredictTokensFor(this.contextSize, responseLength);
-    const requestedTokens = Math.max(
-      64,
-      Math.min(
-        maxPredictTokens,
-        Math.floor(options.maxTokens || Number.POSITIVE_INFINITY)
-      )
-    );
-    try {
+      let visibleContent = '';
+      let lastEmittedAt = 0;
+      const responseLength = options.responseLength || 'balanced';
+      const maxPredictTokens = maxPredictTokensFor(contextSize, responseLength);
+      const requestedTokens = Math.max(
+        64,
+        Math.min(
+          maxPredictTokens,
+          Math.floor(options.maxTokens || Number.POSITIVE_INFINITY)
+        )
+      );
+      const countTokens = async (chat: Parameters<typeof fitPrompt>[0]) => {
+        const formatted = await context.getFormattedChat(chat, undefined, { jinja: true, enable_thinking: false, reasoning_format: 'none' });
+        return (await context.tokenize(formatted.prompt)).tokens.length;
+      };
+      const fitted = await fitPrompt(promptMessages as Parameters<typeof fitPrompt>[0], contextSize, requestedTokens, countTokens, checkCancelled);
+      checkCancelled();
       const result = await context.completion(
         {
-          messages: promptMessages,
+          messages: fitted.messages,
           jinja: true,
           enable_thinking: false,
           reasoning_format: 'none',
-          n_predict: requestedTokens,
+          n_predict: fitted.maxTokens,
           temperature: 0.12,
           min_p: 0.15,
           penalty_repeat: 1.05,
           stop: STOP_WORDS,
         },
         (data) => {
+          if (signal.aborted) return;
           if (typeof data.content !== 'string') return;
           visibleContent = stripReasoningBlocks(data.content);
           if (!visibleContent) return;
           const now = Date.now();
-          if (now - lastEmittedAt >= 50) {
+          if (now - lastEmittedAt >= 100) {
             onPartial(visibleContent);
             lastEmittedAt = now;
           }
         }
       );
+      checkCancelled();
       let finalText = stripReasoningBlocks(String(result.content || visibleContent || result.text || ''));
       onPartial(finalText);
 
       if (
         responseLength !== 'short'
         && finalText
-        && completionReachedLimit(result, requestedTokens)
+        && completionReachedLimit(result, fitted.maxTokens)
         && !result.interrupted
       ) {
         options.onContinuation?.();
@@ -298,9 +285,7 @@ class OnDeviceAiEngine {
           requestedTokens,
           responseLength === 'long' ? 1024 : 768
         );
-        const continuationResult = await context.completion(
-          {
-            messages: [
+        const continuationPrompt = await fitPrompt([
               {
                 role: 'system',
                 content: systemPrompt,
@@ -315,27 +300,33 @@ class OnDeviceAiEngine {
                   previousTail,
                 ].join('\n'),
               },
-            ],
+            ], contextSize, continuationTokens, countTokens, checkCancelled);
+        checkCancelled();
+        const continuationResult = await context.completion(
+          {
+            messages: continuationPrompt.messages,
             jinja: true,
             enable_thinking: false,
             reasoning_format: 'none',
-            n_predict: continuationTokens,
+            n_predict: continuationPrompt.maxTokens,
             temperature: 0.12,
             min_p: 0.15,
             penalty_repeat: 1.08,
             stop: STOP_WORDS,
           },
           (data) => {
+            if (signal.aborted) return;
             if (typeof data.content !== 'string') return;
             continuationVisible = stripReasoningBlocks(data.content);
             if (!continuationVisible) return;
             const now = Date.now();
-            if (now - continuationEmittedAt >= 50) {
+            if (now - continuationEmittedAt >= 100) {
               onPartial(mergeContinuation(finalText, continuationVisible));
               continuationEmittedAt = now;
             }
           }
         );
+        checkCancelled();
         const continuationText = stripReasoningBlocks(String(
           continuationResult.content || continuationVisible || continuationResult.text || ''
         ));
@@ -343,31 +334,20 @@ class OnDeviceAiEngine {
         onPartial(finalText);
       }
       return finalText;
-    } finally {
-      this.generating = false;
-    }
+    });
   }
 
   async clearConversation() {
-    if (this.context) await this.context.clearCache(true);
+    if (this.runtime.current) await this.runtime.run(async ({ context }) => context.clearCache(true));
   }
 
   async stop() {
-    if (this.context && this.generating) await this.context.stopCompletion();
+    await this.runtime.stop();
   }
 
   async unload() {
-    this.operationId += 1;
-    await this.stop().catch(() => undefined);
-    await this.releaseContext();
-  }
-
-  private async releaseContext() {
-    const context = this.context;
-    this.context = null;
-    this.modelUri = '';
-    this.generating = false;
-    if (context) await context.release().catch(() => undefined);
+    void NativeAiModelStorage?.cancelPrepareModel?.().catch(() => undefined);
+    await this.runtime.replace(null);
   }
 }
 
@@ -379,6 +359,11 @@ export function isFolderPickerCancellation(error: unknown) {
 }
 
 export function normalizeOnDeviceAiError(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error || '');
+  if (/bad_alloc|out of memory|allocat.*(?:fail|memory)/i.test(raw)) return '메모리가 부족해요. 더 작은 모델을 선택해 주세요.';
+  if (/not enough storage|ENOSPC/i.test(raw)) return '저장 공간이 부족해요. 공간을 비우고 다시 시도해 주세요.';
+  if (/not a valid GGUF|invalid.*(?:gguf|model)/i.test(raw)) return '모델 파일을 읽을 수 없어요. GGUF 파일을 다시 확인해 주세요.';
+  if (error instanceof Error && error.name === 'AbortError') return '준비를 중지했어요.';
   if (error instanceof Error && error.message.trim()) return error.message.trim();
   const message = String(error || '').trim();
   return message || '온디바이스 AI 처리 중 오류가 발생했습니다.';

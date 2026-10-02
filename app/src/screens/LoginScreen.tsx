@@ -10,10 +10,9 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 
-import { colors, gradients, radius, shadow, spacing, type } from '../theme';
+import { colors, gradients, radius, spacing, type } from '../theme';
 import type { AuthState, ServerState } from '../types';
 
-const appIcon = require('../../assets/icon.png');
 const welcomeArtwork = require('../../assets/welcome-family.png');
 const guardianMascot = require('../../assets/forest-guardian.png');
 
@@ -28,9 +27,9 @@ export function LoginScreen({ authState, serverState, errorMessage, onSignIn }: 
   const busy = authState === 'checking' || authState === 'signingIn' || authState === 'syncing';
   const serverLabel =
     serverState === 'ready'
-      ? '가족 숲에 연결됐어요.'
+      ? '연결됨'
       : serverState === 'checking'
-        ? '가족 숲으로 가는 길을 확인 중이에요.'
+        ? '연결 확인 중'
         : '서버에 연결하지 못했어요.';
 
   return (
@@ -47,18 +46,15 @@ export function LoginScreen({ authState, serverState, errorMessage, onSignIn }: 
             <Image source={welcomeArtwork} resizeMode="cover" style={styles.heroImage} />
             <Image source={guardianMascot} resizeMode="contain" style={styles.mascot} />
           </View>
-          <View style={styles.brandMark}>
-            <Image source={appIcon} resizeMode="cover" style={styles.appIcon} />
-          </View>
-          <Text style={styles.title}>우리들의 아지트</Text>
-          <Text style={styles.detail}>아이와 부모가 함께 쓰는 따뜻한 가족 대화 공간</Text>
+          <Text accessibilityRole="header" style={styles.title}>우리들의 아지트</Text>
+          <Text style={styles.detail}>가족의 일상, 조금 더 가까이.</Text>
 
-          <View style={styles.statusRow}>
+          {serverState !== 'ready' ? <View style={styles.statusRow}>
             <View style={styles.statusIcon}>
-              {busy || serverState === 'checking' ? <ActivityIndicator size="small" color={colors.tealDark} /> : <Ionicons name={serverState === 'ready' ? 'checkmark-circle-outline' : 'cloud-offline-outline'} size={18} color={serverState === 'ready' ? colors.tealDark : colors.coral} />}
+              {busy || serverState === 'checking' ? <ActivityIndicator size="small" color={colors.tealDark} /> : <Ionicons name="cloud-offline-outline" size={18} color={colors.coral} />}
             </View>
             <Text style={[styles.statusText, serverState === 'error' && styles.statusError]}>{serverLabel}</Text>
-          </View>
+          </View> : null}
 
           {errorMessage ? <Text accessibilityRole="alert" style={styles.errorText}>{errorMessage}</Text> : null}
 
@@ -94,23 +90,20 @@ const styles = StyleSheet.create({
   },
   panel: {
     width: '100%',
-    maxWidth: 420,
+    maxWidth: 440,
     alignSelf: 'center',
-    padding: spacing.lg,
+    padding: spacing.sm,
     borderRadius: radius.lg,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.line,
+    backgroundColor: 'transparent',
     alignItems: 'center',
-    ...shadow,
   },
   heroFrame: {
     width: '100%',
-    height: 210,
-    maxWidth: 330,
+    aspectRatio: 1.45,
+    maxWidth: 380,
     borderRadius: radius.lg,
     overflow: 'hidden',
-    marginBottom: spacing.lg,
+    marginBottom: spacing.xl,
     backgroundColor: colors.surfaceSoft,
   },
   heroImage: {
@@ -133,7 +126,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: spacing.md,
-    ...shadow,
   },
   appIcon: {
     width: '100%',
@@ -142,13 +134,14 @@ const styles = StyleSheet.create({
   },
   title: {
     color: colors.ink,
-    fontSize: type.hero,
-    fontWeight: '900',
+    fontSize: 32,
+    fontWeight: '800',
+    textAlign: 'center',
   },
   detail: {
     color: colors.inkSoft,
     fontSize: type.body,
-    lineHeight: 20,
+    lineHeight: 24,
     marginTop: spacing.sm,
     textAlign: 'center',
   },
@@ -184,7 +177,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   signIn: {
-    minHeight: 50,
+    minHeight: 56,
     paddingVertical: spacing.md,
     alignSelf: 'stretch',
     marginTop: spacing.xl,

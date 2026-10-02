@@ -9,6 +9,8 @@ be distributed as an update.
 ```powershell
 npm.cmd install
 npm.cmd run typecheck
+npm.cmd run test:ai-runtime
+npm.cmd run test:backend
 npm.cmd start
 npm.cmd run android:release
 ```

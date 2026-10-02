@@ -1,41 +1,39 @@
 import { Platform } from 'react-native';
 
 /**
- * 구름 솜사탕 테마 — 포근한 아지트
- * 베이스: 라벤더 구름 / 강조: 페리윙클 / 온기: 복숭아 크림 / 자연: 민트 세이지
- * 흰 글자가 얹히는 색(teal, tealDark, mine, coral)은 흰색 대비 4:1 이상을 유지한다.
+ * Warm neutral surfaces, forest teal actions, and readable text for all ages.
  */
 export const colors = {
-  canvas: '#F7F4FB',
-  canvasDeep: '#ECE7F6',
+  canvas: '#F6F7F4',
+  canvasDeep: '#E9EDE7',
   surface: '#FFFFFF',
-  surfaceSoft: '#F2EEFA',
-  surfaceWarm: '#FFF1E8',
-  ink: '#453F5C',
-  inkSoft: '#6E6889',
-  inkMuted: '#706883',
-  line: '#E4DEF2',
-  teal: '#5E6BBA',
-  tealDark: '#49559B',
-  blue: '#6D93BE',
-  indigo: '#7173AE',
-  coral: '#C25E72',
-  amber: '#B8813C',
-  leaf: '#87B283',
-  bark: '#8D755E',
+  surfaceSoft: '#EAF2ED',
+  surfaceWarm: '#FBF0DF',
+  ink: '#243A33',
+  inkSoft: '#53655D',
+  inkMuted: '#606E66',
+  line: '#DCE4DC',
+  teal: '#28796A',
+  tealDark: '#1D6658',
+  blue: '#426D8A',
+  indigo: '#5A6687',
+  coral: '#AE493E',
+  amber: '#946321',
+  leaf: '#6D8D6D',
+  bark: '#7C654C',
   cream: '#FFFBF6',
-  success: '#4C9160',
-  mine: '#5E6BBA',
+  success: '#367753',
+  mine: '#28796A',
   other: '#FFFFFF',
-  shadow: '#37324E',
+  shadow: '#243A33',
 };
 
 /** 부드러운 하늘 그라디언트 (expo-linear-gradient 용 색 배열) */
 export const gradients = {
   /** 런치/로그인 하늘: 크림 → 라벤더 → 옅은 하늘 */
-  sky: ['#FDF8F2', '#F2EDFA', '#E9F0F8'] as [string, string, string],
+  sky: ['#FBF6EB', '#F6F7F4', '#EDF4ED'] as [string, string, string],
   /** 하단 내비게이션 안개 */
-  nav: ['#FCFAFE', '#F3EFFA'] as [string, string],
+  nav: ['#FFFFFF', '#FFFFFF'] as [string, string],
 };
 
 export const spacing = {
@@ -48,19 +46,19 @@ export const spacing = {
 };
 
 export const radius = {
-  sm: 6,
-  md: 10,
-  lg: 16,
+  sm: 8,
+  md: 12,
+  lg: 20,
   pill: 999,
 };
 
 export const type = {
-  hero: 25,
-  title: 20,
-  section: 15,
-  body: 14,
-  small: 12,
-  tiny: 11,
+  hero: 28,
+  title: 22,
+  section: 17,
+  body: 16,
+  small: 13,
+  tiny: 12,
 };
 
 export const shadow = {

@@ -117,7 +117,7 @@ export const ChatComposer = forwardRef<TextInput, ChatComposerProps>(function Ch
       ) : null}
 
       <View style={styles.composer}>
-        <Pressable
+        {options.length ? <Pressable
           accessibilityRole="button"
           accessibilityLabel="첨부 메뉴"
           aria-expanded={menuOpen && editable && !sending && !attachment}
@@ -126,7 +126,7 @@ export const ChatComposer = forwardRef<TextInput, ChatComposerProps>(function Ch
           style={[styles.attachButton, (!editable || sending || !!attachment) && styles.disabled]}
         >
           <Ionicons name={menuOpen ? 'close' : 'add'} size={24} color={colors.inkSoft} />
-        </Pressable>
+        </Pressable> : null}
         <TextInput
           ref={ref}
           value={value}
@@ -161,10 +161,10 @@ export const ChatComposer = forwardRef<TextInput, ChatComposerProps>(function Ch
 
 const styles = StyleSheet.create({
   wrap: { backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.line },
-  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
-  attachButton: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceSoft },
-  input: { flex: 1, minHeight: 44, maxHeight: 128, paddingHorizontal: spacing.md, paddingVertical: 11, borderRadius: radius.lg, backgroundColor: colors.surfaceSoft, color: colors.ink, fontSize: type.body },
-  sendButton: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.tealDark },
+  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
+  attachButton: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceSoft },
+  input: { flex: 1, minWidth: 0, minHeight: 48, maxHeight: 144, paddingHorizontal: spacing.lg, paddingVertical: 12, borderRadius: radius.lg, backgroundColor: colors.canvas, color: colors.ink, fontSize: type.body, lineHeight: 24 },
+  sendButton: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.tealDark },
   stopButton: { backgroundColor: colors.coral },
   disabled: { opacity: 0.42 },
   attachmentMenu: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 58, paddingHorizontal: spacing.md, paddingTop: spacing.sm },
@@ -177,5 +177,5 @@ const styles = StyleSheet.create({
   previewTitle: { color: colors.ink, fontSize: type.small, fontWeight: '800' },
   previewStatus: { color: colors.inkMuted, fontSize: type.tiny, marginTop: 2 },
   failedText: { color: colors.coral },
-  previewAction: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  previewAction: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
 });

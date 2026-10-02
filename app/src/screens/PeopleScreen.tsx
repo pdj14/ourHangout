@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { Avatar } from '../components/Avatar';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { colors, radius, shadow, spacing, type } from '../theme';
+import { colors, radius, spacing, type } from '../theme';
 import type { FriendRequestView, User } from '../types';
 
 const guardianMascot = require('../../assets/forest-guardian.png');
@@ -59,7 +59,7 @@ export function PeopleScreen({
         action={
           <View style={styles.headerActions}>
             <Pressable accessibilityRole="button" accessibilityLabel="친구 추가" style={[styles.iconBtn, styles.primaryIconBtn]} onPress={onAddFriend}>
-              <Ionicons name="person-add-outline" size={20} color={colors.tealDark} />
+              <Ionicons name="person-add-outline" size={20} color={colors.surface} />
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="사람 목록 새로고침" style={styles.iconBtn} onPress={onRefresh} disabled={loading}>
               {loading ? <ActivityIndicator size="small" color={colors.ink} /> : <Ionicons name="refresh" size={21} color={colors.ink} />}
@@ -155,8 +155,8 @@ export function PeopleScreen({
           <View style={styles.empty}>
             <Image source={guardianMascot} resizeMode="contain" style={styles.emptyMascot} />
             {loading ? <ActivityIndicator color={colors.tealDark} style={styles.emptySpinner} /> : null}
-            <Text style={styles.emptyTitle}>{loading ? '사람들을 불러오는 중이에요' : '소중한 사람과 연결해 보세요'}</Text>
-            <Text style={styles.emptyText}>{loading ? '가족과 친구 목록을 확인하고 있어요.' : '친구를 추가하면 대화를 시작할 수 있어요. 가족방에서 연결된 가족도 여기에 모여요.'}</Text>
+            <Text style={styles.emptyTitle}>{loading ? '불러오는 중' : '함께할 사람을 찾아볼까요?'}</Text>
+            <Text style={styles.emptyText}>{loading ? '잠시만 기다려 주세요.' : '친구를 추가하고 이야기를 시작해요.'}</Text>
             {!loading ? <Pressable accessibilityRole="button" accessibilityLabel="친구 추가하기" onPress={onAddFriend} style={({ pressed }) => [styles.emptyAction, pressed && { opacity: 0.75 }]}>
               <Ionicons name="person-add-outline" size={18} color={colors.surface} />
               <Text style={styles.emptyActionText}>친구 추가하기</Text>
@@ -174,8 +174,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.canvas,
   },
   iconBtn: {
-    width: 44,
-    height: 44,
+    width: 48,
+    height: 48,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -246,19 +246,18 @@ const styles = StyleSheet.create({
     fontSize: type.small,
     fontWeight: '900',
     marginBottom: spacing.sm,
-    marginTop: spacing.xs,
+    marginTop: spacing.lg,
   },
   personCard: {
-    minHeight: 74,
+    minHeight: 88,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    padding: spacing.md,
-    borderRadius: radius.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.lg,
     backgroundColor: colors.surface,
-    borderWidth: 1,
+    borderBottomWidth: 1,
     borderColor: colors.line,
-    ...shadow,
   },
   avatarButton: {
     width: 46,
@@ -278,7 +277,7 @@ const styles = StyleSheet.create({
   personStatus: {
     color: colors.inkSoft,
     fontSize: type.small,
-    lineHeight: 17,
+    lineHeight: 20,
     marginTop: 5,
   },
   iconSmall: {
@@ -297,7 +296,7 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     alignItems: 'center',
   },
-  primaryIconBtn: { backgroundColor: colors.surfaceSoft },
+  primaryIconBtn: { backgroundColor: colors.tealDark, borderColor: colors.tealDark },
   emptySpinner: { marginBottom: spacing.md },
   emptyAction: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, marginTop: spacing.lg, borderRadius: radius.md, backgroundColor: colors.tealDark },
   emptyActionText: { color: colors.surface, fontSize: type.body, fontWeight: '700' },
@@ -315,7 +314,7 @@ const styles = StyleSheet.create({
   emptyText: {
     color: colors.inkSoft,
     fontSize: type.body,
-    lineHeight: 20,
+    lineHeight: 24,
     marginTop: spacing.sm,
     textAlign: 'center',
   },

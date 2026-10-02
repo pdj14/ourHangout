@@ -286,7 +286,6 @@ export function GuardianSettingsModal({
           <View style={styles.header}>
             <View style={styles.headerCopy}>
               <Text style={styles.title}>지키미 설정</Text>
-              <Text style={styles.detail}>AI 방식, 이름과 행동 규칙을 대화 기준으로 사용해요.</Text>
             </View>
             <Pressable accessibilityRole="button" accessibilityLabel="지키미 설정 닫기" onPress={onClose} style={styles.closeButton}>
               <Ionicons name="close" size={25} color={colors.ink} />
@@ -299,8 +298,7 @@ export function GuardianSettingsModal({
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           >
             <View style={styles.sectionHeading}>
-              <Text style={styles.sectionTitle}>AI 엔진</Text>
-              <Text style={styles.sectionDetail}>대화는 선택한 방식으로만 처리됩니다.</Text>
+              <Text style={styles.sectionTitle}>대화 방식</Text>
             </View>
             <View style={styles.engineGrid}>
               <Pressable
@@ -312,8 +310,8 @@ export function GuardianSettingsModal({
                 style={[styles.engineOption, draft.aiEngineType === 'openRouter' && styles.engineOptionActive, controlsDisabled && styles.disabled]}
               >
                 <Ionicons name="cloud-outline" size={22} color={draft.aiEngineType === 'openRouter' ? colors.tealDark : colors.inkMuted} />
-                <Text style={styles.engineTitle}>API / 클라우드</Text>
-                <Text style={styles.engineDetail}>OpenRouter·Grok·로컬 서버</Text>
+                <Text style={styles.engineTitle}>온라인</Text>
+                <Text style={styles.engineDetail}>연결된 서버로 대화</Text>
                 {draft.aiEngineType === 'openRouter' ? <Ionicons name="checkmark-circle" size={20} color={colors.tealDark} /> : null}
               </Pressable>
               <Pressable
@@ -325,8 +323,8 @@ export function GuardianSettingsModal({
                 style={[styles.engineOption, draft.aiEngineType === 'onDevice' && styles.engineOptionActive, controlsDisabled && styles.disabled]}
               >
                 <Ionicons name="hardware-chip-outline" size={22} color={draft.aiEngineType === 'onDevice' ? colors.tealDark : colors.inkMuted} />
-                <Text style={styles.engineTitle}>온디바이스</Text>
-                <Text style={styles.engineDetail}>인터넷 없는 기기 내 AI</Text>
+                <Text style={styles.engineTitle}>내 기기</Text>
+                <Text style={styles.engineDetail}>모델을 불러와 대화</Text>
                 {draft.aiEngineType === 'onDevice' ? <Ionicons name="checkmark-circle" size={20} color={colors.tealDark} /> : null}
               </Pressable>
             </View>
@@ -576,7 +574,6 @@ export function GuardianSettingsModal({
                       accessibilityLabel="OpenRouter 대체 모델 ID"
                       style={styles.textInput}
                     />
-                    <Text style={styles.fieldHelp}>예: qwen/qwen3-8b:free, meta-llama/llama-3.3-70b-instruct:free — 기본 모델 업스트림이 죽었을 때 이 순서로 자동 재시도합니다.</Text>
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel="API 설정 저장"
@@ -598,7 +595,6 @@ export function GuardianSettingsModal({
 
             <View style={styles.sectionHeadingSpaced}>
               <Text style={styles.sectionTitle}>이름과 역할</Text>
-              <Text style={styles.sectionDetail}>모든 답변의 기본 성격과 관점을 정합니다.</Text>
             </View>
             <View style={styles.formBlock}>
               <View style={styles.avatarRow}>
@@ -611,7 +607,6 @@ export function GuardianSettingsModal({
                 </Pressable>
                 <View style={styles.avatarCopy}>
                   <Text style={styles.fieldLabel}>프로필 이미지</Text>
-                  <Text style={styles.sectionDetail}>기본 이미지를 유지하거나 갤러리에서 변경할 수 있어요.</Text>
                   {draft.avatarUri ? (
                     <Pressable
                       accessibilityRole="button"
@@ -635,7 +630,7 @@ export function GuardianSettingsModal({
                 accessibilityLabel="지키미 이름"
                 style={styles.textInput}
               />
-              <Text style={styles.fieldLabel}>시놉시스</Text>
+              <Text style={styles.fieldLabel}>어떤 도움을 받을까요?</Text>
               <TextInput
                 value={draft.synopsis}
                 onChangeText={(synopsis) => setDraft((current) => ({ ...current, synopsis }))}
@@ -759,7 +754,6 @@ export function GuardianSettingsModal({
               <>
                 <View style={styles.sectionHeadingSpaced}>
                   <Text style={styles.sectionTitle}>답변 길이</Text>
-                  <Text style={styles.sectionDetail}>기기 성능에 맞춰 출력 한도와 이어쓰기를 조절합니다.</Text>
                 </View>
                 <View style={styles.responseLengthGrid}>
                   {ON_DEVICE_RESPONSE_LENGTHS.map((option) => {
@@ -812,8 +806,8 @@ export function GuardianSettingsModal({
             <View style={styles.localNote}>
               <Ionicons name={draft.aiEngineType === 'onDevice' ? 'phone-portrait-outline' : 'information-circle-outline'} size={18} color={colors.tealDark} />
               <Text style={styles.localNoteText}>{draft.aiEngineType === 'onDevice'
-                ? '설정과 대화 내용은 기기에 저장됩니다. 웹 확인을 켠 경우 지키미가 선택한 공개 페이지 주소와 내용만 기기의 숨겨진 브라우저에서 처리합니다.'
-                : '대화 기록은 이 기기에 저장되지만, 답변 생성에 필요한 대화와 지키미 설정은 선택한 클라우드 모델로 전송됩니다.'}</Text>
+                ? '기기에서 답변해요. 웹 확인을 켜면 검색어가 외부로 전송됩니다.'
+                : '답변에 필요한 대화와 설정이 선택한 서버로 전송됩니다.'}</Text>
             </View>
           </ScrollView>
 
@@ -839,40 +833,40 @@ const styles = StyleSheet.create({
   header: { padding: spacing.lg, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderColor: colors.line, backgroundColor: colors.surface },
   headerCopy: { flex: 1, paddingRight: spacing.md },
   title: { color: colors.ink, fontSize: type.title, fontWeight: '900' },
-  detail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 17, marginTop: 4 },
+  detail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 20, marginTop: 4 },
   closeButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
   sectionHeading: { marginBottom: spacing.md },
   sectionHeadingSpaced: { marginTop: spacing.xxl, marginBottom: spacing.md },
   sectionTitle: { color: colors.ink, fontSize: type.section, fontWeight: '900' },
-  sectionDetail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 17, marginTop: 4 },
+  sectionDetail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 20, marginTop: 4 },
   responseLengthGrid: { flexDirection: 'row', gap: spacing.sm },
   responseLengthOption: { flex: 1, minHeight: 74, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, justifyContent: 'center', gap: 4 },
   responseLengthOptionActive: { borderColor: colors.teal, backgroundColor: colors.surfaceSoft },
   responseLengthLabel: { color: colors.inkSoft, fontSize: type.body, fontWeight: '900' },
   responseLengthLabelActive: { color: colors.tealDark },
-  responseLengthDetail: { color: colors.inkMuted, fontSize: type.tiny, lineHeight: 15 },
+  responseLengthDetail: { color: colors.inkMuted, fontSize: type.tiny, lineHeight: 18 },
   engineGrid: { flexDirection: 'row', gap: spacing.sm },
   engineOption: { flex: 1, minHeight: 118, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, alignItems: 'flex-start', justifyContent: 'center', gap: spacing.xs },
   engineOptionActive: { borderColor: colors.teal, backgroundColor: colors.surfaceSoft },
   engineTitle: { color: colors.ink, fontSize: type.body, fontWeight: '900' },
-  engineDetail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 17 },
+  engineDetail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 20 },
   cloudPanel: { marginTop: spacing.md, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, gap: spacing.md },
   providerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
-  providerOption: { minHeight: 38, paddingHorizontal: spacing.sm, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.canvas, alignItems: 'center', justifyContent: 'center' },
+  providerOption: { minHeight: 44, paddingHorizontal: spacing.sm, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.canvas, alignItems: 'center', justifyContent: 'center' },
   providerOptionActive: { borderColor: colors.teal, backgroundColor: colors.surfaceSoft },
   providerOptionText: { color: colors.inkSoft, fontSize: type.small, fontWeight: '800' },
   providerOptionTextActive: { color: colors.tealDark },
   providerFields: { padding: spacing.md, borderRadius: radius.md, backgroundColor: colors.canvas, gap: spacing.sm },
   fieldHelp: { color: colors.inkMuted, fontSize: type.tiny, lineHeight: 16 },
-  secondarySaveButton: { minHeight: 42, borderRadius: radius.md, borderWidth: 1, borderColor: colors.teal, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  secondarySaveButton: { minHeight: 44, borderRadius: radius.md, borderWidth: 1, borderColor: colors.teal, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
   secondarySaveText: { color: colors.tealDark, fontSize: type.small, fontWeight: '900' },
   connectionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   connectionDot: { width: 10, height: 10, borderRadius: radius.pill, backgroundColor: colors.inkMuted },
   connectionDotActive: { backgroundColor: colors.success },
   connectionCopy: { flex: 1, minWidth: 0 },
   connectionTitle: { color: colors.ink, fontSize: type.body, fontWeight: '900' },
-  connectionDetail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 17, marginTop: 3 },
+  connectionDetail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 20, marginTop: 3 },
   connectButton: { minHeight: 48, paddingHorizontal: spacing.md, borderRadius: radius.lg, backgroundColor: colors.tealDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
   connectButtonText: { color: '#FFFFFF', fontSize: type.body, fontWeight: '900' },
   disconnectButton: { minHeight: 46, paddingHorizontal: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: '#E7C2BB', backgroundColor: '#FFF8F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
@@ -884,8 +878,8 @@ const styles = StyleSheet.create({
   manualKeyToggle: { minHeight: 44, paddingHorizontal: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: colors.teal, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
   manualKeyToggleText: { flex: 1, color: colors.tealDark, fontSize: type.small, fontWeight: '900' },
   manualKeyEditor: { padding: spacing.md, borderRadius: radius.md, backgroundColor: colors.canvas, gap: spacing.sm },
-  manualKeyHelp: { color: colors.inkSoft, fontSize: type.small, lineHeight: 18 },
-  keyPageLink: { alignSelf: 'flex-start', minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  manualKeyHelp: { color: colors.inkSoft, fontSize: type.small, lineHeight: 20 },
+  keyPageLink: { alignSelf: 'flex-start', minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   keyPageLinkText: { color: colors.tealDark, fontSize: type.small, fontWeight: '900', textDecorationLine: 'underline' },
   apiKeyInputRow: { minHeight: 48, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center' },
   apiKeyInput: { flex: 1, minHeight: 46, paddingLeft: spacing.md, color: colors.ink, fontSize: type.body },
@@ -902,7 +896,7 @@ const styles = StyleSheet.create({
   cloudModelRow: { minHeight: 62, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.line, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   freeBadge: { paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.pill, overflow: 'hidden', backgroundColor: '#E4F3E7', color: colors.success, fontSize: type.tiny, fontWeight: '900' },
   cloudPrivacyNote: { padding: spacing.md, borderRadius: radius.lg, backgroundColor: '#EEF4F8', flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
-  cloudPrivacyText: { flex: 1, color: colors.inkSoft, fontSize: type.small, lineHeight: 18 },
+  cloudPrivacyText: { flex: 1, color: colors.inkSoft, fontSize: type.small, lineHeight: 20 },
   formBlock: { padding: spacing.md, borderWidth: 1, borderColor: colors.line, borderRadius: radius.lg, backgroundColor: colors.surface, gap: spacing.sm },
   avatarRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.xs },
   avatarPreview: { width: 64, height: 64, borderRadius: 20, borderWidth: 2, borderColor: colors.line, backgroundColor: colors.surfaceSoft },
@@ -927,18 +921,18 @@ const styles = StyleSheet.create({
   },
   fieldLabel: { color: colors.inkSoft, fontSize: type.small, fontWeight: '900', marginTop: spacing.xs },
   textInput: { minHeight: 44, paddingHorizontal: spacing.md, paddingVertical: 10, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.canvas, color: colors.ink, fontSize: type.body },
-  synopsisInput: { minHeight: 100, textAlignVertical: 'top', lineHeight: 20 },
-  ruleInput: { minHeight: 112, textAlignVertical: 'top', lineHeight: 20 },
+  synopsisInput: { minHeight: 100, textAlignVertical: 'top', lineHeight: 24 },
+  ruleInput: { minHeight: 112, textAlignVertical: 'top', lineHeight: 24 },
   switchRow: { minHeight: 64, marginTop: spacing.xs, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   switchCopy: { flex: 1 },
   switchTitle: { color: colors.ink, fontSize: type.body, fontWeight: '800' },
-  switchDetail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 17, marginTop: 3 },
+  switchDetail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 20, marginTop: 3 },
   primaryButton: { minHeight: 46, marginTop: spacing.xs, borderRadius: radius.md, backgroundColor: colors.tealDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
   primaryButtonText: { color: '#FFFFFF', fontSize: type.body, fontWeight: '900' },
-  saveMessage: { color: colors.inkSoft, fontSize: type.small, lineHeight: 17, textAlign: 'center' },
+  saveMessage: { color: colors.inkSoft, fontSize: type.small, lineHeight: 20, textAlign: 'center' },
   ruleHeading: { marginTop: spacing.xxl, marginBottom: spacing.md, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   ruleHeadingCopy: { flex: 1 },
-  addButton: { minHeight: 40, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.teal, borderRadius: radius.md, flexDirection: 'row', alignItems: 'center', gap: spacing.xs, backgroundColor: colors.surface },
+  addButton: { minHeight: 44, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.teal, borderRadius: radius.md, flexDirection: 'row', alignItems: 'center', gap: spacing.xs, backgroundColor: colors.surface },
   addButtonText: { color: colors.tealDark, fontSize: type.small, fontWeight: '900' },
   ruleEditor: { marginBottom: spacing.md, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.teal, backgroundColor: colors.surfaceSoft, gap: spacing.sm },
   editorTitle: { color: colors.tealDark, fontSize: type.body, fontWeight: '900' },
@@ -953,12 +947,12 @@ const styles = StyleSheet.create({
   ruleIndexText: { color: colors.tealDark, fontSize: type.tiny, fontWeight: '900' },
   ruleCopy: { flex: 1, minWidth: 0 },
   ruleTitle: { color: colors.ink, fontSize: type.body, fontWeight: '900' },
-  ruleText: { color: colors.inkSoft, fontSize: type.small, lineHeight: 18, marginTop: 4 },
+  ruleText: { color: colors.inkSoft, fontSize: type.small, lineHeight: 20, marginTop: 4 },
   rowActions: { flexDirection: 'row' },
-  iconButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   emptyRules: { padding: spacing.lg, borderRadius: radius.lg, borderWidth: 1, borderStyle: 'dashed', borderColor: colors.line, backgroundColor: colors.surface },
   emptyRulesTitle: { color: colors.ink, fontSize: type.body, fontWeight: '900' },
-  emptyRulesText: { color: colors.inkMuted, fontSize: type.small, lineHeight: 18, marginTop: 4 },
+  emptyRulesText: { color: colors.inkMuted, fontSize: type.small, lineHeight: 20, marginTop: 4 },
   modelList: { gap: spacing.sm },
   modelRow: { minHeight: 64, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   modelRowActive: { borderColor: colors.teal, backgroundColor: colors.surfaceSoft },
@@ -971,7 +965,7 @@ const styles = StyleSheet.create({
   outputBadge: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: radius.pill, overflow: 'hidden', backgroundColor: '#EAF0FA', color: colors.blue, fontSize: type.tiny, fontWeight: '800' },
   emptyModelText: { color: colors.inkMuted, fontSize: type.body, lineHeight: 20, paddingVertical: spacing.md },
   localNote: { marginTop: spacing.xl, padding: spacing.md, borderRadius: radius.lg, backgroundColor: colors.surfaceWarm, flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
-  localNoteText: { flex: 1, color: colors.inkSoft, fontSize: type.small, lineHeight: 18 },
+  localNoteText: { flex: 1, color: colors.inkSoft, fontSize: type.small, lineHeight: 20 },
   footer: { padding: spacing.lg, borderTopWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, flexDirection: 'row', gap: spacing.sm },
   secondaryButton: { flex: 1, minHeight: 48, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.teal, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
   secondaryButtonText: { color: colors.tealDark, fontSize: type.body, fontWeight: '900' },

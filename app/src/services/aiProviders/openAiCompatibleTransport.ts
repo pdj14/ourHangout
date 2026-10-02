@@ -1,6 +1,7 @@
 import { fetch } from 'expo/fetch';
 
 import { isZeroPricedModel, normalizeModelModalities } from '../modelCapabilities';
+import { abortableDelay, readWithDeadline } from '../asyncControl';
 import { getOpenAiProviderWireAdapter } from './adapters';
 import { getProviderApiKey } from './credentials';
 import { getOpenAiProviderDescriptor, normalizeProviderSettings } from './registry';
@@ -18,6 +19,8 @@ const MODEL_LIST_TIMEOUT_MS = 20_000;
 const CHAT_TIMEOUT_MESSAGE = 'AI 제공자에 연결하지 못했어요. 네트워크와 서버 주소를 확인해 주세요.';
 // 응답 헤더(TTFB)까지의 상한. 본문 스트리밍에는 적용되지 않는다.
 const CONNECT_TIMEOUT_MS = 30_000;
+const STREAM_IDLE_TIMEOUT_MS = 60_000;
+const MAX_STREAM_EVENT_CHARS = 1024 * 1024;
 // 429/5xx/접속 실패에 대한 지수 백오프 재시도 간격.
 const CHAT_RETRY_DELAYS_MS = [1_000, 2_000];
 // 스트리밍 중단 시 부분 답변을 보존한 채 시도하는 이어쓰기 상한 횟수.
@@ -65,15 +68,6 @@ function isRetryableHttpStatus(status: number) {
 }
 
 /** 사용자 취소(외부 signal abort) 시에는 즉시 해제되는 대기. */
-function abortableDelay(ms: number, signal: AbortSignal) {
-  return new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener('abort', () => {
-      clearTimeout(timer);
-      resolve();
-    }, { once: true });
-  });
-}
 
 type ModelPayload = {
   id?: unknown;
@@ -463,15 +457,19 @@ export async function streamOpenAiCompatibleConversation(
 ): Promise<OpenAiConversationResult> {
   const settings = normalizeProviderSettings(rawSettings);
   const descriptor = getOpenAiProviderDescriptor(settings.providerId);
-  const apiKey = await requireCredential(settings);
-  const requestedModelId = settings.modelId || descriptor.defaultModelId;
-  if (!requestedModelId) {
-    throw new OpenAiProviderError('사용할 모델을 먼저 선택하거나 모델 ID를 입력해 주세요.', 'request', settings.providerId);
-  }
-  const hasTools = !!options.tools?.length;
   activeController?.abort();
   const controller = new AbortController();
   activeController = controller;
+  let apiKey: string | null;
+  try { apiKey = await requireCredential(settings); }
+  catch (error) { if (activeController === controller) activeController = null; throw error; }
+  if (controller.signal.aborted) throw new OpenAiProviderError('답변 생성을 중지했어요.', 'cancelled', settings.providerId);
+  const requestedModelId = settings.modelId || descriptor.defaultModelId;
+  if (!requestedModelId) {
+    if (activeController === controller) activeController = null;
+    throw new OpenAiProviderError('사용할 모델을 먼저 선택하거나 모델 ID를 입력해 주세요.', 'request', settings.providerId);
+  }
+  const hasTools = !!options.tools?.length;
   const startedAt = Date.now();
   const history = sanitizeHistory(messages.slice(-40));
   logAiTransport('transport', 'chat_request', {
@@ -494,6 +492,8 @@ export async function streamOpenAiCompatibleConversation(
   let reasoningChars = 0;
   let lastFinishReason = '';
   const streamedToolCalls = new Map<number, StreamedToolCall>();
+  const responseCleanups = new Map<Response, () => void>();
+  let lastPartialAt = 0;
   const consume = (payload: Record<string, unknown>) => {
     const payloadError = payload.error;
     if (payloadError) {
@@ -530,7 +530,8 @@ export async function streamOpenAiCompatibleConversation(
     if (!next) return;
     content += next;
     const safeContent = sanitizeContent(content);
-    if (safeContent) callbacks.onPartial(safeContent);
+    const now = Date.now();
+    if (safeContent && now - lastPartialAt >= 100) { callbacks.onPartial(safeContent); lastPartialAt = now; }
   };
 
   const baseMessages = () => [
@@ -577,6 +578,7 @@ export async function streamOpenAiCompatibleConversation(
       if (controller.signal.aborted) attemptController.abort();
       else controller.signal.addEventListener('abort', forwardAbort);
       const watchdog = setTimeout(() => attemptController.abort(), CONNECT_TIMEOUT_MS);
+      let keepAbortListener = false;
       let response: Response;
       try {
         response = await fetch(chatUrl, {
@@ -585,6 +587,10 @@ export async function streamOpenAiCompatibleConversation(
           headers: buildHeaders(settings, apiKey, true),
           body,
         });
+        if (response.ok) {
+          keepAbortListener = true;
+          responseCleanups.set(response, () => controller.signal.removeEventListener('abort', forwardAbort));
+        }
       } catch (error) {
         if (controller.signal.aborted) throw error;
         if (attempt < CHAT_RETRY_DELAYS_MS.length) {
@@ -601,7 +607,7 @@ export async function streamOpenAiCompatibleConversation(
         throw error;
       } finally {
         clearTimeout(watchdog);
-        controller.signal.removeEventListener('abort', forwardAbort);
+        if (!keepAbortListener) controller.signal.removeEventListener('abort', forwardAbort);
       }
       if (!response.ok && isRetryableHttpStatus(response.status)) {
         const error = await responseError(settings, response);
@@ -624,18 +630,21 @@ export async function streamOpenAiCompatibleConversation(
 
   /** Reads one SSE/JSON response into the shared accumulators. */
   async function consumeResponse(res: Response) {
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
     const contentType = res.headers.get('content-type')?.toLowerCase() || '';
     if (contentType.includes('application/json')) {
-      consume(await res.json() as Record<string, unknown>);
+      consume(await readWithDeadline(() => res.json(), controller.signal, STREAM_IDLE_TIMEOUT_MS) as Record<string, unknown>);
       return;
     }
-    const reader = res.body!.getReader();
+    reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithDeadline(() => reader!.read(), controller.signal, STREAM_IDLE_TIMEOUT_MS);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
+      if (buffer.length > MAX_STREAM_EVENT_CHARS) throw new Error('서버 응답이 너무 커요. 다시 시도해 주세요.');
       let boundary = buffer.match(/\r?\n\r?\n/);
       while (boundary?.index !== undefined) {
         parseStreamEvent(buffer.slice(0, boundary.index), consume);
@@ -645,6 +654,14 @@ export async function streamOpenAiCompatibleConversation(
     }
     buffer += decoder.decode();
     if (buffer.trim()) parseStreamEvent(buffer, consume);
+    } finally {
+      if (reader) {
+        void reader.cancel().catch(() => undefined);
+        reader.releaseLock();
+      }
+      responseCleanups.get(res)?.();
+      responseCleanups.delete(res);
+    }
   }
 
   /**
@@ -802,6 +819,7 @@ export async function streamOpenAiCompatibleConversation(
       throw new OpenAiProviderError(`${descriptor.name} 모델이 빈 응답을 반환했어요.`, 'request', settings.providerId);
     }
     const safeContent = sanitizeContent(content);
+    if (safeContent) callbacks.onPartial(safeContent);
     if (!safeContent && !toolCalls.length) {
       logAiTransport('transport', 'unsanitizable_response', {
         chars: content.length,
@@ -835,6 +853,7 @@ export async function streamOpenAiCompatibleConversation(
       settings.providerId
     );
   } finally {
+    responseCleanups.forEach(cleanup => cleanup());
     if (activeController === controller) activeController = null;
   }
 }

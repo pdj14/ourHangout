@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Avatar } from './Avatar';
-import { colors, radius, shadow, spacing, type } from '../theme';
+import { colors, radius, spacing, type } from '../theme';
 import type { Message, Room, User } from '../types';
 
 type ChatListItemProps = {
@@ -90,16 +90,15 @@ export const ChatListItem = memo(function ChatListItem({ room, users, currentUse
 
 const styles = StyleSheet.create({
   card: {
-    minHeight: 86,
+    minHeight: 88,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    padding: spacing.md,
-    borderRadius: radius.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.lg,
     backgroundColor: colors.surface,
-    borderWidth: 1,
+    borderBottomWidth: 1,
     borderColor: colors.line,
-    ...shadow,
   },
   cardPressed: {
     opacity: 0.72,
@@ -128,7 +127,7 @@ const styles = StyleSheet.create({
   preview: {
     color: colors.inkSoft,
     fontSize: type.body,
-    lineHeight: 19,
+    lineHeight: 23,
   },
   metaRow: {
     minHeight: 22,

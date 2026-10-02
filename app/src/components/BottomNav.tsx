@@ -40,8 +40,8 @@ export const BottomNav = memo(function BottomNav({ active, onChange }: BottomNav
             onPress={() => onChange(item.key)}
             style={({ pressed }) => [styles.item, selected && styles.itemOn, pressed && styles.itemPressed]}
           >
-            <Ionicons name={item.icon} size={20} color={selected ? colors.tealDark : colors.inkMuted} />
-            <Text style={[styles.label, selected && styles.labelOn]} numberOfLines={1}>
+            <Ionicons name={selected ? item.icon.replace('-outline', '') as IconName : item.icon} size={23} color={selected ? colors.tealDark : colors.inkMuted} />
+            <Text style={[styles.label, selected && styles.labelOn]}>
               {item.label}
             </Text>
           </Pressable>
@@ -60,16 +60,16 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.sm,
     borderTopWidth: 1,
     borderColor: colors.line,
-    backgroundColor: 'transparent',
+    backgroundColor: colors.surface,
   },
   item: {
     flex: 1,
-    minHeight: 56,
+    minHeight: 64,
     paddingVertical: spacing.xs,
     borderRadius: radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 3,
+    gap: 5,
   },
   itemOn: {
     backgroundColor: colors.surfaceSoft,

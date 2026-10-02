@@ -198,7 +198,7 @@ export function ProfileScreen({
 
   return (
     <View style={styles.screen}>
-      <ScreenHeader title="프로필" detail="가족 계정, 사진, 연결 상태" />
+      <ScreenHeader title="프로필" />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.profilePanel}>
           <View style={styles.avatarButton}>
@@ -372,9 +372,8 @@ export function ProfileScreen({
         ) : null}
 
         <View style={styles.menu}>
-          <MenuRow icon="image-outline" title="프로필 사진" detail={busy ? '사진을 업로드하는 중입니다' : '가족과 친구에게 보이는 사진'} onPress={busy ? undefined : onPickAvatar} />
-          <MenuRow icon="lock-closed-outline" title="로그인 세션" detail="기기 안에 안전하게 보관됩니다" />
-          <MenuRow icon="server-outline" title="연결 서버" detail={serverLabel} onPress={onToggleServer} />
+          <MenuRow icon="image-outline" title="프로필 사진" detail={busy ? '사진 저장 중' : ''} onPress={busy ? undefined : onPickAvatar} />
+          {debugEnabled ? <MenuRow icon="server-outline" title="연결 서버" detail={serverLabel} onPress={onToggleServer} /> : null}
         </View>
 
         <Pressable accessibilityRole="button" accessibilityLabel="로그아웃" disabled={busy} onPress={onSignOut} style={styles.signOut}>
@@ -464,7 +463,7 @@ function MenuRow({
       </View>
       <View style={styles.menuCopy}>
         <Text style={styles.menuTitle}>{title}</Text>
-        <Text style={styles.menuDetail} numberOfLines={1}>{detail}</Text>
+        {detail ? <Text style={styles.menuDetail} numberOfLines={1}>{detail}</Text> : null}
       </View>
       {onPress ? <Ionicons name="chevron-forward" size={18} color={colors.inkMuted} /> : null}
     </Pressable>
@@ -548,7 +547,7 @@ const styles = StyleSheet.create({
   status: {
     color: colors.inkSoft,
     fontSize: type.body,
-    lineHeight: 20,
+    lineHeight: 24,
     marginTop: spacing.xs,
   },
   debugTapHint: {

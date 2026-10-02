@@ -21,8 +21,20 @@
 - Loading states are scoped to the action that owns them.
 - List cells are memoized and virtualized with bounded render windows.
 - Navigation and icon actions have accessibility labels and states.
-- The visual system uses a neutral work surface, 8 px corners, restrained
-  shadows, and denser headers.
+- The visual system uses warm neutral surfaces, forest teal actions, a 16 px
+  body size, readable contrast, and fewer repeated explanations.
+- Local model initialization, generation, and disposal share an exclusive
+  lifecycle; disposal waits for interrupted generation to settle.
+- Prompt fitting counts the model's formatted chat tokens and reserves room
+  for the answer. Memory checks and CPU limits adapt loading to device capacity.
+- GGUF copies validate their header, support cancellation, and clean up partial
+  files. Memory pressure and extended background time release local models.
+- Stream updates are throttled and Guardian message rows are memoized.
+- Network cancellation remains connected after response headers; idle stream
+  reads and backend response bodies have deadlines.
+- Conversation saves and archive updates are serialized to preserve write order.
+- AI lifecycle, streaming cancellation, conversation persistence, and backend
+  failure paths have deterministic regression coverage.
 - Unused Android media, microphone, overlay, camera, and storage permissions are
   blocked; application backup is disabled.
 

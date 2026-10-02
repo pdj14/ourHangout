@@ -288,7 +288,7 @@ export function RoomScreen({
                   {errorMessage}
                 </Text>
               </View>
-              <Pressable style={styles.errorRetry} onPress={onRetryLoad}>
+              <Pressable accessibilityRole="button" accessibilityLabel="메시지 다시 불러오기" style={styles.errorRetry} onPress={onRetryLoad}>
                 <Ionicons name="refresh" size={16} color="#FFFFFF" />
               </Pressable>
             </View>
@@ -326,7 +326,7 @@ export function RoomScreen({
               <>
                 <Text style={styles.emptyTitle}>메시지를 불러오지 못했습니다.</Text>
                 <Text style={styles.emptyText}>{errorMessage}</Text>
-                <Pressable style={styles.retryBtn} onPress={onRetryLoad}>
+                <Pressable accessibilityRole="button" accessibilityLabel="메시지 다시 불러오기" style={styles.retryBtn} onPress={onRetryLoad}>
                   <Ionicons name="refresh" size={16} color="#FFFFFF" />
                   <Text style={styles.retryText}>다시 시도</Text>
                 </Pressable>
@@ -442,8 +442,8 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
   },
   iconBtn: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -454,14 +454,14 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   headerAvatarButton: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerMenuButton: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',

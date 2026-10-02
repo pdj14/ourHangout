@@ -38,6 +38,7 @@ export type NativeAiModelsDirectory = {
 };
 
 export type NativeAiRuntimeCapacity = {
+  cpuCount?: number;
   totalMemoryBytes: number;
   availableMemoryBytes: number;
   lowMemoryThresholdBytes: number;
@@ -49,6 +50,7 @@ export type NativeAiModelStorageModule = {
   pickModelsDirectory: () => Promise<NativeAiModelsDirectory>;
   getModels: () => Promise<NativeAiModelsDirectory>;
   prepareModel: (modelUri: string) => Promise<string>;
+  cancelPrepareModel?: () => Promise<void>;
   getRuntimeCapacity: () => Promise<NativeAiRuntimeCapacity>;
   addListener: (eventName: string) => void;
   removeListeners: (count: number) => void;
