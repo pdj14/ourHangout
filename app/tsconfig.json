@@ -8,5 +8,5 @@
     }
   },
   "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules", "axone_output"]
+  "exclude": ["node_modules", "axone_output", ".tmp"]
 }

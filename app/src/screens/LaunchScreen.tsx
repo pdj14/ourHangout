@@ -3,7 +3,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 import { colors, gradients, radius, spacing, type } from '../theme';
 
-const launchArtwork = require('../../assets/hideout-splash.png');
+const launchArtwork = require('../../assets/icon.png');
 
 type LaunchScreenProps = {
   message?: string;

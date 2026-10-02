@@ -11,9 +11,9 @@
     "userInterfaceStyle": "light",
     "icon": "./assets/icon.png",
     "splash": {
-      "image": "./assets/hideout-splash.png",
+      "image": "./assets/icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#F6F8FB"
+      "backgroundColor": "#F6F7F4"
     },
     "ios": {
       "supportsTablet": true,
@@ -37,7 +37,7 @@
       "predictiveBackGestureEnabled": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#17212B"
+        "backgroundColor": "#1D6658"
       }
     },
     "extra": {

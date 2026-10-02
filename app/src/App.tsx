@@ -195,6 +195,8 @@ function RenewalApp() {
   const [guardianLogsTarget, setGuardianLogsTarget] = useState<{ userId: string; name: string } | null>(null);
   const [guardianLogs, setGuardianLogs] = useState<GuardianConversationLog[]>([]);
   const [guardianLogsLoading, setGuardianLogsLoading] = useState(false);
+  const [guardianLogsError, setGuardianLogsError] = useState('');
+  const guardianLogsRequestRef = useRef(0);
   const [familyRelationshipRoomId, setFamilyRelationshipRoomId] = useState('');
   const [familyCreateOpen, setFamilyCreateOpen] = useState(false);
   const [familyCreateBusy, setFamilyCreateBusy] = useState(false);
@@ -1764,14 +1766,18 @@ function RenewalApp() {
 
   const openGuardianLogs = useCallback(
     async (childUserId: string, childName: string) => {
+      const requestId = ++guardianLogsRequestRef.current;
       setGuardianLogsTarget({ userId: childUserId, name: childName });
       setGuardianLogs([]);
       setGuardianLogsLoading(true);
+      setGuardianLogsError('');
       try {
         const items = await fetchGuardianConversationLogs(client, childUserId, 30);
-        setGuardianLogs(items);
+        if (requestId === guardianLogsRequestRef.current) setGuardianLogs(items);
+      } catch (error) {
+        if (requestId === guardianLogsRequestRef.current) setGuardianLogsError(normalizeErrorMessage(error));
       } finally {
-        setGuardianLogsLoading(false);
+        if (requestId === guardianLogsRequestRef.current) setGuardianLogsLoading(false);
       }
     },
     [client]
@@ -2081,6 +2087,10 @@ function RenewalApp() {
       !!session?.accessToken,
     url: realtimeUrl,
     onEvent: handleRealtimeEvent,
+    onSessionInvalid: () => {
+      // HTTP 인증이 만료 토큰을 갱신하고 새 토큰으로 실시간 연결을 다시 연다.
+      void client.request('/v1/me', { method: 'GET' }, { queue: false }).catch(() => null);
+    },
     onConnected: (reconnected) => {
       if (!reconnected) return;
       // 실시간 연결이 끊긴 동안 놓친 데이터를 조용히 다시 동기화한다.
@@ -2138,6 +2148,10 @@ function RenewalApp() {
 
   const signedIn = authState === 'ready' || authState === 'degraded';
   const booting = authState === 'checking' || authState === 'syncing';
+
+  useEffect(() => {
+    if (!signedIn) { guardianLogsRequestRef.current += 1; setGuardianLogsTarget(null); setGuardianLogs([]); setGuardianLogsError(''); setGuardianLogsLoading(false); }
+  }, [signedIn]);
 
   if (booting) {
     return (
@@ -2358,7 +2372,9 @@ function RenewalApp() {
           childName={guardianLogsTarget.name}
           loading={guardianLogsLoading}
           logs={guardianLogs}
-          onClose={() => setGuardianLogsTarget(null)}
+          errorMessage={guardianLogsError}
+          onRefresh={() => void openGuardianLogs(guardianLogsTarget.userId, guardianLogsTarget.name)}
+          onClose={() => { guardianLogsRequestRef.current += 1; setGuardianLogsTarget(null); }}
         />
       ) : null}
     </SafeAreaView>
