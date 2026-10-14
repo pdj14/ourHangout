@@ -37,7 +37,7 @@
       "predictiveBackGestureEnabled": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1D6658"
+        "backgroundColor": "#E0F0E7"
       }
     },
     "extra": {
