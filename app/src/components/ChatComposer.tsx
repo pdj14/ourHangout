@@ -149,9 +149,9 @@ export const ChatComposer = forwardRef<TextInput, ChatComposerProps>(function Ch
           style={[styles.sendButton, generating && styles.stopButton, sendDisabled && styles.disabled]}
         >
           {sending && !onStop ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
+            <ActivityIndicator size="small" color={generating ? colors.coral : colors.actionInk} />
           ) : (
-            <Ionicons name={generating ? 'stop' : 'arrow-up'} size={20} color="#FFFFFF" />
+            <Ionicons name={generating ? 'stop' : 'arrow-up'} size={20} color={generating ? colors.coral : colors.actionInk} />
           )}
         </Pressable>
       </View>
@@ -162,10 +162,18 @@ export const ChatComposer = forwardRef<TextInput, ChatComposerProps>(function Ch
 const styles = StyleSheet.create({
   wrap: { backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.line },
   composer: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
-  attachButton: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceSoft },
-  input: { flex: 1, minWidth: 0, minHeight: 48, maxHeight: 144, paddingHorizontal: spacing.lg, paddingVertical: 12, borderRadius: radius.lg, backgroundColor: colors.canvas, color: colors.ink, fontSize: type.body, lineHeight: 24 },
-  sendButton: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.tealDark },
-  stopButton: { backgroundColor: colors.coral },
+  attachButton: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceLavender },
+  input: { flex: 1, minWidth: 0, minHeight: 48, maxHeight: 144, paddingHorizontal: spacing.lg, paddingVertical: 12, borderRadius: radius.lg, backgroundColor: colors.canvas, color: colors.ink, fontSize: type.body, lineHeight: 24,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  sendButton: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.action,
+    borderWidth: 1,
+    borderColor: colors.actionBorder,
+  },
+  stopButton: { backgroundColor: colors.surfaceRose,
+    borderColor: colors.surfaceRose,
+  },
   disabled: { opacity: 0.42 },
   attachmentMenu: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 58, paddingHorizontal: spacing.md, paddingTop: spacing.sm },
   menuItem: { minWidth: 74, minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: radius.md, backgroundColor: colors.surfaceSoft },

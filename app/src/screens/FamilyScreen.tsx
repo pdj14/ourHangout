@@ -71,6 +71,7 @@ export function FamilyScreen({
     <View style={styles.screen}>
       <ScreenHeader
         title="가족"
+        tone="family"
         action={
           <Pressable accessibilityRole="button" accessibilityLabel="가족 정보 새로고침" style={styles.iconBtn} onPress={onRefresh}>
             <Ionicons name="refresh" size={21} color={colors.ink} />
@@ -86,7 +87,7 @@ export function FamilyScreen({
               onPress={() => familyRooms[0] ? onManageRelationships(familyRooms[0].id) : onCreateFamily()}
               style={styles.heroAction}
             >
-              <Ionicons name="people-outline" size={16} color="#FFFFFF" />
+              <Ionicons name="people-outline" size={16} color={colors.actionInk} />
               <Text style={styles.heroActionText}>{familyRooms.length ? '가족 관리' : '가족 연결하기'}</Text>
             </Pressable>
           </View>
@@ -284,9 +285,9 @@ export function FamilyScreen({
                       onPress={() => activeLocationRoomId && onRequestLocation(activeLocationRoomId, location.userId)}
                     >
                       {checking ? (
-                        <ActivityIndicator size="small" color="#FFFFFF" />
+                        <ActivityIndicator size="small" color={colors.actionInk} />
                       ) : (
-                        <Ionicons name="refresh" size={16} color="#FFFFFF" />
+                        <Ionicons name="refresh" size={16} color={colors.actionInk} />
                       )}
                     </Pressable>
                   </View>
@@ -326,14 +327,14 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   hero: {
-    minHeight: 152,
+    minHeight: 168,
     flexDirection: 'row',
     alignItems: 'center',
     padding: spacing.lg,
     borderRadius: radius.lg,
-    backgroundColor: colors.surfaceWarm,
+    backgroundColor: colors.surfaceRose,
     borderWidth: 1,
-    borderColor: colors.line,
+    borderColor: colors.surfaceRose,
     overflow: 'hidden',
   },
   heroCopy: {
@@ -356,17 +357,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
     borderRadius: radius.md,
-    backgroundColor: colors.tealDark,
+    backgroundColor: colors.action,
   },
   heroActionText: {
     flexShrink: 1,
-    color: '#FFFFFF',
+    color: colors.actionInk,
     fontSize: type.small,
     fontWeight: '900',
   },
   heroMascot: {
-    width: 88,
-    height: 88,
+    width: 104,
+    height: 112,
     marginRight: -8,
   },
   panel: {
@@ -458,10 +459,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: radius.md,
-    backgroundColor: colors.tealDark,
+    backgroundColor: colors.action,
   },
   setupButtonText: {
-    color: '#FFFFFF',
+    color: colors.actionInk,
     fontSize: type.body,
     fontWeight: '900',
   },
@@ -607,7 +608,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.tealDark,
+    backgroundColor: colors.action,
   },
   logsButton: {
     minHeight: 44,

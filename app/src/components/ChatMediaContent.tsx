@@ -56,7 +56,7 @@ const AudioContent = memo(function AudioContent({ attachment, compact }: {
         onPress={toggle}
         style={styles.audioButton}
       >
-        <Ionicons name={status.playing ? 'pause' : 'play'} size={18} color="#FFFFFF" />
+        <Ionicons name={status.playing ? 'pause' : 'play'} size={18} color={colors.actionInk} />
       </Pressable>
       <View style={styles.audioCopy}>
         <Text style={styles.audioName} numberOfLines={1}>{attachment.fileName || '\uC624\uB514\uC624 \uD30C\uC77C'}</Text>
@@ -109,7 +109,7 @@ const styles = StyleSheet.create({
     borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.tealDark,
+    backgroundColor: colors.action,
   },
   audioCopy: { flex: 1, minWidth: 0 },
   audioName: { color: colors.ink, fontSize: type.small, fontWeight: '800' },

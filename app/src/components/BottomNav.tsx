@@ -2,7 +2,7 @@ import { memo, type ComponentProps } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { colors, radius, spacing, type } from '../theme';
+import { colors, radius, sectionTones, spacing, type } from '../theme';
 import type { TabKey } from '../types';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
@@ -31,17 +31,19 @@ export const BottomNav = memo(function BottomNav({ active, onChange }: BottomNav
     <View style={styles.wrap}>
       {items.map((item) => {
         const selected = item.key === active;
+        const tone = sectionTones[item.key];
         return (
           <Pressable
             key={item.key}
             accessibilityRole="button"
             accessibilityLabel={`${item.label} 탭`}
             aria-selected={selected}
+            accessibilityState={{ selected }}
             onPress={() => onChange(item.key)}
-            style={({ pressed }) => [styles.item, selected && styles.itemOn, pressed && styles.itemPressed]}
+            style={({ pressed }) => [styles.item, selected && { backgroundColor: tone.background }, pressed && styles.itemPressed]}
           >
-            <Ionicons name={selected ? item.icon.replace('-outline', '') as IconName : item.icon} size={23} color={selected ? colors.tealDark : colors.inkMuted} />
-            <Text style={[styles.label, selected && styles.labelOn]}>
+            <Ionicons name={selected ? item.icon.replace('-outline', '') as IconName : item.icon} size={23} color={selected ? tone.foreground : colors.inkMuted} />
+            <Text style={[styles.label, selected && { color: tone.foreground }]}>
               {item.label}
             </Text>
           </Pressable>
@@ -64,15 +66,12 @@ const styles = StyleSheet.create({
   },
   item: {
     flex: 1,
-    minHeight: 64,
+    minHeight: 60,
     paddingVertical: spacing.xs,
     borderRadius: radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 5,
-  },
-  itemOn: {
-    backgroundColor: colors.surfaceSoft,
   },
   itemPressed: {
     opacity: 0.7,
@@ -81,8 +80,5 @@ const styles = StyleSheet.create({
     fontSize: type.small,
     fontWeight: '700',
     color: colors.inkMuted,
-  },
-  labelOn: {
-    color: colors.tealDark,
   },
 });

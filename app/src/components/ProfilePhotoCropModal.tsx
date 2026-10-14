@@ -391,7 +391,7 @@ export function ProfilePhotoCropModal({ sourceUri, onCancel, onApply }: ProfileP
               <Text style={styles.cancelText}>취소</Text>
             </Pressable>
             <Pressable disabled={!crop || busy} onPress={() => void applyCrop()} style={[styles.applyButton, (!crop || busy) && styles.disabled]}>
-              {applying ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="checkmark" size={19} color="#FFFFFF" />}
+              {applying ? <ActivityIndicator size="small" color={colors.actionInk} /> : <Ionicons name="checkmark" size={19} color={colors.actionInk} />}
               <Text style={styles.applyText}>{applying ? '적용 중...' : '이 영역으로 적용'}</Text>
             </Pressable>
           </View>
@@ -558,10 +558,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.sm,
-    backgroundColor: colors.tealDark,
+    backgroundColor: colors.action,
   },
   applyText: {
-    color: '#FFFFFF',
+    color: colors.actionInk,
     fontSize: type.body,
     fontWeight: '900',
   },

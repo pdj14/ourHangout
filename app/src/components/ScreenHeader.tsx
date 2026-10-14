@@ -1,17 +1,18 @@
 import type { ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing, type } from '../theme';
+import { colors, sectionTones, spacing, type } from '../theme';
 
 type ScreenHeaderProps = {
   title: string;
   detail?: string;
   action?: ReactNode;
+  tone?: keyof typeof sectionTones;
 };
 
-export function ScreenHeader({ title, detail, action }: ScreenHeaderProps) {
+export function ScreenHeader({ title, detail, action, tone = 'ai' }: ScreenHeaderProps) {
   return (
-    <View style={styles.wrap}>
+    <View style={[styles.wrap, { backgroundColor: sectionTones[tone].background }]}>
       <View style={styles.copy}>
         <Text accessibilityRole="header" style={styles.title}>
           {title}
@@ -31,6 +32,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
     paddingTop: spacing.xl,
     paddingBottom: spacing.lg,
+    marginBottom: spacing.lg,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
   },
   copy: {
     flex: 1,

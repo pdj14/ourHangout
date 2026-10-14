@@ -108,7 +108,7 @@ export function FriendSearchModal({
               onPress={onSearch}
               style={[styles.searchButton, (!query.trim() || searching) && styles.disabled]}
             >
-              {searching ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="search" size={19} color="#FFFFFF" />}
+              {searching ? <ActivityIndicator size="small" color={colors.actionInk} /> : <Ionicons name="search" size={19} color={colors.actionInk} />}
             </Pressable>
           </View>
 
@@ -210,7 +210,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.tealDark,
+    backgroundColor: colors.action,
   },
   disabled: { opacity: 0.45 },
   message: {

@@ -67,7 +67,7 @@ export function LoginScreen({ authState, serverState, errorMessage, onSignIn }: 
             style={({ pressed }) => [styles.signIn, busy && styles.signInDisabled, pressed && { opacity: 0.8 }]}
           >
             <View style={styles.signInIcon}>
-              {busy ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="logo-google" size={18} color="#FFFFFF" />}
+              {busy ? <ActivityIndicator size="small" color={colors.actionInk} /> : <Ionicons name="logo-google" size={18} color={colors.actionInk} />}
             </View>
             <Text style={styles.signInText}>{busy ? '준비 중...' : 'Google로 시작하기'}</Text>
           </Pressable>
@@ -182,7 +182,7 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     marginTop: spacing.xl,
     borderRadius: radius.md,
-    backgroundColor: colors.tealDark,
+    backgroundColor: colors.action,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -195,10 +195,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   signInDisabled: {
-    backgroundColor: colors.inkMuted,
+    backgroundColor: colors.action,
+
+    opacity: 0.5,
   },
   signInText: {
-    color: '#FFFFFF',
+    color: colors.actionInk,
     fontSize: type.body,
     fontWeight: '900',
   },

@@ -99,6 +99,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderBottomWidth: 1,
     borderColor: colors.line,
+
+    borderRadius: radius.lg,
+    borderWidth: 1,
   },
   cardPressed: {
     opacity: 0.72,

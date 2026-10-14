@@ -76,7 +76,7 @@ export function GuardianConversationsModal({
           onPress={onCreate}
           style={[styles.newButton, busy && styles.disabled]}
         >
-          <Ionicons name="add" size={20} color="#FFFFFF" />
+          <Ionicons name="add" size={20} color={colors.actionInk} />
           <Text style={styles.newButtonText}>새 이야기 시작</Text>
         </Pressable>
 
@@ -96,7 +96,7 @@ export function GuardianConversationsModal({
                   style={styles.roomMain}
                 >
                   <View style={[styles.roomIcon, active && styles.activeRoomIcon]}>
-                    <Ionicons name="chatbubble-ellipses-outline" size={19} color={active ? '#FFFFFF' : colors.tealDark} />
+                    <Ionicons name="chatbubble-ellipses-outline" size={19} color={active ? colors.actionInk : colors.tealDark} />
                   </View>
                   <View style={styles.roomCopy}>
                     <View style={styles.roomTitleRow}>
@@ -134,15 +134,15 @@ const styles = StyleSheet.create({
   title: { color: colors.ink, fontSize: type.hero, fontWeight: '900' },
   detail: { color: colors.inkSoft, fontSize: type.body, lineHeight: 20, marginTop: spacing.xs },
   iconButton: { width: 42, height: 42, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line },
-  newButton: { minHeight: 48, marginHorizontal: spacing.lg, marginBottom: spacing.md, borderRadius: radius.lg, backgroundColor: colors.tealDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
-  newButtonText: { color: '#FFFFFF', fontSize: type.body, fontWeight: '900' },
+  newButton: { minHeight: 48, marginHorizontal: spacing.lg, marginBottom: spacing.md, borderRadius: radius.lg, backgroundColor: colors.action, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  newButtonText: { color: colors.actionInk, fontSize: type.body, fontWeight: '900' },
   disabled: { opacity: 0.45 },
   list: { paddingHorizontal: spacing.lg, gap: spacing.md },
   room: { minHeight: 92, flexDirection: 'row', alignItems: 'center', borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface },
   activeRoom: { borderColor: colors.teal, backgroundColor: colors.surfaceSoft },
   roomMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md },
   roomIcon: { width: 40, height: 40, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceSoft },
-  activeRoomIcon: { backgroundColor: colors.tealDark },
+  activeRoomIcon: { backgroundColor: colors.action },
   roomCopy: { flex: 1, minWidth: 0 },
   roomTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   roomTitle: { flex: 1, color: colors.ink, fontSize: type.section, fontWeight: '900' },

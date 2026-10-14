@@ -412,8 +412,8 @@ export function GuardianSettingsModal({
                     : cloudProvider.supportsOAuth ? onConnectOpenRouter : onRefreshOpenRouterModels}
                   style={[showDisconnectAction ? styles.disconnectButton : styles.connectButton, controlsDisabled && styles.disabled]}
                 >
-                  {openRouterBusy ? <ActivityIndicator size="small" color={showDisconnectAction ? colors.coral : '#FFFFFF'} /> : (
-                    <Ionicons name={showDisconnectAction ? 'unlink-outline' : 'git-network-outline'} size={18} color={showDisconnectAction ? colors.coral : '#FFFFFF'} />
+                  {openRouterBusy ? <ActivityIndicator size="small" color={showDisconnectAction ? colors.coral : colors.actionInk} /> : (
+                    <Ionicons name={showDisconnectAction ? 'unlink-outline' : 'git-network-outline'} size={18} color={showDisconnectAction ? colors.coral : colors.actionInk} />
                   )}
                   <Text style={showDisconnectAction ? styles.disconnectButtonText : styles.connectButtonText}>
                     {showDisconnectAction ? '연결 해제' : cloudProvider.supportsOAuth ? 'OpenRouter 계정 연결' : '서버 연결 확인'}
@@ -488,7 +488,7 @@ export function GuardianSettingsModal({
                           onPress={() => void submitManualApiKey()}
                           style={[styles.manualKeySaveButton, (controlsDisabled || !manualApiKey.trim()) && styles.disabled]}
                         >
-                          {openRouterBusy ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="shield-checkmark-outline" size={18} color="#FFFFFF" />}
+                          {openRouterBusy ? <ActivityIndicator size="small" color={colors.actionInk} /> : <Ionicons name="shield-checkmark-outline" size={18} color={colors.actionInk} />}
                           <Text style={styles.manualKeySaveText}>키 확인 후 안전하게 저장</Text>
                         </Pressable>
                       </View>
@@ -664,7 +664,7 @@ export function GuardianSettingsModal({
                 onPress={saveBasics}
                 style={[styles.primaryButton, (!profileDirty || controlsDisabled) && styles.disabled]}
               >
-                {saving ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="checkmark" size={18} color="#FFFFFF" />}
+                {saving ? <ActivityIndicator size="small" color={colors.actionInk} /> : <Ionicons name="checkmark" size={18} color={colors.actionInk} />}
                 <Text style={styles.primaryButtonText}>기본 정보 저장</Text>
               </Pressable>
               {saveMessage ? <Text accessibilityLiveRegion="polite" style={styles.saveMessage}>{saveMessage}</Text> : null}
@@ -820,7 +820,7 @@ export function GuardianSettingsModal({
               <Text style={styles.secondaryButtonText}>새로고침</Text>
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="다른 AiModels 폴더 선택" disabled={controlsDisabled} onPress={onPickDirectory} style={[styles.folderButton, controlsDisabled && styles.disabled]}>
-              <Ionicons name="folder-open-outline" size={18} color="#FFFFFF" />
+              <Ionicons name="folder-open-outline" size={18} color={colors.actionInk} />
               <Text style={styles.folderButtonText}>폴더 바꾸기</Text>
             </Pressable>
           </View> : null}
@@ -871,8 +871,8 @@ const styles = StyleSheet.create({
   connectionCopy: { flex: 1, minWidth: 0 },
   connectionTitle: { color: colors.ink, fontSize: type.body, fontWeight: '900' },
   connectionDetail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 20, marginTop: 3 },
-  connectButton: { minHeight: 48, paddingHorizontal: spacing.md, borderRadius: radius.lg, backgroundColor: colors.tealDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
-  connectButtonText: { color: '#FFFFFF', fontSize: type.body, fontWeight: '900' },
+  connectButton: { minHeight: 48, paddingHorizontal: spacing.md, borderRadius: radius.lg, backgroundColor: colors.action, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  connectButtonText: { color: colors.actionInk, fontSize: type.body, fontWeight: '900' },
   disconnectButton: { minHeight: 46, paddingHorizontal: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: '#E7C2BB', backgroundColor: '#FFF8F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
   disconnectButtonText: { color: colors.coral, fontSize: type.body, fontWeight: '900' },
   manualKeyBlock: { gap: spacing.sm },
@@ -889,8 +889,8 @@ const styles = StyleSheet.create({
   apiKeyInput: { flex: 1, minHeight: 46, paddingLeft: spacing.md, color: colors.ink, fontSize: type.body },
   apiKeyVisibilityButton: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
   apiKeySecurityText: { color: colors.inkMuted, fontSize: type.tiny, lineHeight: 16 },
-  manualKeySaveButton: { minHeight: 46, paddingHorizontal: spacing.md, borderRadius: radius.md, backgroundColor: colors.tealDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
-  manualKeySaveText: { color: '#FFFFFF', fontSize: type.small, fontWeight: '900' },
+  manualKeySaveButton: { minHeight: 46, paddingHorizontal: spacing.md, borderRadius: radius.md, backgroundColor: colors.action, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  manualKeySaveText: { color: colors.actionInk, fontSize: type.small, fontWeight: '900' },
   cloudModelBlock: { gap: spacing.sm },
   modelLabelRow: { minHeight: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   inlineRefreshButton: { minHeight: 36, paddingHorizontal: spacing.sm, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
@@ -931,8 +931,8 @@ const styles = StyleSheet.create({
   switchCopy: { flex: 1 },
   switchTitle: { color: colors.ink, fontSize: type.body, fontWeight: '800' },
   switchDetail: { color: colors.inkMuted, fontSize: type.small, lineHeight: 20, marginTop: 3 },
-  primaryButton: { minHeight: 46, marginTop: spacing.xs, borderRadius: radius.md, backgroundColor: colors.tealDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
-  primaryButtonText: { color: '#FFFFFF', fontSize: type.body, fontWeight: '900' },
+  primaryButton: { minHeight: 46, marginTop: spacing.xs, borderRadius: radius.md, backgroundColor: colors.action, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  primaryButtonText: { color: colors.actionInk, fontSize: type.body, fontWeight: '900' },
   saveMessage: { color: colors.inkSoft, fontSize: type.small, lineHeight: 20, textAlign: 'center' },
   ruleHeading: { marginTop: spacing.xxl, marginBottom: spacing.md, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   ruleHeadingCopy: { flex: 1 },
@@ -943,8 +943,8 @@ const styles = StyleSheet.create({
   editorActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
   cancelButton: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface },
   cancelButtonText: { color: colors.inkSoft, fontSize: type.body, fontWeight: '800' },
-  saveRuleButton: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, backgroundColor: colors.tealDark },
-  saveRuleButtonText: { color: '#FFFFFF', fontSize: type.body, fontWeight: '900' },
+  saveRuleButton: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, backgroundColor: colors.action },
+  saveRuleButtonText: { color: colors.actionInk, fontSize: type.body, fontWeight: '900' },
   ruleList: { gap: spacing.sm },
   ruleRow: { minHeight: 76, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
   ruleIndex: { width: 24, height: 24, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceSoft },
@@ -973,6 +973,6 @@ const styles = StyleSheet.create({
   footer: { padding: spacing.lg, borderTopWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, flexDirection: 'row', gap: spacing.sm },
   secondaryButton: { flex: 1, minHeight: 48, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.teal, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
   secondaryButtonText: { color: colors.tealDark, fontSize: type.body, fontWeight: '900' },
-  folderButton: { flex: 1, minHeight: 48, borderRadius: radius.lg, backgroundColor: colors.tealDark, flexDirection: 'row', gap: spacing.sm, alignItems: 'center', justifyContent: 'center' },
-  folderButtonText: { color: '#FFFFFF', fontSize: type.body, fontWeight: '900' },
+  folderButton: { flex: 1, minHeight: 48, borderRadius: radius.lg, backgroundColor: colors.action, flexDirection: 'row', gap: spacing.sm, alignItems: 'center', justifyContent: 'center' },
+  folderButtonText: { color: colors.actionInk, fontSize: type.body, fontWeight: '900' },
 });

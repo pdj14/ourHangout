@@ -198,7 +198,7 @@ export function ProfileScreen({
 
   return (
     <View style={styles.screen}>
-      <ScreenHeader title="프로필" />
+      <ScreenHeader title="프로필" tone="me" />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.profilePanel}>
           <View style={styles.avatarButton}>
@@ -363,7 +363,7 @@ export function ProfileScreen({
                   onPress={onInstallUpdate}
                   style={[styles.updateInstallButton, installingUpdate && styles.updateButtonDisabled]}
                 >
-                  {installingUpdate ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="download-outline" size={17} color="#FFFFFF" />}
+                  {installingUpdate ? <ActivityIndicator size="small" color={colors.actionInk} /> : <Ionicons name="download-outline" size={17} color={colors.actionInk} />}
                   <Text style={styles.updateInstallButtonText}>{installButtonLabel}</Text>
                 </Pressable>
               ) : null}
@@ -826,10 +826,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.sm,
-    backgroundColor: colors.tealDark,
+    backgroundColor: colors.action,
   },
   updateInstallButtonText: {
-    color: '#FFFFFF',
+    color: colors.actionInk,
     fontSize: type.small,
     fontWeight: '900',
   },

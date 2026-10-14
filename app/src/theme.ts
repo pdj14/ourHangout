@@ -1,39 +1,57 @@
 import { Platform } from 'react-native';
 
 /**
- * Warm neutral surfaces, forest teal actions, and readable text for all ages.
+ * Warm pastel surfaces with readable ink for a shared family space.
  */
 export const colors = {
-  canvas: '#F6F7F4',
-  canvasDeep: '#E9EDE7',
-  surface: '#FFFFFF',
-  surfaceSoft: '#EAF2ED',
-  surfaceWarm: '#FBF0DF',
-  ink: '#243A33',
-  inkSoft: '#53655D',
-  inkMuted: '#606E66',
-  line: '#DCE4DC',
-  teal: '#28796A',
-  tealDark: '#1D6658',
-  blue: '#426D8A',
-  indigo: '#5A6687',
-  coral: '#AE493E',
-  amber: '#946321',
-  leaf: '#6D8D6D',
-  bark: '#7C654C',
-  cream: '#FFFBF6',
-  success: '#367753',
-  mine: '#28796A',
-  other: '#FFFFFF',
-  shadow: '#243A33',
+  canvas: '#FFF9F5',
+  canvasDeep: '#F3ECE7',
+  surface: '#FFFEFC',
+  surfaceSoft: '#EAF4EE',
+  surfaceWarm: '#FFF0DE',
+  surfaceLavender: '#F1ECF9',
+  surfaceRose: '#FBEAEC',
+  surfaceBlue: '#EAF1FB',
+  ink: '#37434B',
+  inkSoft: '#59636B',
+  inkMuted: '#60656E',
+  line: '#E7DFD9',
+  teal: '#4A7E70',
+  tealDark: '#356859',
+  blue: '#526F98',
+  indigo: '#6A5F91',
+  coral: '#A34E5E',
+  amber: '#866136',
+  leaf: '#64846F',
+  bark: '#766157',
+  cream: '#FFF9ED',
+  success: '#3F7657',
+  action: '#D7EBDF',
+  actionInk: '#315C4D',
+  actionBorder: '#B8D6C6',
+  mine: '#DCEFE6',
+  mineBorder: '#C5DED1',
+  other: '#F0EAF8',
+  otherBorder: '#DDD2EB',
+  shadow: '#596572',
 };
+
+export const sectionTones = {
+  people: { background: '#FFEADB', foreground: '#79533F' },
+  chats: { background: '#EDE5F8', foreground: '#655080' },
+  ai: { background: '#E0F0E7', foreground: '#356859' },
+  family: { background: '#F9E2E6', foreground: '#8B4E61' },
+  me: { background: '#E2EDFA', foreground: '#49658B' },
+};
+
+export const avatarPalette = [sectionTones.people, sectionTones.chats, sectionTones.ai, sectionTones.family, sectionTones.me];
 
 /** 부드러운 하늘 그라디언트 (expo-linear-gradient 용 색 배열) */
 export const gradients = {
   /** 런치/로그인 하늘: 크림 → 라벤더 → 옅은 하늘 */
-  sky: ['#FBF6EB', '#F6F7F4', '#EDF4ED'] as [string, string, string],
+  sky: ['#FFF0DE', '#FFF9F5', '#EDE5F8'] as [string, string, string],
   /** 하단 내비게이션 안개 */
-  nav: ['#FFFFFF', '#FFFFFF'] as [string, string],
+  nav: ['#FFFEFC', '#FFF9F5'] as [string, string],
 };
 
 export const spacing = {
@@ -46,9 +64,9 @@ export const spacing = {
 };
 
 export const radius = {
-  sm: 8,
-  md: 12,
-  lg: 20,
+  sm: 10,
+  md: 16,
+  lg: 24,
   pill: 999,
 };
 

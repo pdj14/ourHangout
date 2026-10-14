@@ -55,11 +55,12 @@ export function PeopleScreen({
     <View style={styles.screen}>
       <ScreenHeader
         title="사람"
+        tone="people"
         detail={`가족 ${family.length}명 · 친구 ${friends.length}명`}
         action={
           <View style={styles.headerActions}>
             <Pressable accessibilityRole="button" accessibilityLabel="친구 추가" style={[styles.iconBtn, styles.primaryIconBtn]} onPress={onAddFriend}>
-              <Ionicons name="person-add-outline" size={20} color={colors.surface} />
+              <Ionicons name="person-add-outline" size={20} color={colors.actionInk} />
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="사람 목록 새로고침" style={styles.iconBtn} onPress={onRefresh} disabled={loading}>
               {loading ? <ActivityIndicator size="small" color={colors.ink} /> : <Ionicons name="refresh" size={21} color={colors.ink} />}
@@ -96,7 +97,7 @@ export function PeopleScreen({
                         disabled={!!actionKey}
                         onPress={() => onAcceptRequest(request.id)}
                       >
-                        {actionKey === `accept:${request.id}` ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="checkmark" size={17} color="#FFFFFF" />}
+                        {actionKey === `accept:${request.id}` ? <ActivityIndicator size="small" color={colors.actionInk} /> : <Ionicons name="checkmark" size={17} color={colors.actionInk} />}
                       </Pressable>
                       <Pressable
                         accessibilityRole="button"
@@ -158,7 +159,7 @@ export function PeopleScreen({
             <Text style={styles.emptyTitle}>{loading ? '불러오는 중' : '함께할 사람을 찾아볼까요?'}</Text>
             <Text style={styles.emptyText}>{loading ? '잠시만 기다려 주세요.' : '친구를 추가하고 이야기를 시작해요.'}</Text>
             {!loading ? <Pressable accessibilityRole="button" accessibilityLabel="친구 추가하기" onPress={onAddFriend} style={({ pressed }) => [styles.emptyAction, pressed && { opacity: 0.75 }]}>
-              <Ionicons name="person-add-outline" size={18} color={colors.surface} />
+              <Ionicons name="person-add-outline" size={18} color={colors.actionInk} />
               <Text style={styles.emptyActionText}>친구 추가하기</Text>
             </Pressable> : null}
           </View>
@@ -234,7 +235,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.coral,
+    backgroundColor: colors.surfaceRose,
   },
   miniBtnLight: {
     backgroundColor: colors.surface,
@@ -258,6 +259,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderBottomWidth: 1,
     borderColor: colors.line,
+
+    borderRadius: radius.lg,
+    borderWidth: 1,
   },
   avatarButton: {
     width: 46,
@@ -296,10 +300,10 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     alignItems: 'center',
   },
-  primaryIconBtn: { backgroundColor: colors.tealDark, borderColor: colors.tealDark },
+  primaryIconBtn: { backgroundColor: colors.surfaceWarm, borderColor: colors.line },
   emptySpinner: { marginBottom: spacing.md },
-  emptyAction: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, marginTop: spacing.lg, borderRadius: radius.md, backgroundColor: colors.tealDark },
-  emptyActionText: { color: colors.surface, fontSize: type.body, fontWeight: '700' },
+  emptyAction: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, marginTop: spacing.lg, borderRadius: radius.md, backgroundColor: colors.action },
+  emptyActionText: { color: colors.actionInk, fontSize: type.body, fontWeight: '700' },
   emptyMascot: {
     width: 72,
     height: 72,

@@ -138,7 +138,7 @@ export function CreateFamilyRoomModal({
             onPress={() => onCreate(title.trim(), selectedIds)}
             style={[styles.primaryButton, !canCreate && styles.disabled]}
           >
-            {busy ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.primaryButtonText}>가족방 만들기</Text>}
+            {busy ? <ActivityIndicator size="small" color={colors.actionInk} /> : <Text style={styles.primaryButtonText}>가족방 만들기</Text>}
           </Pressable>
         </View>
       </SafeAreaView>
@@ -217,8 +217,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: radius.md,
-    backgroundColor: colors.tealDark,
+    backgroundColor: colors.action,
   },
-  primaryButtonText: { color: '#FFFFFF', fontSize: type.body, fontWeight: '900' },
+  primaryButtonText: { color: colors.actionInk, fontSize: type.body, fontWeight: '900' },
   disabled: { opacity: 0.45 },
 });

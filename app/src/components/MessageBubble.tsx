@@ -184,12 +184,12 @@ const styles = StyleSheet.create({
   },
   mine: {
     backgroundColor: colors.mine,
-    borderColor: colors.mine,
+    borderColor: colors.mineBorder,
     borderBottomRightRadius: spacing.xs,
   },
   other: {
     backgroundColor: colors.other,
-    borderColor: colors.line,
+    borderColor: colors.otherBorder,
     borderBottomLeftRadius: spacing.xs,
   },
   body: {
@@ -198,7 +198,7 @@ const styles = StyleSheet.create({
     lineHeight: 26,
   },
   mineText: {
-    color: '#FFFFFF',
+    color: colors.ink,
   },
   image: {
     width: 220,

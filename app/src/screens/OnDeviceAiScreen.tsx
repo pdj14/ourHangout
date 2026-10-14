@@ -1010,7 +1010,7 @@ export function OnDeviceAiScreen({ syncRoomId, backendClient }: OnDeviceAiScreen
                   : directoryName ? setSettingsOpen(true) : void pickDirectory()}
                 style={styles.wakeButton}
               >
-                <Ionicons name="sparkles-outline" size={18} color="#FFFFFF" />
+                <Ionicons name="sparkles-outline" size={18} color={colors.actionInk} />
                 <Text style={styles.wakeButtonText}>{directoryName || guardianProfile.aiEngineType === 'openRouter'
                   ? '지키미 준비하기'
                   : '지키미 시작하기'}</Text>
@@ -1179,8 +1179,8 @@ const styles = StyleSheet.create({
   emptyEyebrow: { color: colors.bark, fontSize: type.small, fontWeight: '900', marginBottom: spacing.sm },
   emptyTitle: { color: colors.ink, fontSize: type.title, lineHeight: 30, fontWeight: '800', textAlign: 'center' },
   emptyText: { color: colors.inkSoft, fontSize: type.small, lineHeight: 20, marginTop: spacing.sm, textAlign: 'center' },
-  wakeButton: { minHeight: 48, borderRadius: radius.lg, backgroundColor: colors.tealDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
-  wakeButtonText: { color: '#FFFFFF', fontSize: type.body, fontWeight: '900' },
+  wakeButton: { minHeight: 48, borderRadius: radius.lg, backgroundColor: colors.action, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  wakeButtonText: { color: colors.actionInk, fontSize: type.body, fontWeight: '900' },
   starters: { gap: spacing.sm },
   starterRow: { minHeight: 56, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.md, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   starterText: { flex: 1, color: colors.ink, fontSize: type.body, lineHeight: 24, fontWeight: '600' },
@@ -1191,13 +1191,13 @@ const styles = StyleSheet.create({
   guardianCustomImage: { borderRadius: radius.pill },
   bubble: { flexShrink: 1, paddingHorizontal: spacing.md, paddingVertical: 10, borderRadius: radius.lg },
   userBubble: { backgroundColor: colors.mine },
-  assistantBubble: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line },
+  assistantBubble: { backgroundColor: colors.other, borderWidth: 1, borderColor: colors.line },
   bubbleLabel: { color: colors.tealDark, fontSize: type.tiny, fontWeight: '900', marginBottom: 4 },
   bubbleText: { color: colors.ink, fontSize: type.body, lineHeight: 21 },
-  userBubbleText: { color: '#FFFFFF' },
+  userBubbleText: { color: colors.ink },
   composer: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.lg, flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, borderTopWidth: 1, borderColor: colors.line, backgroundColor: colors.surface },
   input: { flex: 1, minHeight: 43, maxHeight: 112, borderRadius: radius.lg, backgroundColor: colors.surfaceSoft, color: colors.ink, fontSize: type.body, paddingHorizontal: spacing.md, paddingVertical: 10 },
-  sendButton: { width: 43, height: 43, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.tealDark },
+  sendButton: { width: 43, height: 43, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.action },
   stopButton: { backgroundColor: colors.coral },
   diagOverlay: { flex: 1, backgroundColor: 'rgba(23, 32, 28, 0.45)', justifyContent: 'flex-end' },
   diagSheet: { maxHeight: '78%', backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: spacing.lg, paddingTop: spacing.md },

@@ -29,8 +29,8 @@ const styles = StyleSheet.create({
   userRow: { justifyContent: 'flex-end' },
   avatar: { width: 32, height: 36, borderRadius: radius.pill },
   bubble: { maxWidth: '86%', flexShrink: 1, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.lg },
-  userBubble: { backgroundColor: colors.mine, borderBottomRightRadius: radius.sm },
-  assistantBubble: { backgroundColor: colors.surface, borderBottomLeftRadius: radius.sm },
+  userBubble: { backgroundColor: colors.mine, borderWidth: 1, borderColor: colors.mineBorder, borderBottomRightRadius: radius.sm },
+  assistantBubble: { backgroundColor: colors.other, borderWidth: 1, borderColor: colors.otherBorder, borderBottomLeftRadius: radius.sm },
   text: { color: colors.ink, fontSize: type.body, lineHeight: 26 },
-  userText: { color: colors.surface },
+  userText: { color: colors.ink },
 });

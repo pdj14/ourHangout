@@ -177,7 +177,7 @@ export function FamilyRelationshipModal({
                           <Text style={styles.lightActionText}>거절</Text>
                         </Pressable>
                         <Pressable disabled={busy} onPress={() => room && onRespond(room.id, relationship.id, 'accept')} style={styles.primaryAction}>
-                          {actionKey === `respond:accept:${relationship.id}` ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.primaryActionText}>수락</Text>}
+                          {actionKey === `respond:accept:${relationship.id}` ? <ActivityIndicator size="small" color={colors.actionInk} /> : <Text style={styles.primaryActionText}>수락</Text>}
                         </Pressable>
                       </View>
                     ))}
@@ -265,7 +265,7 @@ export function FamilyRelationshipModal({
                       onPress={() => room && onRequest(room.id, selectedUserId, requestAs)}
                       style={[styles.sendButton, (!selectedUserId || busy) && styles.disabled]}
                     >
-                      {actionKey.startsWith('create:') ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.sendButtonText}>관계 요청 보내기</Text>}
+                      {actionKey.startsWith('create:') ? <ActivityIndicator size="small" color={colors.actionInk} /> : <Text style={styles.sendButtonText}>관계 요청 보내기</Text>}
                     </Pressable>
                   </>
                 ) : null}
@@ -327,8 +327,8 @@ const styles = StyleSheet.create({
   requestRow: { minHeight: 68, padding: spacing.md, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.md, backgroundColor: colors.canvas },
   lightAction: { minWidth: 48, height: 36, paddingHorizontal: spacing.sm, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, backgroundColor: colors.surface },
   lightActionText: { color: colors.inkSoft, fontSize: type.small, fontWeight: '900' },
-  primaryAction: { minWidth: 48, height: 36, paddingHorizontal: spacing.sm, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, backgroundColor: colors.tealDark },
-  primaryActionText: { color: '#FFFFFF', fontSize: type.small, fontWeight: '900' },
+  primaryAction: { minWidth: 48, height: 36, paddingHorizontal: spacing.sm, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, backgroundColor: colors.action },
+  primaryActionText: { color: colors.actionInk, fontSize: type.small, fontWeight: '900' },
   memberGrid: { gap: spacing.sm },
   memberCard: { minHeight: 62, padding: spacing.md, flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderWidth: 1, borderColor: colors.line, borderRadius: radius.md, backgroundColor: colors.surface },
   memberCardSelected: { borderColor: colors.teal, backgroundColor: colors.surfaceSoft },
@@ -339,7 +339,7 @@ const styles = StyleSheet.create({
   choiceSelected: { borderColor: colors.tealDark, backgroundColor: colors.surfaceSoft },
   choiceText: { color: colors.inkMuted, fontSize: type.small, fontWeight: '900' },
   choiceTextSelected: { color: colors.tealDark },
-  sendButton: { height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, backgroundColor: colors.tealDark },
-  sendButtonText: { color: '#FFFFFF', fontSize: type.body, fontWeight: '900' },
+  sendButton: { height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, backgroundColor: colors.action },
+  sendButtonText: { color: colors.actionInk, fontSize: type.body, fontWeight: '900' },
   disabled: { opacity: 0.45 },
 });

@@ -314,7 +314,7 @@ export function RoomScreen({
                 </Text>
               </View>
               <Pressable accessibilityRole="button" accessibilityLabel="메시지 다시 불러오기" style={styles.errorRetry} onPress={onRetryLoad}>
-                <Ionicons name="refresh" size={16} color="#FFFFFF" />
+                <Ionicons name="refresh" size={16} color={colors.actionInk} />
               </Pressable>
             </View>
           ) : null}
@@ -353,7 +353,7 @@ export function RoomScreen({
                 <Text style={styles.emptyTitle}>메시지를 불러오지 못했습니다.</Text>
                 <Text style={styles.emptyText}>{errorMessage}</Text>
                 <Pressable accessibilityRole="button" accessibilityLabel="메시지 다시 불러오기" style={styles.retryBtn} onPress={onRetryLoad}>
-                  <Ionicons name="refresh" size={16} color="#FFFFFF" />
+                  <Ionicons name="refresh" size={16} color={colors.actionInk} />
                   <Text style={styles.retryText}>다시 시도</Text>
                 </Pressable>
               </>
@@ -510,7 +510,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     paddingHorizontal: spacing.md,
     borderRadius: radius.md,
-    backgroundColor: '#DDF4EF',
+    backgroundColor: colors.surfaceWarm,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
@@ -591,7 +591,7 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: radius.md,
-    backgroundColor: colors.tealDark,
+    backgroundColor: colors.action,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -620,14 +620,14 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     paddingHorizontal: spacing.md,
     borderRadius: radius.md,
-    backgroundColor: colors.tealDark,
+    backgroundColor: colors.action,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.sm,
   },
   retryText: {
-    color: '#FFFFFF',
+    color: colors.actionInk,
     fontSize: type.small,
     fontWeight: '900',
   },
@@ -725,7 +725,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.tealDark,
+    backgroundColor: colors.action,
   },
   sendBtnOff: {
     backgroundColor: colors.inkMuted,

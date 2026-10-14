@@ -60,11 +60,12 @@ export function ChatsScreen({
     <View style={styles.screen}>
       <ScreenHeader
         title="대화"
+        tone="chats"
         detail={unreadTotal ? `새 메시지 ${unreadTotal}개` : undefined}
         action={
           <View style={styles.headerActions}>
             <Pressable accessibilityRole="button" accessibilityLabel="새 대화 시작" style={[styles.iconBtn, styles.primaryIconBtn]} onPress={onStartChat}>
-              <Ionicons name="create-outline" size={21} color={colors.surface} />
+              <Ionicons name="create-outline" size={21} color={colors.actionInk} />
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="대화 목록 새로고침" style={styles.iconBtn} onPress={onRefresh} disabled={loading}>
               {loading ? <ActivityIndicator size="small" color={colors.ink} /> : <Ionicons name="refresh" size={20} color={colors.ink} />}
@@ -177,13 +178,13 @@ const styles = StyleSheet.create({
   list: {
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xl,
-    gap: 0,
+    gap: spacing.sm,
   },
   headerActions: { flexDirection: 'row', gap: spacing.sm },
-  primaryIconBtn: { backgroundColor: colors.tealDark, borderColor: colors.tealDark },
+  primaryIconBtn: { backgroundColor: colors.surfaceLavender, borderColor: colors.line },
   searchResult: { marginHorizontal: spacing.lg, marginBottom: spacing.md, color: colors.inkSoft, fontSize: type.small },
-  emptyAction: { minHeight: 44, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, marginTop: spacing.lg, borderRadius: radius.md, backgroundColor: colors.tealDark, justifyContent: 'center' },
-  emptyActionText: { color: colors.surface, fontSize: type.body, fontWeight: '700', textAlign: 'center' },
+  emptyAction: { minHeight: 44, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, marginTop: spacing.lg, borderRadius: radius.md, backgroundColor: colors.action, justifyContent: 'center' },
+  emptyActionText: { color: colors.actionInk, fontSize: type.body, fontWeight: '700', textAlign: 'center' },
   empty: {
     paddingVertical: spacing.xxl,
     paddingHorizontal: spacing.xl,
