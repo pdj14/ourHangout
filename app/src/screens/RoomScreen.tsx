@@ -25,6 +25,9 @@ type RoomScreenProps = {
   users: Record<string, User>;
   currentUserId: string;
   messages: Message[];
+  hasEarlierMessages?: boolean;
+  loadingEarlierMessages?: boolean;
+  onLoadEarlierMessages?: () => void;
   initialUnreadCount?: number;
   firstUnreadMessageId?: string;
   draft: string;
@@ -52,6 +55,9 @@ export function RoomScreen({
   users,
   currentUserId,
   messages,
+  hasEarlierMessages = false,
+  loadingEarlierMessages = false,
+  onLoadEarlierMessages,
   initialUnreadCount = 0,
   firstUnreadMessageId = '',
   draft,
@@ -114,6 +120,8 @@ export function RoomScreen({
     cancelScheduledScroll,
     handleComposerFocus,
     handleScroll: handleKeyboardAwareScroll,
+    handleScrollBeginDrag: beginKeyboardAwareDrag,
+    handleScrollEndDrag,
     scrollToLatest,
   } = useChatKeyboard(listRef, { nearBottomRef: isNearBottomRef });
 
@@ -185,9 +193,9 @@ export function RoomScreen({
   const handleScrollBeginDrag = useCallback(() => {
     initialScrollGenerationRef.current += 1;
     clearInitialScrollTimers();
-    cancelScheduledScroll();
+    beginKeyboardAwareDrag();
     initialScrollDoneRef.current = true;
-  }, [cancelScheduledScroll, clearInitialScrollTimers]);
+  }, [beginKeyboardAwareDrag, clearInitialScrollTimers]);
 
   const handleListLayout = useCallback(() => {
     if (!initialScrollDoneRef.current) {
@@ -264,15 +272,25 @@ export function RoomScreen({
         data={messages}
         keyExtractor={(message) => message.id}
         contentContainerStyle={styles.messages}
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
         onContentSizeChange={handleListContentSizeChange}
         onLayout={handleListLayout}
         onScroll={handleKeyboardAwareScroll}
         onScrollBeginDrag={handleScrollBeginDrag}
+        onScrollEndDrag={handleScrollEndDrag}
+        onMomentumScrollEnd={handleScrollEndDrag}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
         scrollEventThrottle={32}
         onScrollToIndexFailed={(info) => {
+          if (initialScrollDoneRef.current) return;
+          const generation = initialScrollGenerationRef.current;
           const offset = Math.max(0, info.averageItemLength * Math.max(0, info.index - 1));
           listRef.current?.scrollToOffset({ offset, animated: false });
-          const timer = setTimeout(() => scrollToInitialPosition(false), 120);
+          const timer = setTimeout(() => {
+            if (initialScrollDoneRef.current || generation !== initialScrollGenerationRef.current) return;
+            scrollToInitialPosition(false);
+          }, 120);
           initialScrollTimersRef.current.push(timer);
         }}
         initialNumToRender={20}
@@ -280,7 +298,14 @@ export function RoomScreen({
         windowSize={7}
         removeClippedSubviews={Platform.OS === 'android'}
         ListHeaderComponent={
-          showErrorBanner ? (
+          <>
+          {hasEarlierMessages ? (
+            <Pressable accessibilityRole="button" accessibilityLabel="이전 대화 불러오기" disabled={loadingEarlierMessages} onPress={onLoadEarlierMessages} style={styles.loadEarlier}>
+              {loadingEarlierMessages ? <ActivityIndicator size="small" color={colors.tealDark} /> : <Ionicons name="chevron-up" size={16} color={colors.tealDark} />}
+              <Text style={styles.loadEarlierText}>{loadingEarlierMessages ? '불러오는 중' : '이전 대화'}</Text>
+            </Pressable>
+          ) : null}
+          {showErrorBanner ? (
             <View style={styles.errorBanner}>
               <View style={styles.errorCopy}>
                 <Text style={styles.errorTitle}>최근 메시지를 새로 불러오지 못했어요.</Text>
@@ -292,7 +317,8 @@ export function RoomScreen({
                 <Ionicons name="refresh" size={16} color="#FFFFFF" />
               </Pressable>
             </View>
-          ) : null
+          ) : null}
+          </>
         }
         renderItem={({ item, index }) => {
           const mine = item.senderId === currentUserId;
@@ -503,6 +529,16 @@ const styles = StyleSheet.create({
   messageList: {
     flex: 1,
   },
+  loadEarlier: {
+    minHeight: 44,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  loadEarlierText: { color: colors.tealDark, fontSize: type.small, fontWeight: '700' },
   unreadDivider: {
     minHeight: 32,
     marginHorizontal: spacing.lg,

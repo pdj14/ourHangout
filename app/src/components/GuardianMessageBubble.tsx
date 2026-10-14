@@ -11,7 +11,7 @@ export const GuardianMessageBubble = memo(function GuardianMessageBubble({
   const user = message.role === 'user';
   const text = user ? message.content : sanitizeGuardianVisibleContent(message.content);
   return (
-    <View style={[styles.row, user && styles.userRow]}>
+    <View testID={user ? 'guardian-message-outgoing' : 'guardian-message-incoming'} style={[styles.row, user && styles.userRow]}>
       {!user ? <Image
         source={avatarUri ? { uri: avatarUri } : require('../../assets/forest-guardian.png')}
         resizeMode={avatarUri ? 'cover' : 'contain'} style={styles.avatar}
@@ -25,10 +25,10 @@ export const GuardianMessageBubble = memo(function GuardianMessageBubble({
 });
 
 const styles = StyleSheet.create({
-  row: { maxWidth: '92%', alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm },
-  userRow: { alignSelf: 'flex-end' },
+  row: { width: '100%', flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'flex-end', gap: spacing.sm },
+  userRow: { justifyContent: 'flex-end' },
   avatar: { width: 32, height: 36, borderRadius: radius.pill },
-  bubble: { flexShrink: 1, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.lg },
+  bubble: { maxWidth: '86%', flexShrink: 1, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.lg },
   userBubble: { backgroundColor: colors.mine, borderBottomRightRadius: radius.sm },
   assistantBubble: { backgroundColor: colors.surface, borderBottomLeftRadius: radius.sm },
   text: { color: colors.ink, fontSize: type.body, lineHeight: 26 },

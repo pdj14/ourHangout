@@ -12,6 +12,7 @@
     "test:web-tools": "node --test tests/guardianWebToolProtocol.test.mjs tests/guardianWebSearchPolicy.test.mjs",
     "test:chat-capabilities": "node --test tests/modelCapabilities.test.mjs tests/chatComposerIntegration.test.mjs",
     "test:room-search": "node --test tests/roomSearch.test.mjs",
+    "test:chat-scroll": "node --test tests/chatScroll.test.mjs tests/roomMessageHistory.test.mjs",
     "test:ai-runtime": "node --test tests/onDeviceAiRuntime.test.mjs tests/asyncControl.test.mjs tests/guardianConversationStore.test.mjs tests/aiTransportLifecycle.test.mjs",
     "test:backend": "node --test tests/backend.test.mjs",
     "typecheck": "tsc --noEmit",

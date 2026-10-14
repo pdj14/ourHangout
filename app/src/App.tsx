@@ -39,6 +39,7 @@ import { OnDeviceAiScreen } from './screens/OnDeviceAiScreen';
 import { PeopleScreen } from './screens/PeopleScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
 import { RoomScreen } from './screens/RoomScreen';
+import { fetchRoomMessagePage } from './services/roomMessageHistory';
 import {
   asListItems,
   BackendClient,
@@ -178,6 +179,9 @@ function RenewalApp() {
   const [users, setUsers] = useState<Record<string, User>>({ [initialProfile.id]: initialProfile });
   const [rooms, setRooms] = useState<Room[]>([]);
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
+  const [roomMessageHistory, setRoomMessageHistory] = useState<Record<string, { cursor?: string; loading: boolean }>>({});
+  const roomMessageHistoryRef = useRef(roomMessageHistory);
+  const messageHistoryEpochRef = useRef(0);
   const [friendRequests, setFriendRequests] = useState<FriendRequestView[]>([]);
   const [friendSearchOpen, setFriendSearchOpen] = useState(false);
   const [viewingUserId, setViewingUserId] = useState('');
@@ -427,6 +431,14 @@ function RenewalApp() {
   );
 
   const commitProfile = useCallback((nextProfile: Profile) => {
+    if (currentUserIdRef.current !== nextProfile.id) {
+      messageHistoryEpochRef.current += 1;
+      roomMessageHistoryRef.current = {};
+      roomMessagesRefreshRef.current = {};
+      setRoomMessageHistory({});
+      messagesRef.current = {};
+      setMessages({});
+    }
     profileRef.current = nextProfile;
     currentUserIdRef.current = nextProfile.id;
     setProfile(nextProfile);
@@ -799,23 +811,24 @@ function RenewalApp() {
     async (roomId: string) => {
       if (roomMessagesRefreshRef.current[roomId]) return roomMessagesRefreshRef.current[roomId];
 
+      const epoch = messageHistoryEpochRef.current;
       const request = (async () => {
-        const raw = await client.request<BackendRoomMessage[] | BackendListData<BackendRoomMessage>>(
-          `/v1/rooms/${roomId}/messages?limit=100`,
-          { method: 'GET' },
-          { rateLimitRetries: 2, timeoutMs: 15000, queue: false }
-        );
-        const mapped = asListItems<BackendRoomMessage>(raw)
+        const page = await fetchRoomMessagePage(client, roomId);
+        if (epoch !== messageHistoryEpochRef.current) return [];
+        const mapped = page.items
           .map((item) => mapMessageForApp({ ...item, roomId: item.roomId || roomId }, roomId))
           .filter((message): message is Message => !!message);
         setMessages((prev) => {
-          const localPending = (prev[roomId] || []).filter(
-            (message) => message.delivery === 'sending' || message.delivery === 'failed'
-          );
-          const next = { ...prev, [roomId]: mergeMessages(localPending, mapped) };
+          if (epoch !== messageHistoryEpochRef.current) return prev;
+          const next = { ...prev, [roomId]: mergeMessages(prev[roomId] || [], mapped) };
           messagesRef.current = next;
           return next;
         });
+        if (!roomMessageHistoryRef.current[roomId]) {
+          const history = { ...roomMessageHistoryRef.current, [roomId]: { cursor: page.nextCursor, loading: false } };
+          roomMessageHistoryRef.current = history;
+          setRoomMessageHistory(history);
+        }
         return mapped;
       })();
 
@@ -830,6 +843,36 @@ function RenewalApp() {
     },
     [client, mapMessageForApp]
   );
+
+  const loadEarlierRoomMessages = useCallback(async (roomId: string) => {
+    const history = roomMessageHistoryRef.current[roomId];
+    if (!history?.cursor || history.loading) return;
+    const epoch = messageHistoryEpochRef.current;
+    const updateHistory = (entry: { cursor?: string; loading: boolean }) => {
+      const next = { ...roomMessageHistoryRef.current, [roomId]: entry };
+      roomMessageHistoryRef.current = next;
+      setRoomMessageHistory(next);
+    };
+    updateHistory({ ...history, loading: true });
+    try {
+      const page = await fetchRoomMessagePage(client, roomId, history.cursor);
+      if (epoch !== messageHistoryEpochRef.current) return;
+      const mapped = page.items.map(item => mapMessageForApp({ ...item, roomId: item.roomId || roomId }, roomId))
+        .filter((message): message is Message => !!message);
+      setMessages(prev => {
+        if (epoch !== messageHistoryEpochRef.current) return prev;
+        const next = { ...prev, [roomId]: mergeMessages(prev[roomId] || [], mapped) };
+        messagesRef.current = next;
+        return next;
+      });
+      updateHistory({ cursor: page.nextCursor, loading: false });
+      if (activeRoomRef.current === roomId) setRoomErrorMessage('');
+    } catch (error) {
+      if (epoch !== messageHistoryEpochRef.current) return;
+      updateHistory({ ...history, loading: false });
+      if (activeRoomRef.current === roomId) setRoomErrorMessage(error instanceof Error ? error.message : '이전 대화를 불러오지 못했어요.');
+    }
+  }, [client, mapMessageForApp]);
 
   const markRoomAsRead = useCallback(
     async (roomId: string, roomMessages?: Message[]) => {
@@ -1001,6 +1044,13 @@ function RenewalApp() {
     previousBackendBaseUrlRef.current = backendBaseUrl;
     if (!previousBaseUrl || previousBaseUrl === backendBaseUrl) return;
 
+    messageHistoryEpochRef.current += 1;
+    roomMessageHistoryRef.current = {};
+    roomMessagesRefreshRef.current = {};
+    setRoomMessageHistory({});
+    messagesRef.current = {};
+    setMessages({});
+
     registeredPushTokenRef.current = '';
     setAppUpdate(initialAppUpdateState);
     if (
@@ -1166,6 +1216,10 @@ function RenewalApp() {
       usersRef.current = { [initialProfile.id]: initialProfile };
       roomsRef.current = [];
       messagesRef.current = {};
+      messageHistoryEpochRef.current += 1;
+      roomMessageHistoryRef.current = {};
+      roomMessagesRefreshRef.current = {};
+      setRoomMessageHistory({});
       tabHistoryRef.current = [];
       tabRef.current = 'people';
       setTab('people');
@@ -2185,6 +2239,9 @@ function RenewalApp() {
           users={users}
           currentUserId={profile.id}
           messages={messages[activeRoom.id] || []}
+          hasEarlierMessages={!!roomMessageHistory[activeRoom.id]?.cursor}
+          loadingEarlierMessages={!!roomMessageHistory[activeRoom.id]?.loading}
+          onLoadEarlierMessages={() => void loadEarlierRoomMessages(activeRoom.id)}
           initialUnreadCount={activeRoomInitialUnread}
           firstUnreadMessageId={activeRoomFirstUnreadMessageId}
           draft={draft}

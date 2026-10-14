@@ -32,6 +32,8 @@ export function useChatKeyboard<T>(
   const threshold = options.nearBottomThreshold ?? 96;
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const frameRef = useRef<number | null>(null);
+  const draggingRef = useRef(false);
+  const readingHistoryRef = useRef(false);
 
   const cancelScheduledScroll = useCallback(() => {
     timersRef.current.forEach((timer) => clearTimeout(timer));
@@ -46,9 +48,10 @@ export function useChatKeyboard<T>(
     if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
     frameRef.current = requestAnimationFrame(() => {
       frameRef.current = null;
+      if (draggingRef.current || !nearBottomRef.current) return;
       listRef.current?.scrollToEnd({ animated });
     });
-  }, [listRef]);
+  }, [listRef, nearBottomRef]);
 
   const scheduleScrollToLatest = useCallback((animated = false) => {
     cancelScheduledScroll();
@@ -60,13 +63,30 @@ export function useChatKeyboard<T>(
 
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentSize, layoutMeasurement, contentOffset } = event.nativeEvent;
-    const distanceFromEnd = contentSize.height - layoutMeasurement.height - contentOffset.y;
-    nearBottomRef.current = distanceFromEnd < threshold;
+    const distanceFromEnd = Math.max(0, contentSize.height - layoutMeasurement.height - contentOffset.y);
+    // A small upward drag must not re-enable following inside the normal 96px
+    // tolerance. Resume only when the reader actually returns to the bottom.
+    const atBottom = distanceFromEnd <= 8;
+    nearBottomRef.current = draggingRef.current
+      ? false
+      : readingHistoryRef.current ? atBottom : distanceFromEnd < threshold;
+    if (!draggingRef.current && atBottom) readingHistoryRef.current = false;
   }, [nearBottomRef, threshold]);
 
+  const handleScrollBeginDrag = useCallback(() => {
+    draggingRef.current = true;
+    readingHistoryRef.current = true;
+    nearBottomRef.current = false;
+    cancelScheduledScroll();
+  }, [cancelScheduledScroll, nearBottomRef]);
+
+  const handleScrollEndDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    draggingRef.current = false;
+    handleScroll(event);
+  }, [handleScroll]);
+
   const handleComposerFocus = useCallback(() => {
-    nearBottomRef.current = true;
-    scheduleScrollToLatest(false);
+    if (nearBottomRef.current) scheduleScrollToLatest(false);
   }, [nearBottomRef, scheduleScrollToLatest]);
 
   useEffect(() => {
@@ -84,6 +104,8 @@ export function useChatKeyboard<T>(
     cancelScheduledScroll,
     handleComposerFocus,
     handleScroll,
+    handleScrollBeginDrag,
+    handleScrollEndDrag,
     scheduleScrollToLatest,
     scrollToLatest,
   };

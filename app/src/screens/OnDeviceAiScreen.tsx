@@ -164,6 +164,8 @@ export function OnDeviceAiScreen({ syncRoomId, backendClient }: OnDeviceAiScreen
     nearBottomRef,
     handleComposerFocus,
     handleScroll: handleKeyboardAwareScroll,
+    handleScrollBeginDrag,
+    handleScrollEndDrag,
     scheduleScrollToLatest,
     scrollToLatest,
   } = useChatKeyboard(listRef);
@@ -617,8 +619,9 @@ export function OnDeviceAiScreen({ syncRoomId, backendClient }: OnDeviceAiScreen
       conversations: conversationsRef.current,
     }).catch(() => undefined);
     setStatusMessage(`“${room.title}” 이야기를 이어서 나눌 수 있어요.`);
+    nearBottomRef.current = true;
     scheduleScrollToLatest(false);
-  }, [guardianProfile.aiEngineType, phase, scheduleScrollToLatest]);
+  }, [guardianProfile.aiEngineType, nearBottomRef, phase, scheduleScrollToLatest]);
 
   const deleteConversation = useCallback((conversationId: string) => {
     if (phase === 'generating' || phase === 'stopping') return;
@@ -976,6 +979,9 @@ export function OnDeviceAiScreen({ syncRoomId, backendClient }: OnDeviceAiScreen
           if (nearBottomRef.current) scrollToLatest(false);
         }}
         onScroll={handleKeyboardAwareScroll}
+        onScrollBeginDrag={handleScrollBeginDrag}
+        onScrollEndDrag={handleScrollEndDrag}
+        onMomentumScrollEnd={handleScrollEndDrag}
         scrollEventThrottle={32}
         renderItem={({ item }) => {
           return <GuardianMessageBubble message={item} name={guardianProfile.name} avatarUri={guardianProfile.avatarUri} />;

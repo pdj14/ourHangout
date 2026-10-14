@@ -42,7 +42,7 @@ export const MessageBubble = memo(function MessageBubble({
   const isMedia = message.kind === 'image' || message.kind === 'video' || message.kind === 'audio';
 
   return (
-    <View style={[styles.row, mine && styles.rowMine]}>
+    <View testID={mine ? 'message-outgoing' : 'message-incoming'} style={[styles.row, mine && styles.rowMine]}>
       <View style={[styles.wrap, mine && styles.wrapMine]}>
         {showSender && !mine ? (
           <Pressable
@@ -141,6 +141,7 @@ export const MessageBubble = memo(function MessageBubble({
 
 const styles = StyleSheet.create({
   row: {
+    width: '100%',
     flexDirection: 'row',
     justifyContent: 'flex-start',
     paddingHorizontal: spacing.lg,
@@ -151,6 +152,8 @@ const styles = StyleSheet.create({
   },
   wrap: {
     maxWidth: '82%',
+    flexShrink: 1,
+    minWidth: 0,
     gap: 4,
   },
   wrapMine: {
@@ -182,10 +185,12 @@ const styles = StyleSheet.create({
   mine: {
     backgroundColor: colors.mine,
     borderColor: colors.mine,
+    borderBottomRightRadius: spacing.xs,
   },
   other: {
     backgroundColor: colors.other,
     borderColor: colors.line,
+    borderBottomLeftRadius: spacing.xs,
   },
   body: {
     color: colors.ink,
