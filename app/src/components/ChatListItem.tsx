@@ -1,0 +1,176 @@
+import { memo } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+
+import { Avatar } from './Avatar';
+import { colors, radius, spacing, type } from '../theme';
+import type { Message, Room, User } from '../types';
+
+type ChatListItemProps = {
+  room: Room;
+  users: Record<string, User>;
+  currentUserId: string;
+  latest?: Message;
+  onOpenRoom: (roomId: string) => void;
+};
+
+const typeBadge = {
+  direct: null,
+  group: 'people',
+  family: 'home',
+} as const;
+
+export const ChatListItem = memo(function ChatListItem({ room, users, currentUserId, latest, onOpenRoom }: ChatListItemProps) {
+  const peer = room.memberIds.map((id) => users[id]).find((user) => user && user.id !== currentUserId);
+  const avatarName = room.type === 'direct' ? peer?.alias || peer?.name || room.title : room.title;
+  const avatarColor = room.type === 'family' ? colors.teal : peer?.color || colors.indigo;
+  const title = room.type === 'direct' && peer ? peer.alias || peer.name : room.title;
+  const preview = latest?.kind === 'image'
+    ? '사진을 보냈어요'
+    : latest?.kind === 'video'
+      ? '영상을 보냈어요'
+      : latest?.kind === 'audio'
+        ? '오디오를 보냈어요'
+        : latest?.text || room.preview || '아직 나눈 이야기가 없어요.';
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${title} 대화방 열기${room.unread ? `, 읽지 않은 메시지 ${room.unread}개` : ''}`}
+      onPress={() => onOpenRoom(room.id)}
+      style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
+    >
+      <View>
+        <Avatar
+          name={avatarName}
+          color={avatarColor}
+          uri={room.type === 'direct' ? peer?.avatarUri : undefined}
+          online={room.memberIds.some((id) => id !== currentUserId && users[id]?.online)}
+        />
+        {typeBadge[room.type] ? (
+          <View style={[styles.typeBadge, room.type === 'family' && styles.familyTypeBadge]}>
+            <Ionicons
+              name={typeBadge[room.type]!}
+              size={11}
+              color={room.type === 'family' ? colors.tealDark : colors.indigo}
+            />
+          </View>
+        ) : null}
+      </View>
+      <View style={styles.copy}>
+        <View style={styles.topRow}>
+          <Text style={styles.title} numberOfLines={1}>
+            {title}
+          </Text>
+          <Text style={styles.time} numberOfLines={1}>
+            {latest?.time || room.lastActivity}
+          </Text>
+        </View>
+        <Text style={styles.preview} numberOfLines={1}>
+          {preview}
+        </Text>
+        {room.favorite || room.familySignal || room.muted ? (
+          <View style={styles.metaRow}>
+            {room.favorite ? <Ionicons name="star" size={13} color={colors.amber} /> : null}
+            {room.familySignal ? <Text style={styles.signal}>{room.familySignal}</Text> : null}
+            {room.muted ? <Ionicons name="notifications-off-outline" size={14} color={colors.inkMuted} /> : null}
+          </View>
+        ) : null}
+      </View>
+      {room.unread > 0 ? (
+        <View style={styles.unread}>
+          <Text style={styles.unreadText}>{room.unread > 99 ? '99+' : room.unread}</Text>
+        </View>
+      ) : (
+        <Ionicons name="chevron-forward" size={18} color={colors.inkMuted} />
+      )}
+    </Pressable>
+  );
+});
+
+const styles = StyleSheet.create({
+  card: {
+    minHeight: 88,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.lg,
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderColor: colors.line,
+
+    borderRadius: radius.lg,
+    borderWidth: 1,
+  },
+  cardPressed: {
+    opacity: 0.72,
+  },
+  copy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 5,
+  },
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  title: {
+    flex: 1,
+    color: colors.ink,
+    fontSize: type.section,
+    fontWeight: '800',
+  },
+  time: {
+    color: colors.inkMuted,
+    fontSize: type.tiny,
+    fontWeight: '700',
+  },
+  preview: {
+    color: colors.inkSoft,
+    fontSize: type.body,
+    lineHeight: 23,
+  },
+  metaRow: {
+    minHeight: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  typeBadge: {
+    position: 'absolute',
+    right: -3,
+    bottom: -3,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: colors.cream,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  familyTypeBadge: {
+    backgroundColor: colors.surfaceWarm,
+  },
+  signal: {
+    color: colors.tealDark,
+    fontSize: type.tiny,
+    fontWeight: '700',
+  },
+  unread: {
+    minWidth: 24,
+    height: 24,
+    paddingHorizontal: 7,
+    borderRadius: 12,
+    backgroundColor: colors.coral,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unreadText: {
+    color: '#FFFFFF',
+    fontSize: type.tiny,
+    fontWeight: '900',
+  },
+});

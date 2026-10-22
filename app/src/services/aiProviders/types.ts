@@ -1,0 +1,113 @@
+import type { ModelModality } from '../modelCapabilities';
+
+export type OpenAiCompatibleProviderId = 'openRouter' | 'xai' | 'ollama' | 'vllm' | 'custom';
+
+export type OpenAiCompatibleProviderDescriptor = {
+  id: OpenAiCompatibleProviderId;
+  name: string;
+  defaultBaseUrl: string;
+  defaultModelId: string;
+  requiresApiKey: boolean;
+  supportsOptionalApiKey: boolean;
+  allowsInsecureHttp: boolean;
+  supportsOAuth: boolean;
+  capabilities: {
+    modelListing: 'supported' | 'conditional';
+    streaming: 'supported' | 'conditional';
+    functionTools: 'supported' | 'conditional';
+  };
+};
+
+export type OpenAiCompatibleProviderSettings = {
+  providerId: OpenAiCompatibleProviderId;
+  baseUrl: string;
+  modelId: string;
+  /** 기본 모델 요청 실패 시 순서대로 시도할 대체 모델 ID (OpenRouter fallback 라우팅). */
+  fallbackModelIds?: string[];
+};
+
+export type OpenAiCompatibleModel = {
+  id: string;
+  name: string;
+  contextLength: number;
+  promptPrice: number;
+  completionPrice: number;
+  requestPrice: number;
+  imagePrice: number;
+  free: boolean;
+  inputModalities: ModelModality[];
+  outputModalities: ModelModality[];
+  supportsTools: boolean;
+};
+
+export type OpenAiTextContentPart = { type: 'text'; text: string };
+export type OpenAiImageContentPart = { type: 'image_url'; image_url: { url: string } };
+export type OpenAiVideoContentPart = { type: 'video_url'; video_url: { url: string } };
+export type OpenAiAudioContentPart = {
+  type: 'input_audio';
+  input_audio: { data: string; format: string };
+};
+export type OpenAiUserContentPart =
+  | OpenAiTextContentPart
+  | OpenAiImageContentPart
+  | OpenAiVideoContentPart
+  | OpenAiAudioContentPart;
+
+export type OpenAiFunctionTool = {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+};
+
+export type OpenAiToolCall = {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+};
+
+export type OpenAiConversationMessage =
+  | { role: 'user'; content: string | OpenAiUserContentPart[] }
+  | { role: 'assistant'; content: string | null; tool_calls?: OpenAiToolCall[] }
+  | { role: 'tool'; content: string; tool_call_id: string };
+
+export type OpenAiCompletionCallbacks = {
+  onPartial: (content: string) => void;
+  onModel?: (modelId: string) => void;
+};
+
+export type OpenAiConversationOptions = {
+  tools?: OpenAiFunctionTool[];
+};
+
+export type OpenAiConversationResult = {
+  content: string;
+  modelId: string;
+  toolCalls: OpenAiToolCall[];
+};
+
+export type OpenAiProviderErrorCode =
+  | 'not_connected'
+  | 'network'
+  | 'rate_limit'
+  | 'payment_required'
+  | 'unauthorized'
+  | 'unsupported'
+  | 'request'
+  | 'cancelled';
+
+export class OpenAiProviderError extends Error {
+  constructor(
+    message: string,
+    readonly code: OpenAiProviderErrorCode,
+    readonly providerId: OpenAiCompatibleProviderId
+  ) {
+    super(message);
+    this.name = 'OpenAiProviderError';
+  }
+}

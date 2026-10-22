@@ -1,0 +1,4 @@
+interface:
+  display_name: "Presentation Design"
+  short_description: "Native editable PPTX design and geometry QA"
+  default_prompt: "Use $presentation-design to create or revise this deck as native editable PowerPoint objects, preserve the selected workflow contract, and pass geometry, package, and rendered-slide QA."

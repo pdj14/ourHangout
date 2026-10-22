@@ -1,0 +1,21 @@
+node_modules/
+.expo/
+.build-meta/
+dist/
+web-build/
+builds/
+android/app/google-services.json
+android/local.properties
+android/.gradle/
+android/app/build/
+# Keep Gradle's native dependency paths short enough for Windows MAX_PATH.
+g/
+expo-*.log
+expo-*.err
+npm-debug.log*
+.tmp/
+.android-home/
+assets/*-v2.png
+device-screen*.png
+after-room-fix-*.png
+start-*.png

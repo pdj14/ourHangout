@@ -1,0 +1,4 @@
+interface:
+  display_name: "Playwright Browser"
+  short_description: "Inspect and automate the AxOne browser reliably"
+  default_prompt: "Use $playwright-browser to inspect, automate, or test the page in the AxOne internal browser."
