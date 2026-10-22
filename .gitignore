@@ -38,3 +38,14 @@
 **/yarn-error.log*
 **/*.tsbuildinfo
 .DS_Store
+
+# Retired app folders and unused generated skill copies
+/app - 복사본/
+/app_old/
+/mockups/
+/.agents/skills/axone-delegated-result/
+/.agents/skills/axone-workspace-output/
+/app/.agents/skills/axone-delegated-result/
+/app/.agents/skills/axone-workspace-output/
+/app/.agents/skills/playwright-browser/
+/app/.agents/skills/presentation-design/
