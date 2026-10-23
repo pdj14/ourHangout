@@ -19,6 +19,10 @@ import {
   statusCodes,
 } from '@react-native-google-signin/google-signin';
 
+import { SettingsScreen } from './screens/SettingsScreen';
+import { DiaryScreen } from './screens/DiaryScreen';
+import { NativeDiary } from './services/diary';
+import { AppNavigationContext } from './components/AppNavigationContext';
 import { BottomNav } from './components/BottomNav';
 import { CreateFamilyRoomModal } from './components/CreateFamilyRoomModal';
 import { FamilyRelationshipModal } from './components/FamilyRelationshipModal';
@@ -171,9 +175,12 @@ function RenewalApp() {
   const sessionRef = useRef<PersistedSession | null>(null);
   const pushTokenRef = useRef('');
   const registeredPushTokenRef = useRef('');
+  const [guardianSettingsRequested, setGuardianSettingsRequested] = useState(false);
+  const [sharedDiary, setSharedDiary] = useState('');
   const [tab, setTab] = useState<TabKey>('people');
   const tabRef = useRef<TabKey>('people');
   const tabHistoryRef = useRef<TabKey[]>([]);
+  const primaryTabRef = useRef<TabKey>('people');
   const [profile, setProfile] = useState<Profile>(initialProfile);
   const profileRef = useRef<Profile>(initialProfile);
   const [users, setUsers] = useState<Record<string, User>>({ [initialProfile.id]: initialProfile });
@@ -281,6 +288,7 @@ function RenewalApp() {
   }, [activeRoomId]);
 
   const navigateTab = useCallback((nextTab: TabKey) => {
+    if (['people', 'chats', 'ai', 'diary'].includes(nextTab)) primaryTabRef.current = nextTab;
     setTab((currentTab) => {
       if (currentTab === nextTab) return currentTab;
       tabHistoryRef.current = [...tabHistoryRef.current, currentTab].slice(-8);
@@ -301,6 +309,9 @@ function RenewalApp() {
       }
       await writeSession(nextSession);
     } else {
+      await NativeDiary?.clearSession().catch(() => false);
+      setSharedDiary('');
+      setGuardianSettingsRequested(false);
       if (Platform.OS === 'android') {
         await NativeLocationCapture?.clearSession().catch(() => false);
       }
@@ -1223,6 +1234,9 @@ function RenewalApp() {
       tabHistoryRef.current = [];
       tabRef.current = 'people';
       setTab('people');
+      primaryTabRef.current = 'people';
+      setSharedDiary('');
+      setGuardianSettingsRequested(false);
       setUsers(usersRef.current);
       setRooms([]);
       setMessages({});
@@ -1347,6 +1361,7 @@ function RenewalApp() {
   );
 
   const handleExternalUrl = useCallback((url?: string | null) => {
+    if (url?.startsWith('ourhangout://diary')) { navigateTab('diary'); return; }
     const roomId = roomIdFromUrl(url);
     if (!roomId) return;
     setFriendSearchOpen(false);
@@ -2200,6 +2215,15 @@ function RenewalApp() {
     ? '가족방에서만 위치 확인을 허용 중입니다.'
     : '위치 공유가 꺼져 있습니다.';
 
+  useEffect(() => {
+    if (appState !== 'active' || !session?.accessToken) return;
+    let current = true;
+    void NativeDiary?.consumeSharedDiary().then(text => {
+      if (current && text) { setSharedDiary(text); navigateTab('ai'); }
+    }).catch(() => {});
+    return () => { current = false; };
+  }, [appState, session?.accessToken, navigateTab]);
+
   const signedIn = authState === 'ready' || authState === 'degraded';
   const booting = authState === 'checking' || authState === 'syncing';
 
@@ -2269,6 +2293,7 @@ function RenewalApp() {
   }
 
   return (
+    <AppNavigationContext.Provider value={{ onSettings: () => navigateTab('settings'), onBack: ['settings', 'family', 'me'].includes(tab) ? () => { const next = tab === 'settings' ? primaryTabRef.current : 'settings'; tabRef.current = next; setTab(next); tabHistoryRef.current = tabHistoryRef.current.filter(t => !['settings', 'family', 'me'].includes(t)); } : undefined }}>
       <SafeAreaView style={styles.safe}>
       <StatusBar style="dark" />
       <View style={styles.body}>
@@ -2325,8 +2350,15 @@ function RenewalApp() {
             onViewGuardianLogs={(userId, name) => void openGuardianLogs(userId, name)}
           />
         ) : null}
+        {tab === 'settings' ? <SettingsScreen profile={profile} onNavigate={navigateTab} onGuardianSettings={() => { setGuardianSettingsRequested(true); navigateTab('ai'); }} /> : null}
+        {tab === 'diary' ? <DiaryScreen client={client} userId={profile.id} /> : null}
         {tab === 'ai' ? (
           <OnDeviceAiScreen
+            userId={profile.id}
+            initialDraft={sharedDiary}
+            onConsumeDraft={() => setSharedDiary('')}
+            openSettings={guardianSettingsRequested}
+            onConsumeSettings={() => setGuardianSettingsRequested(false)}
             syncRoomId={primaryFamilyRoom?.id || ''}
             backendClient={client}
           />
@@ -2350,7 +2382,7 @@ function RenewalApp() {
           />
         ) : null}
       </View>
-      {!keyboardVisible ? (
+      {!keyboardVisible && !['settings', 'family', 'me'].includes(tab) ? (
         <LinearGradient
           colors={gradients.nav}
           start={{ x: 0, y: 0 }}
@@ -2435,6 +2467,7 @@ function RenewalApp() {
         />
       ) : null}
     </SafeAreaView>
+    </AppNavigationContext.Provider>
   );
 }
 

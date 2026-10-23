@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:gravity="center_vertical" android:padding="18dp"
+    android:background="#F0E9FA" android:contentDescription="새 일기 쓰기">
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:text="아지트 일기" android:textColor="#795B9F" android:textSize="14sp" android:textStyle="bold" />
+    <TextView android:id="@+id/widget_date" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="6dp" android:text="오늘의 기록" android:textColor="#463C58" android:textSize="17sp" />
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="10dp" android:text="+  일기 쓰기" android:textColor="#795B9F" android:textSize="15sp" />
+</LinearLayout>

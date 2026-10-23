@@ -32,6 +32,7 @@ class MainApplication : Application(), ReactApplication {
           add(BrowserToolPackage())
           add(LocationCapturePackage())
           add(PushTokenPackage())
+          add(com.ourhangout.diary.DiaryPackage())
         }
     )
   }

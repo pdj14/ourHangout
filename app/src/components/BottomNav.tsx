@@ -8,7 +8,7 @@ import type { TabKey } from '../types';
 type IconName = ComponentProps<typeof Ionicons>['name'];
 
 type NavItem = {
-  key: TabKey;
+  key: Extract<TabKey, 'people' | 'chats' | 'ai' | 'diary'>;
   label: string;
   icon: IconName;
 };
@@ -17,8 +17,7 @@ const items: NavItem[] = [
   { key: 'people', label: '사람', icon: 'people-outline' },
   { key: 'chats', label: '대화', icon: 'chatbubbles-outline' },
   { key: 'ai', label: '지키미', icon: 'leaf-outline' },
-  { key: 'family', label: '가족', icon: 'shield-checkmark-outline' },
-  { key: 'me', label: '프로필', icon: 'person-circle-outline' },
+  { key: 'diary', label: '일기', icon: 'book-outline' },
 ];
 
 type BottomNavProps = {

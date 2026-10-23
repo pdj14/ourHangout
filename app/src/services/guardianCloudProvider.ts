@@ -55,7 +55,7 @@ function configuredModel(profile: GuardianProfile): GuardianCloudModel[] {
     completionPrice: 0,
     requestPrice: 0,
     imagePrice: 0,
-    free: settings.providerId === 'ollama' || settings.providerId === 'vllm',
+    free: false,
     inputModalities: ['text'],
     outputModalities: ['text'],
     supportsTools: false,

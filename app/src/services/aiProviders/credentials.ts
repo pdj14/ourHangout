@@ -3,7 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import { getOpenRouterApiKey } from '../openRouterAuth';
 import type { OpenAiCompatibleProviderId } from './types';
 
-const credentialKey = (providerId: OpenAiCompatibleProviderId) => `guardian:openai_provider_key:${providerId}:v1`;
+const credentialKey = (providerId: OpenAiCompatibleProviderId) => `guardian.openai_provider_key.${providerId}.v1`;
 
 export async function getProviderApiKey(providerId: OpenAiCompatibleProviderId) {
   if (providerId === 'openRouter') return getOpenRouterApiKey();

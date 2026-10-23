@@ -98,6 +98,8 @@ export function GuardianSettingsModal({
   const insets = useSafeAreaInsets();
   const [draft, setDraft] = useState(profile);
   const [editingRule, setEditingRule] = useState<GuardianRule | null>(null);
+  const [connectionOpen, setConnectionOpen] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -108,6 +110,7 @@ export function GuardianSettingsModal({
   useEffect(() => {
     if (!visible) return;
     setDraft(profile);
+    setConnectionOpen(!openRouterConnected && !selectedUri);
     setEditingRule(null);
     setModelPickerOpen(false);
     setManualKeyOpen(false);
@@ -120,7 +123,7 @@ export function GuardianSettingsModal({
   }, [visible]);
 
   const profileDirty = useMemo(
-    () => draft.name !== profile.name
+    () => draft.tone !== profile.tone || draft.name !== profile.name
       || draft.synopsis !== profile.synopsis
       || (draft.avatarUri || '') !== (profile.avatarUri || '')
       || draft.webBrowsingEnabled !== profile.webBrowsingEnabled
@@ -204,7 +207,7 @@ export function GuardianSettingsModal({
 
   const controlsDisabled = busy || saving || openRouterBusy;
   const cloudProvider = getOpenAiProviderDescriptor(draft.cloudProviderId);
-  const showDisconnectAction = openRouterConnected && cloudProvider.id !== 'ollama';
+  const showDisconnectAction = openRouterConnected;
   const selectedOpenRouterModel = openRouterModels.find((model) => model.id === draft.cloudModelId);
 
   const selectEngine = (aiEngineType: GuardianProfile['aiEngineType']) => {
@@ -300,6 +303,12 @@ export function GuardianSettingsModal({
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           >
+            <Text style={styles.sectionTitle}>어떤 말투가 편하세요?</Text>
+            <View style={styles.providerGrid}>
+              {([{ value: 'warm', label: '다정한 존댓말' }, { value: 'casual', label: '편한 반말' }, { value: 'calm', label: '차분한 안내' }] as const).map(item => <Pressable key={item.value} accessibilityRole="button" accessibilityState={{ selected: draft.tone === item.value }} onPress={() => void save({ ...draft, tone: item.value })} disabled={controlsDisabled} style={[styles.providerOption, draft.tone === item.value && styles.providerOptionActive]}><Text style={styles.providerOptionText}>{item.label}</Text></Pressable>)}
+            </View>
+            <Pressable accessibilityRole="button" accessibilityState={{ expanded: connectionOpen }} onPress={() => setConnectionOpen(v => !v)} style={styles.sectionHeadingSpaced}><Text style={styles.sectionTitle}>AI 연결</Text><Ionicons name={connectionOpen ? 'chevron-up' : 'chevron-down'} size={20} color={colors.inkSoft} /></Pressable>
+            {connectionOpen ? <>
             <View style={styles.sectionHeading}>
               <Text style={styles.sectionTitle}>대화 방식</Text>
             </View>
@@ -366,9 +375,7 @@ export function GuardianSettingsModal({
                       accessibilityLabel={`${cloudProvider.name} API 기본 주소`}
                       style={styles.textInput}
                     />
-                    {draft.cloudProviderId === 'ollama' || draft.cloudProviderId === 'vllm' ? (
-                      <Text style={styles.fieldHelp}>실기기에서 127.0.0.1은 휴대폰 자신입니다. PC 서버를 사용하면 같은 네트워크의 PC IP를 입력하세요.</Text>
-                    ) : null}
+                    {draft.cloudProviderId === 'opencode' ? <Text style={styles.fieldHelp}>opencode.ai의 API 키로 연결해요. 현재 앱은 Chat Completions 모델을 지원하며, 모델에 따라 사용 요금이 발생할 수 있어요.</Text> : null}
                     <Text style={styles.fieldLabel}>모델 ID</Text>
                     <TextInput
                       value={draft.cloudModelId}
@@ -395,7 +402,7 @@ export function GuardianSettingsModal({
                 <View style={styles.connectionRow}>
                   <View style={[styles.connectionDot, openRouterConnected && styles.connectionDotActive]} />
                   <View style={styles.connectionCopy}>
-                    <Text style={styles.connectionTitle}>{openRouterConnected ? `${cloudProvider.name} 연결됨` : `${cloudProvider.name} 미연결`}</Text>
+                    <Text style={styles.connectionTitle}>{openRouterConnected ? `${cloudProvider.name} ${cloudProvider.id === 'opencode' ? '키 저장됨' : '연결됨'}` : `${cloudProvider.name} 미연결`}</Text>
                     <Text accessibilityLiveRegion="polite" style={styles.connectionDetail}>
                       {openRouterMessage || (openRouterConnected
                         ? '사용할 모델을 선택하세요.'
@@ -420,7 +427,7 @@ export function GuardianSettingsModal({
                   </Text>
                 </Pressable>
 
-                {(!openRouterConnected || cloudProvider.supportsOptionalApiKey) && cloudProvider.id !== 'ollama' ? (
+                {(!openRouterConnected || cloudProvider.supportsOptionalApiKey) ? (
                   <View style={styles.manualKeyBlock}>
                     <View style={styles.orRow}>
                       <View style={styles.orLine} />
@@ -596,6 +603,7 @@ export function GuardianSettingsModal({
               </View>
             ) : null}
 
+            </> : null}
             <View style={styles.sectionHeadingSpaced}>
               <Text style={styles.sectionTitle}>이름과 역할</Text>
             </View>
@@ -670,6 +678,8 @@ export function GuardianSettingsModal({
               {saveMessage ? <Text accessibilityLiveRegion="polite" style={styles.saveMessage}>{saveMessage}</Text> : null}
             </View>
 
+            <Pressable accessibilityRole="button" accessibilityState={{ expanded: rulesOpen }} onPress={() => setRulesOpen(v => !v)} style={styles.sectionHeadingSpaced}><Text style={styles.fieldLabel}>세부 규칙</Text><Ionicons name={rulesOpen ? 'chevron-up' : 'chevron-down'} size={19} color={colors.inkSoft} /></Pressable>
+            {rulesOpen ? <>
             <View style={styles.ruleHeading}>
               <View style={styles.ruleHeadingCopy}>
                 <Text style={styles.sectionTitle}>행동 규칙</Text>
@@ -753,7 +763,8 @@ export function GuardianSettingsModal({
               )}
             </View>
 
-            {draft.aiEngineType === 'onDevice' ? (
+            </> : null}
+            {connectionOpen && draft.aiEngineType === 'onDevice' ? (
               <>
                 <View style={styles.sectionHeadingSpaced}>
                   <Text style={styles.sectionTitle}>답변 길이</Text>

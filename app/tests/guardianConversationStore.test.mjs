@@ -42,3 +42,13 @@ test('concurrent archives preserve both deleted conversations', async () => {
   const archive = await readParentArchive();
   assert.deepEqual(new Set(archive.map(room => room.id)), new Set([one.id, two.id]));
 });
+
+test('signed-in accounts never share Guardian conversation history', async () => {
+  const room = createGuardianConversationRoom([{ id: 'private', role: 'user', content: '계정 A의 일기 이야기', createdAt: 1 }]);
+  await writeGuardianConversationStore({ activeConversationId: room.id, conversations: [room] }, 'account-a');
+  const owner = await readGuardianConversationStore('account-a');
+  const other = await readGuardianConversationStore('account-b');
+  assert.equal(owner.conversations[0].messages[0].content, '계정 A의 일기 이야기');
+  assert.equal(other.conversations.flatMap(room => room.messages).length, 0);
+  assert.notEqual(other.activeConversationId, owner.activeConversationId);
+});

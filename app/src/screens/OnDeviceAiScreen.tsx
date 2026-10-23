@@ -23,6 +23,7 @@ import { ChatComposer } from '../components/ChatComposer';
 import { GuardianMessageBubble } from '../components/GuardianMessageBubble';
 import { GuardianConversationsModal } from '../components/GuardianConversationsModal';
 import { GuardianSettingsModal } from '../components/GuardianSettingsModal';
+import { GuardianWelcome } from '../components/GuardianWelcome';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { useChatKeyboard } from '../hooks/useChatKeyboard';
 import { useDebugMode } from '../services/debugMode';
@@ -51,10 +52,10 @@ import {
 } from '../services/guardianWebTools';
 import {
   createGuardianConversationRoom,
-  archiveDeletedConversation,
-  readGuardianConversationStore,
+  archiveDeletedConversation as archiveDeletedConversationRaw,
+  readGuardianConversationStore as readGuardianConversationStoreRaw,
   updateGuardianConversationRoom,
-  writeGuardianConversationStore,
+  writeGuardianConversationStore as writeGuardianConversationStoreRaw,
   type GuardianConversationRoom,
 } from '../services/guardianConversationStore';
 import {
@@ -82,11 +83,7 @@ const guardianMascot = require('../../assets/forest-guardian.png');
 const SELECTED_MODEL_KEY = 'on_device_ai:selected_model_v1';
 const LEGACY_SELECTED_PROJECTOR_KEY = 'on_device_ai:selected_projector_v1';
 
-const STARTER_PROMPTS = [
-  '오늘 있었던 일을 차분히 정리해 줘',
-  '우리 가족이 함께할 작은 놀이를 추천해 줘',
-  '오늘 마음이 편해질 이야기를 들려줘',
-];
+
 
 type Phase = 'idle' | 'scanning' | 'preparing' | 'loading' | 'ready' | 'generating' | 'stopping';
 type RetryState = { baseMessages: OnDeviceChatMessage[]; content: string };
@@ -115,11 +112,19 @@ function normalizeGuardianError(error: unknown) {
 }
 
 type OnDeviceAiScreenProps = {
+  userId?: string;
+  initialDraft?: string;
+  onConsumeDraft?: () => void;
+  openSettings?: boolean;
+  onConsumeSettings?: () => void;
   syncRoomId?: string;
   backendClient?: Parameters<typeof syncGuardianConversationLog>[0];
 };
 
-export function OnDeviceAiScreen({ syncRoomId, backendClient }: OnDeviceAiScreenProps) {
+export function OnDeviceAiScreen({ userId, initialDraft, onConsumeDraft, openSettings, onConsumeSettings, syncRoomId, backendClient }: OnDeviceAiScreenProps) {
+  const readGuardianConversationStore = useCallback(() => readGuardianConversationStoreRaw(userId), [userId]);
+  const writeGuardianConversationStore = useCallback((store: Parameters<typeof writeGuardianConversationStoreRaw>[0]) => writeGuardianConversationStoreRaw(store, userId), [userId]);
+  const archiveDeletedConversation = useCallback((room: GuardianConversationRoom) => archiveDeletedConversationRaw(room, userId), [userId]);
   const activeSyncRoomId = String(syncRoomId || '').trim();
   const insets = useSafeAreaInsets();
   const [models, setModels] = useState<NativeAiModelFile[]>([]);
@@ -136,6 +141,8 @@ export function OnDeviceAiScreen({ syncRoomId, backendClient }: OnDeviceAiScreen
   const [storageError, setStorageError] = useState('');
   const [progressHint, setProgressHint] = useState<{ hint: string; detail?: string; at: number } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => { if (openSettings) { setSettingsOpen(true); onConsumeSettings?.(); } }, [openSettings, onConsumeSettings]);
+  useEffect(() => { if (initialDraft) { setDraft(initialDraft.slice(0, 12000)); onConsumeDraft?.(); } }, [initialDraft, onConsumeDraft]);
   const [conversationsOpen, setConversationsOpen] = useState(false);
   const [guardianProfile, setGuardianProfile] = useState<GuardianProfile>(DEFAULT_GUARDIAN_PROFILE);
   const [openRouterConnected, setOpenRouterConnected] = useState(false);
@@ -900,15 +907,7 @@ export function OnDeviceAiScreen({ syncRoomId, backendClient }: OnDeviceAiScreen
                 </View>
               ) : null}
             </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="지키미 설정"
-              disabled={busy}
-              onPress={() => setSettingsOpen(true)}
-              style={[styles.headerButton, busy && styles.disabled]}
-            >
-              <Ionicons name="options-outline" size={20} color={colors.tealDark} />
-            </Pressable>
+
           </View>
         }
       />
@@ -986,54 +985,8 @@ export function OnDeviceAiScreen({ syncRoomId, backendClient }: OnDeviceAiScreen
         renderItem={({ item }) => {
           return <GuardianMessageBubble message={item} name={guardianProfile.name} avatarUri={guardianProfile.avatarUri} />;
         }}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <View style={styles.guardianScene}>
-              <View style={styles.lanternGlow} />
-              {guardianProfile.avatarUri ? (
-                <Image source={{ uri: guardianProfile.avatarUri }} style={[styles.guardianImage, styles.guardianCustomImage]} />
-              ) : (
-                <Image source={guardianMascot} resizeMode="contain" style={styles.guardianImage} />
-              )}
-              <View style={styles.guardianWelcome}>
-                <Text style={styles.emptyTitle}>무슨 이야기 나눌까요?</Text>
-                {phase === 'idle' && statusMessage ? <Text style={styles.emptyText}>{engineReady ? '' : selectedModel ? statusMessage : '먼저 지키미를 준비해 주세요.'}</Text> : null}
-              </View>
-            </View>
+        ListEmptyComponent={<GuardianWelcome name={guardianProfile.name} avatarUri={guardianProfile.avatarUri} ready={engineReady} busy={busy} onChoose={chooseStarter} onSetup={() => setSettingsOpen(true)} />}
 
-            {!engineReady && !busy ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="지키미 준비하기"
-                onPress={() => guardianProfile.aiEngineType === 'openRouter'
-                  ? setSettingsOpen(true)
-                  : directoryName ? setSettingsOpen(true) : void pickDirectory()}
-                style={styles.wakeButton}
-              >
-                <Ionicons name="sparkles-outline" size={18} color={colors.actionInk} />
-                <Text style={styles.wakeButtonText}>{directoryName || guardianProfile.aiEngineType === 'openRouter'
-                  ? '지키미 준비하기'
-                  : '지키미 시작하기'}</Text>
-              </Pressable>
-            ) : phase === 'ready' ? (
-              <View style={styles.starters}>
-                {STARTER_PROMPTS.map((prompt, index) => (
-                  <Pressable
-                    key={prompt}
-                    accessibilityRole="button"
-                    accessibilityLabel={prompt}
-                    onPress={() => chooseStarter(prompt)}
-                    style={styles.starterRow}
-                  >
-                    <Ionicons name={index === 2 ? 'leaf-outline' : index === 1 ? 'home-outline' : 'chatbubble-ellipses-outline'} size={18} color={colors.tealDark} />
-                    <Text style={styles.starterText}>{prompt}</Text>
-                    <Ionicons name="arrow-forward" size={16} color={colors.inkMuted} />
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
-          </View>
-        }
       />
 
       <ChatComposer
@@ -1052,7 +1005,7 @@ export function OnDeviceAiScreen({ syncRoomId, backendClient }: OnDeviceAiScreen
         editable={phase === 'ready'}
         sending={phase === 'generating'}
         stopping={phase === 'stopping'}
-        maxLength={2000}
+        maxLength={12000}
         capabilityHint={attachmentMenuHint}
       />
 

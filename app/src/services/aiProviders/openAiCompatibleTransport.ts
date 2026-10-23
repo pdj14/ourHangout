@@ -1,4 +1,5 @@
 import { fetch } from 'expo/fetch';
+import { isOpenCodeChatModel } from './opencodePolicy';
 
 import { isZeroPricedModel, normalizeModelModalities } from '../modelCapabilities';
 import { abortableDelay, readWithDeadline } from '../asyncControl';
@@ -109,7 +110,7 @@ function modelFromPayload(
   value: ModelPayload
 ): OpenAiCompatibleModel | null {
   const id = String(value.id || '').trim();
-  if (!id) return null;
+  if (!id || settings.providerId === 'opencode' && !isOpenCodeChatModel(id)) return null;
   const inputModalities = normalizeModelModalities(value.architecture?.input_modalities);
   const outputModalities = normalizeModelModalities(value.architecture?.output_modalities);
   if (outputModalities.length && !outputModalities.includes('text')) return null;
@@ -231,7 +232,7 @@ export async function fetchOpenAiCompatibleModels(
   let response: Response;
   try {
     const query = getOpenAiProviderWireAdapter(settings.providerId).modelsQuery;
-    response = await fetch(endpoint(settings.baseUrl, `/models${query}`), {
+    response = await fetch(getOpenAiProviderWireAdapter(settings.providerId).modelsUrl || endpoint(settings.baseUrl, `/models${query}`), {
       signal: controller.signal,
       headers: buildHeaders(settings, apiKey),
     });

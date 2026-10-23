@@ -141,18 +141,18 @@ function normalizeStore(value: unknown): GuardianConversationStore | null {
   return { activeConversationId, conversations };
 }
 
-export async function readGuardianConversationStore(): Promise<GuardianConversationStore> {
-  const raw = await AsyncStorage.getItem(STORAGE_KEY);
+export async function readGuardianConversationStore(userId?: string): Promise<GuardianConversationStore> {
+  const raw = await AsyncStorage.getItem(userId ? `${STORAGE_KEY}:${userId}` : STORAGE_KEY);
   if (raw) {
     try {
       const stored = normalizeStore(JSON.parse(raw));
       if (stored) return stored;
     } catch {
-      await AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
+      await AsyncStorage.removeItem(userId ? `${STORAGE_KEY}:${userId}` : STORAGE_KEY).catch(() => undefined);
     }
   }
 
-  const legacyRaw = await AsyncStorage.getItem(LEGACY_GUARDIAN_HISTORY_KEY);
+  const legacyRaw = userId ? null : await AsyncStorage.getItem(LEGACY_GUARDIAN_HISTORY_KEY);
   if (legacyRaw) {
     try {
       const legacy = JSON.parse(legacyRaw) as LegacyStoredHistory;
@@ -178,29 +178,29 @@ export async function readGuardianConversationStore(): Promise<GuardianConversat
   return { activeConversationId: room.id, conversations: [room] };
 }
 
-export async function writeGuardianConversationStore(store: GuardianConversationStore) {
+export async function writeGuardianConversationStore(store: GuardianConversationStore, userId?: string) {
   const normalized = normalizeStore(store);
   if (!normalized) return;
   const serialized = JSON.stringify(normalized);
-  const operation = storeWrites.then(() => AsyncStorage.setItem(STORAGE_KEY, serialized));
+  const operation = storeWrites.then(() => AsyncStorage.setItem(userId ? `${STORAGE_KEY}:${userId}` : STORAGE_KEY, serialized));
   storeWrites = operation.catch(() => undefined);
   await operation;
 }
 
-export function archiveDeletedConversation(room: GuardianConversationRoom): Promise<void> {
-  const operation = archiveWrites.then(() => appendDeletedConversation(room));
+export function archiveDeletedConversation(room: GuardianConversationRoom, userId?: string): Promise<void> {
+  const operation = archiveWrites.then(() => appendDeletedConversation(room, userId));
   archiveWrites = operation.catch(() => undefined);
   return operation;
 }
 
-async function appendDeletedConversation(room: GuardianConversationRoom) {
+async function appendDeletedConversation(room: GuardianConversationRoom, userId?: string) {
   if (!room.messages.length) return;
   const deletedRoom: GuardianConversationRoom = {
     ...room,
     deletedAt: Date.now(),
     messages: room.messages.slice(-MAX_MESSAGES_PER_CONVERSATION),
   };
-  const raw = await AsyncStorage.getItem(PARENT_ARCHIVE_KEY);
+  const raw = await AsyncStorage.getItem(userId ? `${PARENT_ARCHIVE_KEY}:${userId}` : PARENT_ARCHIVE_KEY);
   let archive: GuardianParentArchive = { version: 1, rooms: [] };
   try {
     const parsed = raw ? (JSON.parse(raw) as Partial<GuardianParentArchive>) : null;
@@ -215,7 +215,7 @@ async function appendDeletedConversation(room: GuardianConversationRoom) {
     version: 1,
     rooms: [...remaining, deletedRoom].slice(-100),
   };
-  await AsyncStorage.setItem(PARENT_ARCHIVE_KEY, JSON.stringify(nextArchive));
+  await AsyncStorage.setItem(userId ? `${PARENT_ARCHIVE_KEY}:${userId}` : PARENT_ARCHIVE_KEY, JSON.stringify(nextArchive));
 }
 
 export async function readParentArchive(): Promise<GuardianConversationRoom[]> {

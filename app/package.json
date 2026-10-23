@@ -18,7 +18,8 @@
     "typecheck": "tsc --noEmit",
     "config:check": "expo config --type public",
     "android:prebuild": "expo prebuild --platform android --no-install",
-    "android:release": "tools\\build-release-named.bat"
+    "android:release": "tools\\build-release-named.bat",
+    "test:settings": "node --test tests/providerSettings.test.mjs tests/opencodePolicy.test.mjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",

@@ -1,6 +1,6 @@
 import type { ModelModality } from '../modelCapabilities';
 
-export type OpenAiCompatibleProviderId = 'openRouter' | 'xai' | 'ollama' | 'vllm' | 'custom';
+export type OpenAiCompatibleProviderId = 'openRouter' | 'opencode' | 'custom';
 
 export type OpenAiCompatibleProviderDescriptor = {
   id: OpenAiCompatibleProviderId;

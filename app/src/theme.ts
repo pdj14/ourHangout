@@ -4,20 +4,20 @@ import { Platform } from 'react-native';
  * Warm pastel surfaces with readable ink for a shared family space.
  */
 export const colors = {
-  canvas: '#FFF9F5',
-  canvasDeep: '#F3ECE7',
-  surface: '#FFFEFC',
-  surfaceSoft: '#EAF4EE',
+  canvas: '#FAF8FF',
+  canvasDeep: '#F0EBF7',
+  surface: '#FFFFFF',
+  surfaceSoft: '#F0E9FA',
   surfaceWarm: '#FFF0DE',
   surfaceLavender: '#F1ECF9',
   surfaceRose: '#FBEAEC',
   surfaceBlue: '#EAF1FB',
-  ink: '#37434B',
-  inkSoft: '#59636B',
-  inkMuted: '#60656E',
-  line: '#E7DFD9',
-  teal: '#4A7E70',
-  tealDark: '#356859',
+  ink: '#463C58',
+  inkSoft: '#6B607B',
+  inkMuted: '#71667D',
+  line: '#E9E2F1',
+  teal: '#896CAD',
+  tealDark: '#725594',
   blue: '#526F98',
   indigo: '#6A5F91',
   coral: '#A34E5E',
@@ -26,20 +26,22 @@ export const colors = {
   bark: '#766157',
   cream: '#FFF9ED',
   success: '#3F7657',
-  action: '#D7EBDF',
-  actionInk: '#315C4D',
-  actionBorder: '#B8D6C6',
-  mine: '#DCEFE6',
-  mineBorder: '#C5DED1',
-  other: '#F0EAF8',
-  otherBorder: '#DDD2EB',
+  action: '#E9DDF7',
+  actionInk: '#654780',
+  actionBorder: '#D7C7EB',
+  mine: '#E8DDF5',
+  mineBorder: '#D6C6E9',
+  other: '#FFFFFF',
+  otherBorder: '#EAE3F1',
   shadow: '#596572',
 };
 
 export const sectionTones = {
   people: { background: '#FFEADB', foreground: '#79533F' },
   chats: { background: '#EDE5F8', foreground: '#655080' },
-  ai: { background: '#E0F0E7', foreground: '#356859' },
+  ai: { background: '#F2E5F0', foreground: '#855B83' },
+  diary: { background: '#EDE5F8', foreground: '#725594' },
+  settings: { background: '#EDE5F8', foreground: '#725594' },
   family: { background: '#F9E2E6', foreground: '#8B4E61' },
   me: { background: '#E2EDFA', foreground: '#49658B' },
 };
@@ -49,9 +51,9 @@ export const avatarPalette = [sectionTones.people, sectionTones.chats, sectionTo
 /** 부드러운 하늘 그라디언트 (expo-linear-gradient 용 색 배열) */
 export const gradients = {
   /** 런치/로그인 하늘: 크림 → 라벤더 → 옅은 하늘 */
-  sky: ['#FFF0DE', '#FFF9F5', '#EDE5F8'] as [string, string, string],
+  sky: ['#FFF0DE', '#FAF8FF', '#EDE5F8'] as [string, string, string],
   /** 하단 내비게이션 안개 */
-  nav: ['#FFFEFC', '#FFF9F5'] as [string, string],
+  nav: ['#FFFFFF', '#FAF8FF'] as [string, string],
 };
 
 export const spacing = {

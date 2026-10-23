@@ -10,6 +10,7 @@ export type ProviderRequestContext = {
 export type OpenAiProviderWireAdapter = {
   buildHeaders: (apiKey: string | null, json: boolean) => Record<string, string>;
   modelsQuery: string;
+  modelsUrl?: string;
   isFreeModel: (modelId: string) => boolean;
   requestExtensions: (context: ProviderRequestContext) => Record<string, unknown>;
 };
@@ -62,13 +63,10 @@ const adapters: Partial<Record<OpenAiCompatibleProviderId, OpenAiProviderWireAda
       };
     },
   },
-  ollama: {
+  opencode: {
     ...genericAdapter,
-    isFreeModel: () => true,
-  },
-  vllm: {
-    ...genericAdapter,
-    isFreeModel: () => true,
+    modelsUrl: 'https://opencode.ai/inference/v1/models',
+    isFreeModel: id => id.endsWith('-free') || id === 'big-pickle',
   },
 };
 
